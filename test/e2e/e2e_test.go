@@ -1,15 +1,16 @@
 package e2e
 
 import (
+	"fmt"
 	"testing"
 	"time"
 
 	"github.com/onsi/ginkgo/v2"
 	"github.com/onsi/gomega"
 	corev1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/api/resource"
 
-	"github.com/kube-policies/test/e2e/framework"
+	"github.com/enterprise/kube-policies/test/e2e/framework"
 )
 
 var _ = ginkgo.Describe("Kube-Policies E2E Tests", func() {
@@ -22,7 +23,7 @@ var _ = ginkgo.Describe("Kube-Policies E2E Tests", func() {
 	ginkgo.Context("Security Policies", func() {
 		ginkgo.It("should deny privileged containers", func() {
 			ginkgo.By("Creating a security policy that denies privileged containers")
-			
+
 			rules := []map[string]interface{}{
 				{
 					"name":        "no-privileged-containers",
@@ -87,7 +88,7 @@ var _ = ginkgo.Describe("Kube-Policies E2E Tests", func() {
 
 		ginkgo.It("should deny root user containers", func() {
 			ginkgo.By("Creating a security policy that denies root user")
-			
+
 			rules := []map[string]interface{}{
 				{
 					"name":        "no-root-user",
@@ -147,7 +148,7 @@ var _ = ginkgo.Describe("Kube-Policies E2E Tests", func() {
 
 		ginkgo.It("should deny latest image tags", func() {
 			ginkgo.By("Creating a policy that denies latest image tags")
-			
+
 			rules := []map[string]interface{}{
 				{
 					"name":        "no-latest-tag",
@@ -202,7 +203,7 @@ var _ = ginkgo.Describe("Kube-Policies E2E Tests", func() {
 	ginkgo.Context("Resource Policies", func() {
 		ginkgo.It("should require resource limits", func() {
 			ginkgo.By("Creating a policy that requires resource limits")
-			
+
 			rules := []map[string]interface{}{
 				{
 					"name":        "require-resource-limits",
@@ -285,7 +286,7 @@ var _ = ginkgo.Describe("Kube-Policies E2E Tests", func() {
 	ginkgo.Context("Policy Exceptions", func() {
 		ginkgo.It("should allow exceptions for specific resources", func() {
 			ginkgo.By("Creating a security policy that denies privileged containers")
-			
+
 			rules := []map[string]interface{}{
 				{
 					"name":        "no-privileged-containers",
@@ -369,7 +370,7 @@ var _ = ginkgo.Describe("Kube-Policies E2E Tests", func() {
 	ginkgo.Context("Deployment Policies", func() {
 		ginkgo.It("should enforce policies on deployments", func() {
 			ginkgo.By("Creating a policy that denies privileged containers")
-			
+
 			rules := []map[string]interface{}{
 				{
 					"name":        "no-privileged-containers",
@@ -445,7 +446,7 @@ var _ = ginkgo.Describe("Kube-Policies E2E Tests", func() {
 	ginkgo.Context("Multi-Rule Policies", func() {
 		ginkgo.It("should enforce multiple security rules", func() {
 			ginkgo.By("Creating a comprehensive security policy")
-			
+
 			rules := []map[string]interface{}{
 				{
 					"name":        "no-privileged-containers",
@@ -541,7 +542,7 @@ var _ = ginkgo.Describe("Kube-Policies E2E Tests", func() {
 	ginkgo.Context("Policy Performance", func() {
 		ginkgo.It("should handle multiple concurrent pod creations", func() {
 			ginkgo.By("Creating a simple security policy")
-			
+
 			rules := []map[string]interface{}{
 				{
 					"name":        "no-privileged-containers",
@@ -591,4 +592,3 @@ func TestE2E(t *testing.T) {
 	gomega.RegisterFailHandler(ginkgo.Fail)
 	ginkgo.RunSpecs(t, "Kube-Policies E2E Test Suite")
 }
-
