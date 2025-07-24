@@ -3,7 +3,7 @@
 
 # Project information
 PROJECT_NAME := kube-policies
-ORGANIZATION := github.com/kube-policies
+ORGANIZATION := github.com/Jibbscript
 VERSION ?= $(shell git describe --tags --always --dirty)
 COMMIT := $(shell git rev-parse HEAD)
 DATE := $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
@@ -19,7 +19,7 @@ LDFLAGS := -s -w -X main.version=$(VERSION) -X main.commit=$(COMMIT) -X main.dat
 BUILD_FLAGS := -ldflags="$(LDFLAGS)" -trimpath
 
 # Container configuration
-REGISTRY ?= ghcr.io/kube-policies
+REGISTRY ?= ghcr.io/Jibbscript
 ADMISSION_WEBHOOK_IMAGE := $(REGISTRY)/admission-webhook
 POLICY_MANAGER_IMAGE := $(REGISTRY)/policy-manager
 IMAGE_TAG ?= $(VERSION)

@@ -10,7 +10,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 
-	"github.com/enterprise/kube-policies/test/e2e/framework"
+	"github.com/Jibbscript/kube-policies/test/e2e/framework"
 )
 
 var _ = ginkgo.Describe("Kube-Policies E2E Tests", func() {

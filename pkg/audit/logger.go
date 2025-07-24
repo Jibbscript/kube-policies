@@ -8,8 +8,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/enterprise/kube-policies/internal/config"
-	"github.com/enterprise/kube-policies/internal/policy"
+	"github.com/Jibbscript/kube-policies/internal/config"
+	"github.com/Jibbscript/kube-policies/internal/policy"
 	authenticationv1 "k8s.io/api/authentication/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"

@@ -40,7 +40,7 @@ Before contributing, ensure you have the following tools installed:
    cd kube-policies
    
    # Add the upstream repository as a remote
-   git remote add upstream https://github.com/enterprise/kube-policies.git
+   git remote add upstream https://github.com/Jibbscript/kube-policies.git
    ```
 
 2. **Install Development Dependencies**

@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/enterprise/kube-policies/internal/config"
+	"github.com/Jibbscript/kube-policies/internal/config"
 	"github.com/open-policy-agent/opa/rego"
 	"github.com/open-policy-agent/opa/storage"
 	"github.com/open-policy-agent/opa/storage/inmem"

@@ -3,7 +3,7 @@ package policy
 import (
 	"testing"
 
-	"github.com/enterprise/kube-policies/internal/config"
+	"github.com/Jibbscript/kube-policies/internal/config"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"

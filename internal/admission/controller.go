@@ -7,9 +7,9 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/enterprise/kube-policies/internal/metrics"
-	"github.com/enterprise/kube-policies/internal/policy"
-	"github.com/enterprise/kube-policies/pkg/audit"
+	"github.com/Jibbscript/kube-policies/internal/metrics"
+	"github.com/Jibbscript/kube-policies/internal/policy"
+	"github.com/Jibbscript/kube-policies/pkg/audit"
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
 	admissionv1 "k8s.io/api/admission/v1"

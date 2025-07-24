@@ -3,10 +3,10 @@ package admission
 import (
 	"testing"
 
-	"github.com/enterprise/kube-policies/internal/config"
-	"github.com/enterprise/kube-policies/internal/metrics"
-	"github.com/enterprise/kube-policies/internal/policy"
-	"github.com/enterprise/kube-policies/pkg/audit"
+	"github.com/Jibbscript/kube-policies/internal/config"
+	"github.com/Jibbscript/kube-policies/internal/metrics"
+	"github.com/Jibbscript/kube-policies/internal/policy"
+	"github.com/Jibbscript/kube-policies/pkg/audit"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"

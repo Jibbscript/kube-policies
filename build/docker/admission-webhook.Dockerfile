@@ -51,7 +51,7 @@ LABEL org.opencontainers.image.title="Kube-Policies Admission Webhook"
 LABEL org.opencontainers.image.description="Kubernetes admission webhook for policy enforcement"
 LABEL org.opencontainers.image.vendor="Enterprise"
 LABEL org.opencontainers.image.licenses="Apache-2.0"
-LABEL org.opencontainers.image.source="https://github.com/enterprise/kube-policies"
+LABEL org.opencontainers.image.source="https://github.com/Jibbscript/kube-policies"
 LABEL org.opencontainers.image.documentation="https://docs.kube-policies.io"
 LABEL org.opencontainers.image.version="${VERSION}"
 

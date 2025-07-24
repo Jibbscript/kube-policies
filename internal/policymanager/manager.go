@@ -7,8 +7,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/enterprise/kube-policies/internal/config"
-	"github.com/enterprise/kube-policies/internal/policy"
+	"github.com/Jibbscript/kube-policies/internal/config"
+	"github.com/Jibbscript/kube-policies/internal/policy"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"go.uber.org/zap"

@@ -157,7 +157,7 @@ kube-policies/
 ### Quick Start
 ```bash
 # Clone the repository
-git clone https://github.com/enterprise/kube-policies.git
+git clone https://github.com/Jibbscript/kube-policies.git
 cd kube-policies
 
 # Build the project
@@ -259,7 +259,7 @@ We welcome contributions from the community! Please see our [Contributing Guide]
 
 - **Documentation**: [https://docs.kube-policies.io](https://docs.kube-policies.io)
 - **Community Forum**: [https://community.kube-policies.io](https://community.kube-policies.io)
-- **Issue Tracker**: [GitHub Issues](https://github.com/enterprise/kube-policies/issues)
+- **Issue Tracker**: [GitHub Issues](https://github.com/Jibbscript/kube-policies/issues)
 - **Enterprise Support**: [support@kube-policies.io](mailto:support@kube-policies.io)
 
 ## License

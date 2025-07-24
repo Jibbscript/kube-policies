@@ -51,7 +51,7 @@ LABEL org.opencontainers.image.title="Kube-Policies Policy Manager"
 LABEL org.opencontainers.image.description="Policy management service for Kube-Policies"
 LABEL org.opencontainers.image.vendor="Enterprise"
 LABEL org.opencontainers.image.licenses="Apache-2.0"
-LABEL org.opencontainers.image.source="https://github.com/enterprise/kube-policies"
+LABEL org.opencontainers.image.source="https://github.com/Jibbscript/kube-policies"
 LABEL org.opencontainers.image.documentation="https://docs.kube-policies.io"
 LABEL org.opencontainers.image.version="${VERSION}"
 
