@@ -3,7 +3,7 @@
 Enterprise-grade Kubernetes policy enforcement system providing comprehensive security guardrails, compliance monitoring, and governance for containerized applications at scale.
 
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
-[![Go Report Card](https://goreportcard.com/badge/github.com/Jibbscript/kube-policies)](https://goreportcard.com/report/github.com/Jibbscript/kube-policies)
+[![Go Report Card](https://goreportcard.com/badge/github.com/jibbscript/kube-policies)](https://goreportcard.com/report/github.com/Jibbscript/kube-policies)
 [![Kubernetes](https://img.shields.io/badge/Kubernetes-1.20%2B-blue.svg)](https://kubernetes.io/)
 [![Helm](https://img.shields.io/badge/Helm-3.8%2B-blue.svg)](https://helm.sh/)
 
