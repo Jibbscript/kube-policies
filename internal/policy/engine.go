@@ -69,14 +69,14 @@ type EvaluationResult struct {
 
 // PolicyViolation represents a policy violation
 type PolicyViolation struct {
-	PolicyID    string                 `json:"policy_id"`
-	RuleID      string                 `json:"rule_id"`
-	Severity    string                 `json:"severity"`
-	Category    string                 `json:"category"`
-	Message     string                 `json:"message"`
-	Path        string                 `json:"path"`
-	Frameworks  []string               `json:"frameworks"`
-	Metadata    map[string]interface{} `json:"metadata"`
+	PolicyID   string                 `json:"policy_id"`
+	RuleID     string                 `json:"rule_id"`
+	Severity   string                 `json:"severity"`
+	Category   string                 `json:"category"`
+	Message    string                 `json:"message"`
+	Path       string                 `json:"path"`
+	Frameworks []string               `json:"frameworks"`
+	Metadata   map[string]interface{} `json:"metadata"`
 }
 
 // JSONPatch represents a JSON patch operation
@@ -89,7 +89,7 @@ type JSONPatch struct {
 // NewEngine creates a new policy engine
 func NewEngine(config *config.PolicyConfig, logger *zap.Logger) (*Engine, error) {
 	store := inmem.New()
-	
+
 	engine := &Engine{
 		store:    store,
 		policies: make(map[string]*Policy),
@@ -236,7 +236,7 @@ func (e *Engine) evaluateRule(ctx context.Context, policy *Policy, rule *Rule, i
 
 	if len(results) > 0 && len(results[0].Expressions) > 0 {
 		evalResult := results[0].Expressions[0].Value.(map[string]interface{})
-		
+
 		if allowed, ok := evalResult["allowed"].(bool); ok {
 			result.Allowed = allowed
 		}
@@ -425,4 +425,3 @@ func (e *Engine) ListPolicies() []*Policy {
 
 	return policies
 }
-

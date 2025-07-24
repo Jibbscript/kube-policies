@@ -39,12 +39,12 @@ type PolicyConfig struct {
 
 // AuditConfig represents audit logging configuration
 type AuditConfig struct {
-	Enabled     bool              `mapstructure:"enabled"`
-	Backend     string            `mapstructure:"backend"` // "file", "elasticsearch", "webhook"
-	Config      map[string]string `mapstructure:"config"`
-	BufferSize  int               `mapstructure:"buffer_size"`
-	FlushInterval string          `mapstructure:"flush_interval"`
-	Retention   string            `mapstructure:"retention"`
+	Enabled       bool              `mapstructure:"enabled"`
+	Backend       string            `mapstructure:"backend"` // "file", "elasticsearch", "webhook"
+	Config        map[string]string `mapstructure:"config"`
+	BufferSize    int               `mapstructure:"buffer_size"`
+	FlushInterval string            `mapstructure:"flush_interval"`
+	Retention     string            `mapstructure:"retention"`
 }
 
 // MetricsConfig represents metrics configuration
@@ -56,10 +56,10 @@ type MetricsConfig struct {
 
 // SecurityConfig represents security configuration
 type SecurityConfig struct {
-	TLS         TLSConfig         `mapstructure:"tls"`
-	RBAC        RBACConfig        `mapstructure:"rbac"`
-	Encryption  EncryptionConfig  `mapstructure:"encryption"`
-	Authentication AuthConfig     `mapstructure:"authentication"`
+	TLS            TLSConfig        `mapstructure:"tls"`
+	RBAC           RBACConfig       `mapstructure:"rbac"`
+	Encryption     EncryptionConfig `mapstructure:"encryption"`
+	Authentication AuthConfig       `mapstructure:"authentication"`
 }
 
 // TLSConfig represents TLS configuration
@@ -117,7 +117,7 @@ type StorageConfig struct {
 // LoadConfig loads configuration from file and environment variables
 func LoadConfig(configPath string) (*Config, error) {
 	viper.SetConfigType("yaml")
-	
+
 	// Set default values
 	setDefaults()
 
@@ -287,4 +287,3 @@ func GetDefaultConfig() *Config {
 		},
 	}
 }
-

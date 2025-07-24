@@ -42,7 +42,7 @@ func NewController(
 // ValidateHandler handles validation admission requests
 func (c *Controller) ValidateHandler(ctx *gin.Context) {
 	startTime := time.Now()
-	
+
 	var admissionReview admissionv1.AdmissionReview
 	if err := ctx.ShouldBindJSON(&admissionReview); err != nil {
 		c.logger.Error("Failed to decode admission review", zap.Error(err))
@@ -61,15 +61,15 @@ func (c *Controller) ValidateHandler(ctx *gin.Context) {
 
 	// Create audit context
 	auditCtx := &audit.Context{
-		RequestID:   string(req.UID),
-		UserInfo:    req.UserInfo,
-		Namespace:   req.Namespace,
-		Kind:        req.Kind,
-		Name:        req.Name,
-		Operation:   string(req.Operation),
-		Object:      &req.Object,
-		OldObject:   &req.OldObject,
-		Timestamp:   time.Now(),
+		RequestID: string(req.UID),
+		UserInfo:  req.UserInfo,
+		Namespace: req.Namespace,
+		Kind:      req.Kind,
+		Name:      req.Name,
+		Operation: string(req.Operation),
+		Object:    &req.Object,
+		OldObject: &req.OldObject,
+		Timestamp: time.Now(),
 	}
 
 	// Evaluate policies
@@ -79,12 +79,12 @@ func (c *Controller) ValidateHandler(ctx *gin.Context) {
 	})
 
 	if err != nil {
-		c.logger.Error("Policy evaluation failed", 
+		c.logger.Error("Policy evaluation failed",
 			zap.Error(err),
 			zap.String("request_id", string(req.UID)),
 		)
 		c.metrics.IncAdmissionRequests("validate", "error", "evaluation_error")
-		
+
 		// Log audit event for evaluation error
 		auditCtx.Decision = "ERROR"
 		auditCtx.Reason = fmt.Sprintf("Policy evaluation failed: %v", err)
@@ -99,7 +99,7 @@ func (c *Controller) ValidateHandler(ctx *gin.Context) {
 				Message: "Policy evaluation failed",
 			},
 		}
-		
+
 		admissionReview.Response = response
 		ctx.JSON(http.StatusOK, admissionReview)
 		return
@@ -142,7 +142,7 @@ func (c *Controller) ValidateHandler(ctx *gin.Context) {
 // MutateHandler handles mutation admission requests
 func (c *Controller) MutateHandler(ctx *gin.Context) {
 	startTime := time.Now()
-	
+
 	var admissionReview admissionv1.AdmissionReview
 	if err := ctx.ShouldBindJSON(&admissionReview); err != nil {
 		c.logger.Error("Failed to decode admission review", zap.Error(err))
@@ -161,15 +161,15 @@ func (c *Controller) MutateHandler(ctx *gin.Context) {
 
 	// Create audit context
 	auditCtx := &audit.Context{
-		RequestID:   string(req.UID),
-		UserInfo:    req.UserInfo,
-		Namespace:   req.Namespace,
-		Kind:        req.Kind,
-		Name:        req.Name,
-		Operation:   string(req.Operation),
-		Object:      &req.Object,
-		OldObject:   &req.OldObject,
-		Timestamp:   time.Now(),
+		RequestID: string(req.UID),
+		UserInfo:  req.UserInfo,
+		Namespace: req.Namespace,
+		Kind:      req.Kind,
+		Name:      req.Name,
+		Operation: string(req.Operation),
+		Object:    &req.Object,
+		OldObject: &req.OldObject,
+		Timestamp: time.Now(),
 	}
 
 	// Evaluate policies for mutations
@@ -179,12 +179,12 @@ func (c *Controller) MutateHandler(ctx *gin.Context) {
 	})
 
 	if err != nil {
-		c.logger.Error("Policy evaluation failed", 
+		c.logger.Error("Policy evaluation failed",
 			zap.Error(err),
 			zap.String("request_id", string(req.UID)),
 		)
 		c.metrics.IncAdmissionRequests("mutate", "error", "evaluation_error")
-		
+
 		// Log audit event for evaluation error
 		auditCtx.Decision = "ERROR"
 		auditCtx.Reason = fmt.Sprintf("Policy evaluation failed: %v", err)
@@ -195,7 +195,7 @@ func (c *Controller) MutateHandler(ctx *gin.Context) {
 			UID:     req.UID,
 			Allowed: true,
 		}
-		
+
 		admissionReview.Response = response
 		ctx.JSON(http.StatusOK, admissionReview)
 		return
@@ -213,7 +213,7 @@ func (c *Controller) MutateHandler(ctx *gin.Context) {
 		if err != nil {
 			c.logger.Error("Failed to marshal patches", zap.Error(err))
 			c.metrics.IncAdmissionRequests("mutate", "error", "patch_marshal_error")
-			
+
 			// Allow without mutations on patch error
 			response.Allowed = true
 		} else {
@@ -251,4 +251,3 @@ func (c *Controller) MutateHandler(ctx *gin.Context) {
 	admissionReview.Response = response
 	ctx.JSON(http.StatusOK, admissionReview)
 }
-

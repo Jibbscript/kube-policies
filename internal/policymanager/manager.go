@@ -28,31 +28,31 @@ type Manager struct {
 
 // PolicyBundle represents a collection of policies
 type PolicyBundle struct {
-	ID          string             `json:"id"`
-	Name        string             `json:"name"`
-	Description string             `json:"description"`
-	Version     string             `json:"version"`
-	Policies    []string           `json:"policies"`
+	ID          string                 `json:"id"`
+	Name        string                 `json:"name"`
+	Description string                 `json:"description"`
+	Version     string                 `json:"version"`
+	Policies    []string               `json:"policies"`
 	Metadata    map[string]interface{} `json:"metadata"`
-	CreatedAt   time.Time          `json:"created_at"`
-	UpdatedAt   time.Time          `json:"updated_at"`
+	CreatedAt   time.Time              `json:"created_at"`
+	UpdatedAt   time.Time              `json:"updated_at"`
 }
 
 // Exception represents a policy exception
 type Exception struct {
-	ID          string                 `json:"id"`
-	Name        string                 `json:"name"`
-	Description string                 `json:"description"`
-	PolicyID    string                 `json:"policy_id"`
-	RuleID      string                 `json:"rule_id,omitempty"`
-	Scope       ExceptionScope         `json:"scope"`
-	Justification string               `json:"justification"`
-	Approver    string                 `json:"approver"`
-	ExpiresAt   *time.Time             `json:"expires_at,omitempty"`
-	Status      string                 `json:"status"`
-	Metadata    map[string]interface{} `json:"metadata"`
-	CreatedAt   time.Time              `json:"created_at"`
-	UpdatedAt   time.Time              `json:"updated_at"`
+	ID            string                 `json:"id"`
+	Name          string                 `json:"name"`
+	Description   string                 `json:"description"`
+	PolicyID      string                 `json:"policy_id"`
+	RuleID        string                 `json:"rule_id,omitempty"`
+	Scope         ExceptionScope         `json:"scope"`
+	Justification string                 `json:"justification"`
+	Approver      string                 `json:"approver"`
+	ExpiresAt     *time.Time             `json:"expires_at,omitempty"`
+	Status        string                 `json:"status"`
+	Metadata      map[string]interface{} `json:"metadata"`
+	CreatedAt     time.Time              `json:"created_at"`
+	UpdatedAt     time.Time              `json:"updated_at"`
 }
 
 // ExceptionScope defines the scope of a policy exception
@@ -77,9 +77,9 @@ type ComplianceReport struct {
 
 // ComplianceSummary provides a summary of compliance status
 type ComplianceSummary struct {
-	TotalChecks    int `json:"total_checks"`
-	PassedChecks   int `json:"passed_checks"`
-	FailedChecks   int `json:"failed_checks"`
+	TotalChecks    int     `json:"total_checks"`
+	PassedChecks   int     `json:"passed_checks"`
+	FailedChecks   int     `json:"failed_checks"`
 	ComplianceRate float64 `json:"compliance_rate"`
 }
 
@@ -96,7 +96,7 @@ type ComplianceViolation struct {
 // NewManager creates a new policy manager
 func NewManager(config *config.Config, logger *zap.Logger) (*Manager, error) {
 	ctx, cancel := context.WithCancel(context.Background())
-	
+
 	manager := &Manager{
 		config:     config,
 		logger:     logger,
@@ -113,13 +113,13 @@ func NewManager(config *config.Config, logger *zap.Logger) (*Manager, error) {
 // Start starts the policy manager background processes
 func (m *Manager) Start(ctx context.Context) {
 	m.logger.Info("Starting policy manager")
-	
+
 	// Start policy synchronization
 	go m.syncPolicies(ctx)
-	
+
 	// Start exception monitoring
 	go m.monitorExceptions(ctx)
-	
+
 	<-ctx.Done()
 	m.logger.Info("Policy manager stopped")
 }
@@ -193,7 +193,7 @@ func (m *Manager) ListPolicies(c *gin.Context) {
 // GetPolicy handles GET /api/v1/policies/:id
 func (m *Manager) GetPolicy(c *gin.Context) {
 	id := c.Param("id")
-	
+
 	m.mutex.RLock()
 	policy, exists := m.policies[id]
 	m.mutex.RUnlock()
@@ -245,7 +245,7 @@ func (m *Manager) CreatePolicy(c *gin.Context) {
 // UpdatePolicy handles PUT /api/v1/policies/:id
 func (m *Manager) UpdatePolicy(c *gin.Context) {
 	id := c.Param("id")
-	
+
 	var updatedPolicy policy.Policy
 	if err := c.ShouldBindJSON(&updatedPolicy); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -285,7 +285,7 @@ func (m *Manager) UpdatePolicy(c *gin.Context) {
 // DeletePolicy handles DELETE /api/v1/policies/:id
 func (m *Manager) DeletePolicy(c *gin.Context) {
 	id := c.Param("id")
-	
+
 	m.mutex.Lock()
 	defer m.mutex.Unlock()
 
@@ -304,11 +304,11 @@ func (m *Manager) DeletePolicy(c *gin.Context) {
 // TestPolicy handles POST /api/v1/policies/:id/test
 func (m *Manager) TestPolicy(c *gin.Context) {
 	id := c.Param("id")
-	
+
 	var testRequest struct {
 		Input map[string]interface{} `json:"input"`
 	}
-	
+
 	if err := c.ShouldBindJSON(&testRequest); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
@@ -325,11 +325,11 @@ func (m *Manager) TestPolicy(c *gin.Context) {
 
 	// Implement policy testing logic
 	result := map[string]interface{}{
-		"policy_id": id,
+		"policy_id":   id,
 		"policy_name": policy.Name,
-		"result":    "passed",
-		"message":   "Policy test completed successfully",
-		"details":   testRequest.Input,
+		"result":      "passed",
+		"message":     "Policy test completed successfully",
+		"details":     testRequest.Input,
 	}
 
 	c.JSON(http.StatusOK, result)
@@ -360,7 +360,7 @@ func (m *Manager) ValidatePolicy(c *gin.Context) {
 // DeployPolicy handles POST /api/v1/policies/:id/deploy
 func (m *Manager) DeployPolicy(c *gin.Context) {
 	id := c.Param("id")
-	
+
 	m.mutex.RLock()
 	policy, exists := m.policies[id]
 	m.mutex.RUnlock()
@@ -372,9 +372,9 @@ func (m *Manager) DeployPolicy(c *gin.Context) {
 
 	// Implement policy deployment logic
 	deploymentResult := map[string]interface{}{
-		"policy_id":     id,
-		"status":        "deployed",
-		"deployed_at":   time.Now(),
+		"policy_id":       id,
+		"status":          "deployed",
+		"deployed_at":     time.Now(),
 		"target_clusters": []string{"production"},
 	}
 
@@ -389,7 +389,7 @@ func (m *Manager) DeployPolicy(c *gin.Context) {
 // GetPolicyStatus handles GET /api/v1/policies/:id/status
 func (m *Manager) GetPolicyStatus(c *gin.Context) {
 	id := c.Param("id")
-	
+
 	m.mutex.RLock()
 	policy, exists := m.policies[id]
 	m.mutex.RUnlock()
@@ -400,10 +400,10 @@ func (m *Manager) GetPolicyStatus(c *gin.Context) {
 	}
 
 	status := map[string]interface{}{
-		"policy_id":      id,
-		"status":         "active",
-		"enabled":        policy.Enabled,
-		"last_evaluated": time.Now().Add(-5 * time.Minute),
+		"policy_id":        id,
+		"status":           "active",
+		"enabled":          policy.Enabled,
+		"last_evaluated":   time.Now().Add(-5 * time.Minute),
 		"evaluation_count": 1234,
 		"violation_count":  5,
 	}
@@ -432,7 +432,7 @@ func (m *Manager) ListBundles(c *gin.Context) {
 // GetBundle handles GET /api/v1/bundles/:id
 func (m *Manager) GetBundle(c *gin.Context) {
 	id := c.Param("id")
-	
+
 	m.mutex.RLock()
 	bundle, exists := m.bundles[id]
 	m.mutex.RUnlock()
@@ -513,7 +513,7 @@ func (m *Manager) CreateException(c *gin.Context) {
 // UpdateException handles PUT /api/v1/exceptions/:id
 func (m *Manager) UpdateException(c *gin.Context) {
 	id := c.Param("id")
-	
+
 	var updatedException Exception
 	if err := c.ShouldBindJSON(&updatedException); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -541,7 +541,7 @@ func (m *Manager) UpdateException(c *gin.Context) {
 // DeleteException handles DELETE /api/v1/exceptions/:id
 func (m *Manager) DeleteException(c *gin.Context) {
 	id := c.Param("id")
-	
+
 	m.mutex.Lock()
 	defer m.mutex.Unlock()
 
@@ -594,10 +594,10 @@ func (m *Manager) GenerateComplianceReport(c *gin.Context) {
 	}
 
 	report := ComplianceReport{
-		ID:        uuid.New().String(),
-		Framework: request.Framework,
-		Period:    request.Period,
-		Status:    "generating",
+		ID:          uuid.New().String(),
+		Framework:   request.Framework,
+		Period:      request.Period,
+		Status:      "generating",
 		GeneratedAt: time.Now(),
 	}
 
@@ -654,4 +654,3 @@ func (m *Manager) validatePolicy(p *policy.Policy) error {
 
 	return nil
 }
-

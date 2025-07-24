@@ -433,4 +433,3 @@ func (f *Framework) LogClusterInfo() {
 		ginkgo.By(fmt.Sprintf("  %s: %s", key, value))
 	}
 }
-

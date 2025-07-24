@@ -564,4 +564,3 @@ func (suite *AdmissionWebhookIntegrationTestSuite) sendAdmissionRequest(admissio
 func TestAdmissionWebhookIntegrationTestSuite(t *testing.T) {
 	suite.Run(t, new(AdmissionWebhookIntegrationTestSuite))
 }
-

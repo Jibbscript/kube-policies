@@ -10,7 +10,7 @@ import (
 // NewLogger creates a new structured logger
 func NewLogger(service, level string) *zap.Logger {
 	config := zap.NewProductionConfig()
-	
+
 	// Set log level
 	switch level {
 	case "debug":
@@ -64,7 +64,7 @@ func NewLogger(service, level string) *zap.Logger {
 func NewDevelopmentLogger(service string) *zap.Logger {
 	config := zap.NewDevelopmentConfig()
 	config.EncoderConfig.EncodeLevel = zapcore.CapitalColorLevelEncoder
-	
+
 	logger, err := config.Build()
 	if err != nil {
 		logger = zap.NewNop()
@@ -87,4 +87,3 @@ func NewLoggerFromEnv(service string) *zap.Logger {
 
 	return NewLogger(service, level)
 }
-

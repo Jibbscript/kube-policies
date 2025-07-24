@@ -33,23 +33,23 @@ type Backend interface {
 
 // Event represents an audit event
 type Event struct {
-	Timestamp       time.Time                      `json:"timestamp"`
-	RequestID       string                         `json:"request_id"`
-	EventType       string                         `json:"event_type"`
-	UserInfo        authenticationv1.UserInfo      `json:"user_info"`
-	Namespace       string                         `json:"namespace,omitempty"`
-	Kind            metav1.GroupVersionKind        `json:"kind"`
-	Name            string                         `json:"name,omitempty"`
-	Operation       string                         `json:"operation"`
-	Decision        string                         `json:"decision"`
-	Reason          string                         `json:"reason,omitempty"`
-	Message         string                         `json:"message,omitempty"`
-	PolicyViolations []policy.PolicyViolation      `json:"policy_violations,omitempty"`
-	Mutations       []policy.JSONPatch             `json:"mutations,omitempty"`
-	ProcessingTime  time.Duration                  `json:"processing_time"`
-	Object          *runtime.RawExtension          `json:"object,omitempty"`
-	OldObject       *runtime.RawExtension          `json:"old_object,omitempty"`
-	Metadata        map[string]interface{}         `json:"metadata,omitempty"`
+	Timestamp        time.Time                 `json:"timestamp"`
+	RequestID        string                    `json:"request_id"`
+	EventType        string                    `json:"event_type"`
+	UserInfo         authenticationv1.UserInfo `json:"user_info"`
+	Namespace        string                    `json:"namespace,omitempty"`
+	Kind             metav1.GroupVersionKind   `json:"kind"`
+	Name             string                    `json:"name,omitempty"`
+	Operation        string                    `json:"operation"`
+	Decision         string                    `json:"decision"`
+	Reason           string                    `json:"reason,omitempty"`
+	Message          string                    `json:"message,omitempty"`
+	PolicyViolations []policy.PolicyViolation  `json:"policy_violations,omitempty"`
+	Mutations        []policy.JSONPatch        `json:"mutations,omitempty"`
+	ProcessingTime   time.Duration             `json:"processing_time"`
+	Object           *runtime.RawExtension     `json:"object,omitempty"`
+	OldObject        *runtime.RawExtension     `json:"old_object,omitempty"`
+	Metadata         map[string]interface{}    `json:"metadata,omitempty"`
 }
 
 // Context represents the context for audit logging
@@ -84,7 +84,7 @@ func NewLogger(config *config.AuditConfig) (*Logger, error) {
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
-	
+
 	logger := &Logger{
 		config:  config,
 		backend: backend,
@@ -236,7 +236,7 @@ func (l *Logger) Close() error {
 	}
 
 	l.cancel()
-	
+
 	if l.backend != nil {
 		return l.backend.Close()
 	}
@@ -370,4 +370,3 @@ func (b *WebhookBackend) Close() error {
 	// Implementation would cleanup HTTP client
 	return nil
 }
-

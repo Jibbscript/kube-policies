@@ -159,4 +159,3 @@ func setupMetricsServer(collector *metrics.Collector) *http.Server {
 
 	return server
 }
-

@@ -10,25 +10,25 @@ import (
 // Collector collects and exposes metrics
 type Collector struct {
 	// Admission webhook metrics
-	admissionRequests *prometheus.CounterVec
+	admissionRequests  *prometheus.CounterVec
 	evaluationDuration *prometheus.HistogramVec
-	policyEvaluations *prometheus.CounterVec
-	
+	policyEvaluations  *prometheus.CounterVec
+
 	// Policy management metrics
 	policiesLoaded prometheus.Gauge
-	policyUpdates *prometheus.CounterVec
-	
+	policyUpdates  *prometheus.CounterVec
+
 	// System metrics
 	systemErrors *prometheus.CounterVec
-	cacheHits *prometheus.CounterVec
-	
+	cacheHits    *prometheus.CounterVec
+
 	// Audit metrics
-	auditEvents *prometheus.CounterVec
+	auditEvents     *prometheus.CounterVec
 	auditBufferSize prometheus.Gauge
-	
+
 	// Compliance metrics
 	complianceViolations *prometheus.CounterVec
-	complianceReports *prometheus.CounterVec
+	complianceReports    *prometheus.CounterVec
 }
 
 // NewCollector creates a new metrics collector
@@ -43,7 +43,7 @@ func NewCollector() *Collector {
 			},
 			[]string{"operation", "status", "reason"},
 		),
-		
+
 		evaluationDuration: promauto.NewHistogramVec(
 			prometheus.HistogramOpts{
 				Namespace: "kube_policies",
@@ -54,7 +54,7 @@ func NewCollector() *Collector {
 			},
 			[]string{"operation"},
 		),
-		
+
 		policyEvaluations: promauto.NewCounterVec(
 			prometheus.CounterOpts{
 				Namespace: "kube_policies",
@@ -64,7 +64,7 @@ func NewCollector() *Collector {
 			},
 			[]string{"policy_id", "rule_id", "result"},
 		),
-		
+
 		policiesLoaded: promauto.NewGauge(
 			prometheus.GaugeOpts{
 				Namespace: "kube_policies",
@@ -73,7 +73,7 @@ func NewCollector() *Collector {
 				Help:      "Number of policies currently loaded",
 			},
 		),
-		
+
 		policyUpdates: promauto.NewCounterVec(
 			prometheus.CounterOpts{
 				Namespace: "kube_policies",
@@ -83,7 +83,7 @@ func NewCollector() *Collector {
 			},
 			[]string{"operation", "status"},
 		),
-		
+
 		systemErrors: promauto.NewCounterVec(
 			prometheus.CounterOpts{
 				Namespace: "kube_policies",
@@ -93,7 +93,7 @@ func NewCollector() *Collector {
 			},
 			[]string{"component", "error_type"},
 		),
-		
+
 		cacheHits: promauto.NewCounterVec(
 			prometheus.CounterOpts{
 				Namespace: "kube_policies",
@@ -103,7 +103,7 @@ func NewCollector() *Collector {
 			},
 			[]string{"cache_type", "result"},
 		),
-		
+
 		auditEvents: promauto.NewCounterVec(
 			prometheus.CounterOpts{
 				Namespace: "kube_policies",
@@ -113,7 +113,7 @@ func NewCollector() *Collector {
 			},
 			[]string{"event_type", "status"},
 		),
-		
+
 		auditBufferSize: promauto.NewGauge(
 			prometheus.GaugeOpts{
 				Namespace: "kube_policies",
@@ -122,7 +122,7 @@ func NewCollector() *Collector {
 				Help:      "Current size of the audit event buffer",
 			},
 		),
-		
+
 		complianceViolations: promauto.NewCounterVec(
 			prometheus.CounterOpts{
 				Namespace: "kube_policies",
@@ -132,7 +132,7 @@ func NewCollector() *Collector {
 			},
 			[]string{"framework", "severity", "category"},
 		),
-		
+
 		complianceReports: promauto.NewCounterVec(
 			prometheus.CounterOpts{
 				Namespace: "kube_policies",
@@ -203,17 +203,16 @@ func (c *Collector) IncComplianceReports(framework, status string) {
 // GetMetrics returns all metrics for testing or inspection
 func (c *Collector) GetMetrics() map[string]prometheus.Collector {
 	return map[string]prometheus.Collector{
-		"admission_requests":      c.admissionRequests,
-		"evaluation_duration":     c.evaluationDuration,
-		"policy_evaluations":      c.policyEvaluations,
-		"policies_loaded":         c.policiesLoaded,
-		"policy_updates":          c.policyUpdates,
-		"system_errors":           c.systemErrors,
-		"cache_hits":              c.cacheHits,
-		"audit_events":            c.auditEvents,
-		"audit_buffer_size":       c.auditBufferSize,
-		"compliance_violations":   c.complianceViolations,
-		"compliance_reports":      c.complianceReports,
+		"admission_requests":    c.admissionRequests,
+		"evaluation_duration":   c.evaluationDuration,
+		"policy_evaluations":    c.policyEvaluations,
+		"policies_loaded":       c.policiesLoaded,
+		"policy_updates":        c.policyUpdates,
+		"system_errors":         c.systemErrors,
+		"cache_hits":            c.cacheHits,
+		"audit_events":          c.auditEvents,
+		"audit_buffer_size":     c.auditBufferSize,
+		"compliance_violations": c.complianceViolations,
+		"compliance_reports":    c.complianceReports,
 	}
 }
-

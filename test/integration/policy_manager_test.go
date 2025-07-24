@@ -23,12 +23,12 @@ import (
 
 type PolicyManagerIntegrationTestSuite struct {
 	suite.Suite
-	testEnv      *envtest.Environment
-	cfg          *rest.Config
-	k8sClient    kubernetes.Interface
+	testEnv       *envtest.Environment
+	cfg           *rest.Config
+	k8sClient     kubernetes.Interface
 	dynamicClient dynamic.Interface
-	ctx          context.Context
-	cancel       context.CancelFunc
+	ctx           context.Context
+	cancel        context.CancelFunc
 }
 
 func (suite *PolicyManagerIntegrationTestSuite) SetupSuite() {
@@ -447,7 +447,7 @@ func (suite *PolicyManagerIntegrationTestSuite) TestPolicyManager_PolicyEvaluati
 func (suite *PolicyManagerIntegrationTestSuite) TestPolicyManager_Metrics() {
 	// Test metrics endpoint
 	metricsResponse := suite.getMetricsFromManager()
-	
+
 	// Should contain basic metrics
 	assert.Contains(suite.T(), metricsResponse, "kube_policies_active_policies_total")
 	assert.Contains(suite.T(), metricsResponse, "kube_policies_policy_evaluations_total")
@@ -456,7 +456,7 @@ func (suite *PolicyManagerIntegrationTestSuite) TestPolicyManager_Metrics() {
 func (suite *PolicyManagerIntegrationTestSuite) TestPolicyManager_HealthCheck() {
 	// Test health check endpoint
 	healthResponse := suite.getHealthFromManager()
-	
+
 	assert.Equal(suite.T(), "ok", healthResponse["status"])
 	assert.NotEmpty(suite.T(), healthResponse["timestamp"])
 }
@@ -630,4 +630,3 @@ func (suite *PolicyManagerIntegrationTestSuite) getHealthFromManager() map[strin
 func TestPolicyManagerIntegrationTestSuite(t *testing.T) {
 	suite.Run(t, new(PolicyManagerIntegrationTestSuite))
 }
-
