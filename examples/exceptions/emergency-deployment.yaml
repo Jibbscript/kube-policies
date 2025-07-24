@@ -1,0 +1,159 @@
+apiVersion: policies.kube-policies.io/v1
+kind: PolicyException
+metadata:
+  name: emergency-deployment-exception
+  namespace: production
+  labels:
+    exception.type: emergency
+    approval.status: pending
+spec:
+  description: "Emergency deployment exception for critical security patch"
+  
+  # Exception details
+  policy: security-baseline
+  rules:
+    - no-latest-image-tag
+    - required-resource-limits
+  
+  # Target resources
+  selector:
+    matchLabels:
+      app: critical-app
+      deployment.type: emergency
+  
+  # Justification
+  justification: |
+    Emergency deployment required for critical security vulnerability CVE-2023-12345.
+    This deployment needs to bypass normal security policies to enable rapid response.
+    
+    Risk Assessment:
+    - Using latest tag temporarily until proper versioning can be applied
+    - Resource limits will be added in follow-up deployment within 24 hours
+    
+    Mitigation:
+    - Deployment will be monitored continuously
+    - Rollback plan is prepared and tested
+    - Security team has been notified
+  
+  # Approval workflow
+  approval:
+    required: true
+    approvers:
+      - name: security-team
+        type: group
+        required: true
+      - name: platform-team
+        type: group
+        required: true
+    
+    # Approval metadata
+    requestedBy: "john.doe@company.com"
+    requestedAt: "2023-07-23T10:00:00Z"
+    urgency: high
+    
+    # Auto-approval conditions (for emergency cases)
+    autoApproval:
+      enabled: true
+      conditions:
+        - type: emergency
+          value: "true"
+        - type: severity
+          value: "critical"
+      maxDuration: "4h"
+  
+  # Exception duration and expiry
+  duration: "24h"
+  expiresAt: "2023-07-24T10:00:00Z"
+  
+  # Monitoring and alerting
+  monitoring:
+    enabled: true
+    alerts:
+      - type: usage
+        threshold: 1
+        action: notify
+      - type: expiry
+        beforeExpiry: "2h"
+        action: alert
+  
+  # Audit trail
+  audit:
+    enabled: true
+    level: detailed
+    includePayload: true
+  
+  # Conditions for exception activation
+  conditions:
+    - type: namespace
+      operator: In
+      values: ["production", "staging"]
+    - type: label
+      key: deployment.type
+      operator: Equals
+      value: emergency
+  
+  # Risk assessment
+  riskAssessment:
+    level: medium
+    factors:
+      - "Temporary bypass of image tag policy"
+      - "Missing resource limits"
+      - "Production environment deployment"
+    mitigations:
+      - "Continuous monitoring enabled"
+      - "Automatic expiry in 24 hours"
+      - "Security team notification"
+  
+  # Compliance impact
+  compliance:
+    frameworks:
+      - name: CIS
+        impact: low
+        reason: "Temporary exception with proper justification"
+      - name: SOC2
+        impact: medium
+        reason: "Control bypass requires documentation"
+    
+    # Required documentation
+    documentation:
+      - type: risk-assessment
+        required: true
+        provided: true
+      - type: business-justification
+        required: true
+        provided: true
+      - type: technical-review
+        required: true
+        provided: false
+
+status:
+  phase: pending
+  conditions:
+    - type: Approved
+      status: "False"
+      reason: "PendingApproval"
+      message: "Waiting for approval from security-team and platform-team"
+      lastTransitionTime: "2023-07-23T10:00:00Z"
+  
+  approvals:
+    - approver: security-team
+      status: pending
+      requestedAt: "2023-07-23T10:00:00Z"
+    - approver: platform-team
+      status: pending
+      requestedAt: "2023-07-23T10:00:00Z"
+  
+  usage:
+    count: 0
+    lastUsed: null
+    resources: []
+  
+  audit:
+    created: "2023-07-23T10:00:00Z"
+    createdBy: "john.doe@company.com"
+    events:
+      - timestamp: "2023-07-23T10:00:00Z"
+        type: created
+        user: "john.doe@company.com"
+        message: "Exception created for emergency deployment"
+

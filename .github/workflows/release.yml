@@ -1,0 +1,542 @@
+name: Release Pipeline
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version (e.g., v1.0.0)'
+        required: true
+        type: string
+
+env:
+  GO_VERSION: '1.21'
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  # Validate release
+  validate-release:
+    name: Validate Release
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      is-prerelease: ${{ steps.version.outputs.is-prerelease }}
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Determine version
+      id: version
+      run: |
+        if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+          VERSION="${{ github.event.inputs.version }}"
+        else
+          VERSION="${GITHUB_REF#refs/tags/}"
+        fi
+        
+        echo "version=${VERSION}" >> $GITHUB_OUTPUT
+        
+        # Check if this is a pre-release
+        if [[ "${VERSION}" =~ -[a-zA-Z] ]]; then
+          echo "is-prerelease=true" >> $GITHUB_OUTPUT
+        else
+          echo "is-prerelease=false" >> $GITHUB_OUTPUT
+        fi
+
+    - name: Validate version format
+      run: |
+        VERSION="${{ steps.version.outputs.version }}"
+        if [[ ! "${VERSION}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.-]+)?$ ]]; then
+          echo "Invalid version format: ${VERSION}"
+          echo "Expected format: vX.Y.Z or vX.Y.Z-suffix"
+          exit 1
+        fi
+
+    - name: Check if tag exists
+      if: github.event_name == 'workflow_dispatch'
+      run: |
+        VERSION="${{ steps.version.outputs.version }}"
+        if git rev-parse "${VERSION}" >/dev/null 2>&1; then
+          echo "Tag ${VERSION} already exists"
+          exit 1
+        fi
+
+  # Run full test suite
+  test-suite:
+    name: Full Test Suite
+    uses: ./.github/workflows/ci.yml
+    needs: [validate-release]
+
+  # Build release artifacts
+  build-release:
+    name: Build Release Artifacts
+    runs-on: ubuntu-latest
+    needs: [validate-release, test-suite]
+    strategy:
+      matrix:
+        os: [linux, darwin, windows]
+        arch: [amd64, arm64]
+        exclude:
+          - os: windows
+            arch: arm64
+    outputs:
+      hashes: ${{ steps.hash.outputs.hashes }}
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Go
+      uses: actions/setup-go@v4
+      with:
+        go-version: ${{ env.GO_VERSION }}
+
+    - name: Cache Go modules
+      uses: actions/cache@v3
+      with:
+        path: |
+          ~/.cache/go-build
+          ~/go/pkg/mod
+        key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+        restore-keys: |
+          ${{ runner.os }}-go-
+
+    - name: Install dependencies
+      run: go mod download
+
+    - name: Build binaries
+      env:
+        VERSION: ${{ needs.validate-release.outputs.version }}
+        GOOS: ${{ matrix.os }}
+        GOARCH: ${{ matrix.arch }}
+      run: |
+        # Build admission webhook
+        CGO_ENABLED=0 go build \
+          -ldflags="-s -w -X main.version=${VERSION} -X main.commit=${GITHUB_SHA} -X main.date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+          -o dist/admission-webhook-${GOOS}-${GOARCH}${{ matrix.os == 'windows' && '.exe' || '' }} \
+          ./cmd/admission-webhook
+
+        # Build policy manager
+        CGO_ENABLED=0 go build \
+          -ldflags="-s -w -X main.version=${VERSION} -X main.commit=${GITHUB_SHA} -X main.date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+          -o dist/policy-manager-${GOOS}-${GOARCH}${{ matrix.os == 'windows' && '.exe' || '' }} \
+          ./cmd/policy-manager
+
+    - name: Generate checksums
+      id: hash
+      run: |
+        cd dist
+        sha256sum * > checksums.txt
+        echo "hashes=$(cat checksums.txt | base64 -w 0)" >> $GITHUB_OUTPUT
+
+    - name: Upload artifacts
+      uses: actions/upload-artifact@v3
+      with:
+        name: binaries-${{ matrix.os }}-${{ matrix.arch }}
+        path: dist/
+
+  # Build and push container images
+  build-images:
+    name: Build Release Images
+    runs-on: ubuntu-latest
+    needs: [validate-release, test-suite]
+    outputs:
+      admission-webhook-digest: ${{ steps.build-webhook.outputs.digest }}
+      policy-manager-digest: ${{ steps.build-manager.outputs.digest }}
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+
+    - name: Log in to Container Registry
+      uses: docker/login-action@v3
+      with:
+        registry: ${{ env.REGISTRY }}
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Extract metadata for admission webhook
+      id: meta-webhook
+      uses: docker/metadata-action@v5
+      with:
+        images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/admission-webhook
+        tags: |
+          type=semver,pattern={{version}},value=${{ needs.validate-release.outputs.version }}
+          type=semver,pattern={{major}}.{{minor}},value=${{ needs.validate-release.outputs.version }}
+          type=semver,pattern={{major}},value=${{ needs.validate-release.outputs.version }}
+          type=raw,value=latest,enable={{is_default_branch}}
+
+    - name: Build and push admission webhook image
+      id: build-webhook
+      uses: docker/build-push-action@v5
+      with:
+        context: .
+        file: ./build/docker/admission-webhook.Dockerfile
+        platforms: linux/amd64,linux/arm64
+        push: true
+        tags: ${{ steps.meta-webhook.outputs.tags }}
+        labels: ${{ steps.meta-webhook.outputs.labels }}
+        build-args: |
+          VERSION=${{ needs.validate-release.outputs.version }}
+          COMMIT=${{ github.sha }}
+          DATE=${{ github.event.head_commit.timestamp }}
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+
+    - name: Extract metadata for policy manager
+      id: meta-manager
+      uses: docker/metadata-action@v5
+      with:
+        images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/policy-manager
+        tags: |
+          type=semver,pattern={{version}},value=${{ needs.validate-release.outputs.version }}
+          type=semver,pattern={{major}}.{{minor}},value=${{ needs.validate-release.outputs.version }}
+          type=semver,pattern={{major}},value=${{ needs.validate-release.outputs.version }}
+          type=raw,value=latest,enable={{is_default_branch}}
+
+    - name: Build and push policy manager image
+      id: build-manager
+      uses: docker/build-push-action@v5
+      with:
+        context: .
+        file: ./build/docker/policy-manager.Dockerfile
+        platforms: linux/amd64,linux/arm64
+        push: true
+        tags: ${{ steps.meta-manager.outputs.tags }}
+        labels: ${{ steps.meta-manager.outputs.labels }}
+        build-args: |
+          VERSION=${{ needs.validate-release.outputs.version }}
+          COMMIT=${{ github.sha }}
+          DATE=${{ github.event.head_commit.timestamp }}
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+
+  # Package Helm chart
+  package-helm:
+    name: Package Helm Chart
+    runs-on: ubuntu-latest
+    needs: [validate-release, test-suite]
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Install Helm
+      run: |
+        curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+
+    - name: Update chart version
+      run: |
+        VERSION="${{ needs.validate-release.outputs.version }}"
+        # Remove 'v' prefix for chart version
+        CHART_VERSION="${VERSION#v}"
+        
+        # Update Chart.yaml
+        sed -i "s/^version:.*/version: ${CHART_VERSION}/" charts/kube-policies/Chart.yaml
+        sed -i "s/^appVersion:.*/appVersion: ${VERSION}/" charts/kube-policies/Chart.yaml
+
+    - name: Package Helm chart
+      run: |
+        helm package charts/kube-policies --destination dist/
+
+    - name: Generate chart checksums
+      run: |
+        cd dist
+        sha256sum *.tgz > chart-checksums.txt
+
+    - name: Upload chart artifacts
+      uses: actions/upload-artifact@v3
+      with:
+        name: helm-chart
+        path: dist/
+
+  # Generate SBOM
+  generate-sbom:
+    name: Generate SBOM
+    runs-on: ubuntu-latest
+    needs: [validate-release, build-images]
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Generate SBOM for admission webhook
+      uses: anchore/sbom-action@v0
+      with:
+        image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/admission-webhook:${{ needs.validate-release.outputs.version }}
+        format: spdx-json
+        output-file: admission-webhook-sbom.spdx.json
+
+    - name: Generate SBOM for policy manager
+      uses: anchore/sbom-action@v0
+      with:
+        image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/policy-manager:${{ needs.validate-release.outputs.version }}
+        format: spdx-json
+        output-file: policy-manager-sbom.spdx.json
+
+    - name: Upload SBOM artifacts
+      uses: actions/upload-artifact@v3
+      with:
+        name: sbom
+        path: |
+          admission-webhook-sbom.spdx.json
+          policy-manager-sbom.spdx.json
+
+  # Security scan release images
+  security-scan:
+    name: Security Scan Release Images
+    runs-on: ubuntu-latest
+    needs: [validate-release, build-images]
+    steps:
+    - name: Run Trivy vulnerability scanner on admission webhook
+      uses: aquasecurity/trivy-action@master
+      with:
+        image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/admission-webhook:${{ needs.validate-release.outputs.version }}
+        format: 'sarif'
+        output: 'trivy-webhook-release.sarif'
+
+    - name: Run Trivy vulnerability scanner on policy manager
+      uses: aquasecurity/trivy-action@master
+      with:
+        image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/policy-manager:${{ needs.validate-release.outputs.version }}
+        format: 'sarif'
+        output: 'trivy-manager-release.sarif'
+
+    - name: Upload Trivy scan results
+      uses: github/codeql-action/upload-sarif@v2
+      with:
+        sarif_file: 'trivy-webhook-release.sarif'
+
+    - name: Upload Trivy scan results
+      uses: github/codeql-action/upload-sarif@v2
+      with:
+        sarif_file: 'trivy-manager-release.sarif'
+
+  # Sign release artifacts
+  sign-artifacts:
+    name: Sign Release Artifacts
+    runs-on: ubuntu-latest
+    needs: [validate-release, build-release, build-images, package-helm]
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+    steps:
+    - name: Install Cosign
+      uses: sigstore/cosign-installer@v3
+
+    - name: Log in to Container Registry
+      uses: docker/login-action@v3
+      with:
+        registry: ${{ env.REGISTRY }}
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Sign container images
+      env:
+        COSIGN_EXPERIMENTAL: 1
+      run: |
+        cosign sign --yes ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/admission-webhook:${{ needs.validate-release.outputs.version }}
+        cosign sign --yes ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/policy-manager:${{ needs.validate-release.outputs.version }}
+
+    - name: Download all artifacts
+      uses: actions/download-artifact@v3
+
+    - name: Sign binary artifacts
+      env:
+        COSIGN_EXPERIMENTAL: 1
+      run: |
+        # Sign all binary artifacts
+        find . -name "*.exe" -o -name "admission-webhook-*" -o -name "policy-manager-*" | grep -v ".exe" | while read file; do
+          cosign sign-blob --yes "${file}" --output-signature "${file}.sig"
+        done
+        
+        # Sign Helm chart
+        find . -name "*.tgz" | while read file; do
+          cosign sign-blob --yes "${file}" --output-signature "${file}.sig"
+        done
+
+    - name: Upload signed artifacts
+      uses: actions/upload-artifact@v3
+      with:
+        name: signed-artifacts
+        path: |
+          **/*.sig
+
+  # Create GitHub release
+  create-release:
+    name: Create GitHub Release
+    runs-on: ubuntu-latest
+    needs: [validate-release, build-release, build-images, package-helm, generate-sbom, security-scan]
+    if: always() && !failure() && !cancelled()
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Download all artifacts
+      uses: actions/download-artifact@v3
+
+    - name: Generate release notes
+      id: release-notes
+      run: |
+        VERSION="${{ needs.validate-release.outputs.version }}"
+        PREVIOUS_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
+        
+        # Generate changelog
+        if [[ -n "${PREVIOUS_TAG}" ]]; then
+          echo "## Changes since ${PREVIOUS_TAG}" > release-notes.md
+          echo "" >> release-notes.md
+          git log --pretty=format:"- %s (%h)" ${PREVIOUS_TAG}..HEAD >> release-notes.md
+        else
+          echo "## Initial Release" > release-notes.md
+          echo "" >> release-notes.md
+          echo "This is the initial release of Kube-Policies." >> release-notes.md
+        fi
+        
+        echo "" >> release-notes.md
+        echo "## Container Images" >> release-notes.md
+        echo "" >> release-notes.md
+        echo "- \`${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/admission-webhook:${VERSION}\`" >> release-notes.md
+        echo "- \`${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/policy-manager:${VERSION}\`" >> release-notes.md
+        echo "" >> release-notes.md
+        echo "## Installation" >> release-notes.md
+        echo "" >> release-notes.md
+        echo "\`\`\`bash" >> release-notes.md
+        echo "helm repo add kube-policies https://github.com/${{ github.repository }}/releases/download/${VERSION}" >> release-notes.md
+        echo "helm install kube-policies kube-policies/kube-policies --version ${VERSION#v}" >> release-notes.md
+        echo "\`\`\`" >> release-notes.md
+
+    - name: Prepare release assets
+      run: |
+        mkdir -p release-assets
+        
+        # Copy binaries
+        find . -name "binaries-*" -type d | while read dir; do
+          cp "${dir}"/* release-assets/ 2>/dev/null || true
+        done
+        
+        # Copy Helm chart
+        find . -name "*.tgz" -exec cp {} release-assets/ \;
+        
+        # Copy checksums
+        find . -name "*checksums.txt" -exec cp {} release-assets/ \;
+        
+        # Copy SBOM files
+        find . -name "*-sbom.spdx.json" -exec cp {} release-assets/ \;
+        
+        # Copy signatures if they exist
+        find . -name "*.sig" -exec cp {} release-assets/ \; 2>/dev/null || true
+
+    - name: Create release
+      uses: softprops/action-gh-release@v1
+      with:
+        tag_name: ${{ needs.validate-release.outputs.version }}
+        name: Release ${{ needs.validate-release.outputs.version }}
+        body_path: release-notes.md
+        prerelease: ${{ needs.validate-release.outputs.is-prerelease }}
+        files: release-assets/*
+        generate_release_notes: true
+        make_latest: ${{ needs.validate-release.outputs.is-prerelease == 'false' }}
+
+  # Update Helm repository
+  update-helm-repo:
+    name: Update Helm Repository
+    runs-on: ubuntu-latest
+    needs: [validate-release, create-release]
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/') && needs.validate-release.outputs.is-prerelease == 'false'
+    steps:
+    - name: Checkout helm-charts repository
+      uses: actions/checkout@v4
+      with:
+        repository: ${{ github.repository_owner }}/helm-charts
+        token: ${{ secrets.HELM_REPO_TOKEN }}
+        path: helm-charts
+
+    - name: Download Helm chart
+      uses: actions/download-artifact@v3
+      with:
+        name: helm-chart
+        path: chart/
+
+    - name: Update Helm repository
+      run: |
+        cd helm-charts
+        
+        # Copy new chart
+        cp ../chart/*.tgz charts/
+        
+        # Update index
+        helm repo index charts/ --url https://github.com/${{ github.repository_owner }}/helm-charts/releases/download/
+        
+        # Commit and push
+        git config user.name "github-actions[bot]"
+        git config user.email "github-actions[bot]@users.noreply.github.com"
+        git add .
+        git commit -m "Add kube-policies ${{ needs.validate-release.outputs.version }}"
+        git push
+
+  # Notify stakeholders
+  notify:
+    name: Notify Release
+    runs-on: ubuntu-latest
+    needs: [validate-release, create-release]
+    if: always() && !failure() && !cancelled()
+    steps:
+    - name: Notify Slack
+      uses: 8398a7/action-slack@v3
+      with:
+        status: success
+        channel: '#kube-policies-releases'
+        webhook_url: ${{ secrets.SLACK_WEBHOOK }}
+        fields: repo,message,commit,author,action,eventName,ref,workflow
+        custom_payload: |
+          {
+            "text": "🚀 Kube-Policies ${{ needs.validate-release.outputs.version }} has been released!",
+            "attachments": [
+              {
+                "color": "good",
+                "fields": [
+                  {
+                    "title": "Version",
+                    "value": "${{ needs.validate-release.outputs.version }}",
+                    "short": true
+                  },
+                  {
+                    "title": "Release Notes",
+                    "value": "https://github.com/${{ github.repository }}/releases/tag/${{ needs.validate-release.outputs.version }}",
+                    "short": true
+                  }
+                ]
+              }
+            ]
+          }
+
+    - name: Notify Teams
+      if: env.TEAMS_WEBHOOK != ''
+      env:
+        TEAMS_WEBHOOK: ${{ secrets.TEAMS_WEBHOOK }}
+      run: |
+        curl -H "Content-Type: application/json" -d '{
+          "@type": "MessageCard",
+          "@context": "https://schema.org/extensions",
+          "summary": "Kube-Policies Release",
+          "themeColor": "0078D4",
+          "title": "🚀 Kube-Policies ${{ needs.validate-release.outputs.version }} Released",
+          "text": "A new version of Kube-Policies has been released.",
+          "potentialAction": [
+            {
+              "@type": "OpenUri",
+              "name": "View Release",
+              "targets": [
+                {
+                  "os": "default",
+                  "uri": "https://github.com/${{ github.repository }}/releases/tag/${{ needs.validate-release.outputs.version }}"
+                }
+              ]
+            }
+          ]
+        }' "${TEAMS_WEBHOOK}"
+

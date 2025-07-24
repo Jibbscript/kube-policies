@@ -1,0 +1,102 @@
+global:
+  # Global configuration
+  smtp_smarthost: 'localhost:587'
+  smtp_from: 'alertmanager@kube-policies.io'
+  smtp_auth_username: 'alertmanager@kube-policies.io'
+  smtp_auth_password: 'password'
+  
+  # Slack configuration
+  slack_api_url: 'https://hooks.slack.com/services/YOUR/SLACK/WEBHOOK'
+
+# Templates for notifications
+templates:
+  - '/etc/alertmanager/templates/*.tmpl'
+
+# Route configuration
+route:
+  group_by: ['alertname', 'cluster', 'service']
+  group_wait: 10s
+  group_interval: 10s
+  repeat_interval: 1h
+  receiver: 'web.hook'
+  routes:
+  # Critical alerts go to PagerDuty and Slack
+  - match:
+      severity: critical
+    receiver: 'critical-alerts'
+    group_wait: 5s
+    repeat_interval: 30m
+  
+  # Warning alerts go to Slack
+  - match:
+      severity: warning
+    receiver: 'warning-alerts'
+    group_wait: 30s
+    repeat_interval: 2h
+  
+  # Kube-Policies specific alerts
+  - match:
+      service: kube-policies
+    receiver: 'kube-policies-alerts'
+    group_wait: 10s
+    repeat_interval: 1h
+
+# Inhibition rules
+inhibit_rules:
+  # Inhibit warning alerts if critical alert is firing
+  - source_match:
+      severity: 'critical'
+    target_match:
+      severity: 'warning'
+    equal: ['alertname', 'cluster', 'service']
+
+# Receivers configuration
+receivers:
+- name: 'web.hook'
+  webhook_configs:
+  - url: 'http://127.0.0.1:5001/'
+
+- name: 'critical-alerts'
+  pagerduty_configs:
+  - service_key: 'YOUR_PAGERDUTY_SERVICE_KEY'
+    description: '{{ range .Alerts }}{{ .Annotations.summary }}{{ end }}'
+    details:
+      firing: '{{ template "pagerduty.default.instances" . }}'
+  slack_configs:
+  - api_url: 'https://hooks.slack.com/services/YOUR/SLACK/WEBHOOK'
+    channel: '#alerts-critical'
+    title: 'Critical Alert - {{ .GroupLabels.alertname }}'
+    text: '{{ range .Alerts }}{{ .Annotations.description }}{{ end }}'
+    color: 'danger'
+
+- name: 'warning-alerts'
+  slack_configs:
+  - api_url: 'https://hooks.slack.com/services/YOUR/SLACK/WEBHOOK'
+    channel: '#alerts-warning'
+    title: 'Warning Alert - {{ .GroupLabels.alertname }}'
+    text: '{{ range .Alerts }}{{ .Annotations.description }}{{ end }}'
+    color: 'warning'
+
+- name: 'kube-policies-alerts'
+  email_configs:
+  - to: 'kube-policies-team@company.com'
+    subject: 'Kube-Policies Alert - {{ .GroupLabels.alertname }}'
+    body: |
+      {{ range .Alerts }}
+      Alert: {{ .Annotations.summary }}
+      Description: {{ .Annotations.description }}
+      Labels: {{ range .Labels.SortedPairs }}{{ .Name }}={{ .Value }} {{ end }}
+      {{ end }}
+  slack_configs:
+  - api_url: 'https://hooks.slack.com/services/YOUR/SLACK/WEBHOOK'
+    channel: '#kube-policies'
+    title: 'Kube-Policies Alert - {{ .GroupLabels.alertname }}'
+    text: |
+      {{ range .Alerts }}
+      *Alert:* {{ .Annotations.summary }}
+      *Description:* {{ .Annotations.description }}
+      *Severity:* {{ .Labels.severity }}
+      *Service:* {{ .Labels.service }}
+      {{ end }}
+    color: '{{ if eq .Status "firing" }}danger{{ else }}good{{ end }}'
+

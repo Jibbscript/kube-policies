@@ -1,0 +1,58 @@
+{{- if .Values.admissionWebhook.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "kube-policies.webhookServiceName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kube-policies.labels" . | nindent 4 }}
+    app.kubernetes.io/component: admission-webhook
+  {{- with .Values.admissionWebhook.service.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  type: {{ .Values.admissionWebhook.service.type }}
+  ports:
+    - port: {{ .Values.admissionWebhook.service.port }}
+      targetPort: {{ .Values.admissionWebhook.service.targetPort }}
+      protocol: TCP
+      name: webhook
+    - port: 8080
+      targetPort: 8080
+      protocol: TCP
+      name: metrics
+  selector:
+    {{- include "kube-policies.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: admission-webhook
+{{- end }}
+---
+{{- if .Values.policyManager.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "kube-policies.policyManagerName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kube-policies.labels" . | nindent 4 }}
+    app.kubernetes.io/component: policy-manager
+  {{- with .Values.policyManager.service.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  type: {{ .Values.policyManager.service.type }}
+  ports:
+    - port: {{ .Values.policyManager.service.port }}
+      targetPort: {{ .Values.policyManager.service.targetPort }}
+      protocol: TCP
+      name: http
+    - port: 8081
+      targetPort: 8081
+      protocol: TCP
+      name: metrics
+  selector:
+    {{- include "kube-policies.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: policy-manager
+{{- end }}
+

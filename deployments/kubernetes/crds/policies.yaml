@@ -1,0 +1,229 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: policies.policies.kube-policies.io
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.13.0
+spec:
+  group: policies.kube-policies.io
+  names:
+    kind: Policy
+    listKind: PolicyList
+    plural: policies
+    singular: policy
+  scope: Namespaced
+  versions:
+  - name: v1
+    served: true
+    storage: true
+    schema:
+      openAPIV3Schema:
+        description: Policy defines a security or compliance policy for Kubernetes resources
+        type: object
+        properties:
+          apiVersion:
+            description: 'APIVersion defines the versioned schema of this representation of an object.'
+            type: string
+          kind:
+            description: 'Kind is a string value representing the REST resource this object represents.'
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: PolicySpec defines the desired state of Policy
+            type: object
+            required:
+            - rules
+            properties:
+              description:
+                description: Description provides a human-readable description of the policy
+                type: string
+              enabled:
+                description: Enabled indicates whether the policy is active
+                type: boolean
+                default: true
+              severity:
+                description: Severity indicates the severity level of policy violations
+                type: string
+                enum: ["LOW", "MEDIUM", "HIGH", "CRITICAL"]
+                default: "MEDIUM"
+              category:
+                description: Category groups related policies together
+                type: string
+              frameworks:
+                description: Frameworks lists compliance frameworks this policy supports
+                type: array
+                items:
+                  type: string
+              rules:
+                description: Rules defines the policy rules using Rego
+                type: array
+                items:
+                  type: object
+                  required:
+                  - name
+                  - rego
+                  properties:
+                    name:
+                      description: Name is the unique identifier for the rule
+                      type: string
+                    description:
+                      description: Description provides a human-readable description of the rule
+                      type: string
+                    severity:
+                      description: Severity indicates the severity level of rule violations
+                      type: string
+                      enum: ["LOW", "MEDIUM", "HIGH", "CRITICAL"]
+                      default: "MEDIUM"
+                    category:
+                      description: Category groups related rules together
+                      type: string
+                    frameworks:
+                      description: Frameworks lists compliance frameworks this rule supports
+                      type: array
+                      items:
+                        type: string
+                    rego:
+                      description: Rego contains the OPA Rego policy code
+                      type: string
+                    metadata:
+                      description: Metadata contains additional rule metadata
+                      type: object
+                      additionalProperties:
+                        type: string
+              targets:
+                description: Targets specifies which resources this policy applies to
+                type: object
+                properties:
+                  kinds:
+                    description: Kinds lists the Kubernetes resource kinds this policy applies to
+                    type: array
+                    items:
+                      type: object
+                      required:
+                      - apiVersion
+                      - kind
+                      properties:
+                        apiVersion:
+                          type: string
+                        kind:
+                          type: string
+                  namespaces:
+                    description: Namespaces lists the namespaces this policy applies to
+                    type: array
+                    items:
+                      type: string
+                  excludeNamespaces:
+                    description: ExcludeNamespaces lists namespaces to exclude from this policy
+                    type: array
+                    items:
+                      type: string
+                  labelSelector:
+                    description: LabelSelector selects resources based on labels
+                    type: object
+                    properties:
+                      matchLabels:
+                        type: object
+                        additionalProperties:
+                          type: string
+                      matchExpressions:
+                        type: array
+                        items:
+                          type: object
+                          required:
+                          - key
+                          - operator
+                          properties:
+                            key:
+                              type: string
+                            operator:
+                              type: string
+                              enum: ["In", "NotIn", "Exists", "DoesNotExist"]
+                            values:
+                              type: array
+                              items:
+                                type: string
+              parameters:
+                description: Parameters provides configurable parameters for the policy
+                type: object
+                additionalProperties:
+                  type: string
+              metadata:
+                description: Metadata contains additional policy metadata
+                type: object
+                additionalProperties:
+                  type: string
+          status:
+            description: PolicyStatus defines the observed state of Policy
+            type: object
+            properties:
+              phase:
+                description: Phase indicates the current phase of the policy
+                type: string
+                enum: ["Pending", "Active", "Failed", "Disabled"]
+              conditions:
+                description: Conditions represents the latest available observations of the policy's state
+                type: array
+                items:
+                  type: object
+                  required:
+                  - type
+                  - status
+                  properties:
+                    type:
+                      description: Type of condition
+                      type: string
+                    status:
+                      description: Status of the condition
+                      type: string
+                      enum: ["True", "False", "Unknown"]
+                    lastTransitionTime:
+                      description: Last time the condition transitioned
+                      type: string
+                      format: date-time
+                    reason:
+                      description: Reason for the condition's last transition
+                      type: string
+                    message:
+                      description: Human-readable message indicating details about last transition
+                      type: string
+              violationCount:
+                description: ViolationCount tracks the number of violations detected
+                type: integer
+              lastEvaluated:
+                description: LastEvaluated indicates when the policy was last evaluated
+                type: string
+                format: date-time
+              distributionStatus:
+                description: DistributionStatus tracks policy distribution across clusters
+                type: object
+                properties:
+                  totalClusters:
+                    type: integer
+                  successfulClusters:
+                    type: integer
+                  failedClusters:
+                    type: integer
+                  lastDistributed:
+                    type: string
+                    format: date-time
+    additionalPrinterColumns:
+    - name: Enabled
+      type: boolean
+      jsonPath: .spec.enabled
+    - name: Severity
+      type: string
+      jsonPath: .spec.severity
+    - name: Category
+      type: string
+      jsonPath: .spec.category
+    - name: Phase
+      type: string
+      jsonPath: .status.phase
+    - name: Violations
+      type: integer
+      jsonPath: .status.violationCount
+    - name: Age
+      type: date
+      jsonPath: .metadata.creationTimestamp
+

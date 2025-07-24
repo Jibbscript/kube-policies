@@ -1,0 +1,415 @@
+# Default values for kube-policies
+# This is a YAML-formatted file.
+# Declare variables to be passed into your templates.
+
+global:
+  # Global image registry
+  imageRegistry: ""
+  # Global image pull secrets
+  imagePullSecrets: []
+  # Global storage class
+  storageClass: ""
+
+# Admission Webhook Configuration
+admissionWebhook:
+  enabled: true
+  name: admission-webhook
+  replicaCount: 2
+  
+  image:
+    registry: docker.io
+    repository: kube-policies/admission-webhook
+    tag: "1.0.0"
+    pullPolicy: IfNotPresent
+  
+  service:
+    type: ClusterIP
+    port: 8443
+    targetPort: 8443
+    annotations: {}
+  
+  resources:
+    limits:
+      cpu: 500m
+      memory: 512Mi
+    requests:
+      cpu: 100m
+      memory: 128Mi
+  
+  # Pod Security Context
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 65534
+    fsGroup: 65534
+  
+  # Container Security Context
+  securityContext:
+    allowPrivilegeEscalation: false
+    capabilities:
+      drop:
+      - ALL
+    readOnlyRootFilesystem: true
+    runAsNonRoot: true
+    runAsUser: 65534
+  
+  # Node selector
+  nodeSelector: {}
+  
+  # Tolerations
+  tolerations: []
+  
+  # Affinity
+  affinity: {}
+  
+  # Pod annotations
+  podAnnotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "8443"
+    prometheus.io/path: "/metrics"
+  
+  # Webhook configuration
+  webhook:
+    failurePolicy: Fail
+    admissionReviewVersions: ["v1", "v1beta1"]
+    timeoutSeconds: 10
+    namespaceSelector: {}
+    objectSelector: {}
+  
+  # TLS configuration
+  tls:
+    # Auto-generate certificates
+    autoGenerate: true
+    # Custom certificate (if autoGenerate is false)
+    caCert: ""
+    cert: ""
+    key: ""
+
+# Policy Manager Configuration
+policyManager:
+  enabled: true
+  name: policy-manager
+  replicaCount: 1
+  
+  image:
+    registry: docker.io
+    repository: kube-policies/policy-manager
+    tag: "1.0.0"
+    pullPolicy: IfNotPresent
+  
+  service:
+    type: ClusterIP
+    port: 8080
+    targetPort: 8080
+    annotations: {}
+  
+  resources:
+    limits:
+      cpu: 500m
+      memory: 512Mi
+    requests:
+      cpu: 100m
+      memory: 128Mi
+  
+  # Pod Security Context
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 65534
+    fsGroup: 65534
+  
+  # Container Security Context
+  securityContext:
+    allowPrivilegeEscalation: false
+    capabilities:
+      drop:
+      - ALL
+    readOnlyRootFilesystem: true
+    runAsNonRoot: true
+    runAsUser: 65534
+  
+  # Node selector
+  nodeSelector: {}
+  
+  # Tolerations
+  tolerations: []
+  
+  # Affinity
+  affinity: {}
+  
+  # Pod annotations
+  podAnnotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "8080"
+    prometheus.io/path: "/metrics"
+
+# Policy Configuration
+policies:
+  # Enable default security policies
+  enableDefaults: true
+  
+  # Default policies to install
+  defaults:
+    - name: security-baseline
+      enabled: true
+    - name: resource-limits
+      enabled: true
+    - name: network-policies
+      enabled: false
+    - name: pod-security-standards
+      enabled: true
+  
+  # Custom policies
+  custom: []
+  # Example:
+  # - name: custom-policy
+  #   enabled: true
+  #   spec:
+  #     description: "Custom security policy"
+  #     rules:
+  #       - name: no-privileged-containers
+  #         severity: HIGH
+  #         rego: |
+  #           deny[msg] {
+  #             input.spec.securityContext.privileged
+  #             msg := "Privileged containers are not allowed"
+  #           }
+
+# RBAC Configuration
+rbac:
+  # Create RBAC resources
+  create: true
+  
+  # Service account configuration
+  serviceAccount:
+    # Create service account
+    create: true
+    # Service account name (auto-generated if not specified)
+    name: ""
+    # Service account annotations
+    annotations: {}
+
+# Monitoring Configuration
+monitoring:
+  # Enable monitoring stack
+  enabled: true
+  
+  # Prometheus configuration
+  prometheus:
+    enabled: true
+    # Use external Prometheus (if false, deploys Prometheus)
+    external: false
+    # External Prometheus URL (if external is true)
+    url: ""
+    
+  # Grafana configuration
+  grafana:
+    enabled: true
+    # Use external Grafana (if false, deploys Grafana)
+    external: false
+    # External Grafana URL (if external is true)
+    url: ""
+    # Admin credentials
+    adminUser: admin
+    adminPassword: admin
+    
+  # ServiceMonitor for Prometheus Operator
+  serviceMonitor:
+    enabled: false
+    namespace: ""
+    labels: {}
+    interval: 30s
+    scrapeTimeout: 10s
+
+# Alerting Configuration
+alerting:
+  enabled: true
+  
+  # Alertmanager configuration
+  alertmanager:
+    enabled: true
+    # Use external Alertmanager
+    external: false
+    # External Alertmanager URL
+    url: ""
+  
+  # Alert rules
+  rules:
+    # High latency alert
+    highLatency:
+      enabled: true
+      threshold: "0.1"
+      duration: "2m"
+    
+    # High error rate alert
+    highErrorRate:
+      enabled: true
+      threshold: "0.05"
+      duration: "2m"
+    
+    # Service down alert
+    serviceDown:
+      enabled: true
+      duration: "1m"
+    
+    # High violation rate alert
+    highViolationRate:
+      enabled: true
+      threshold: "10"
+      duration: "5m"
+
+# Audit Configuration
+audit:
+  enabled: true
+  
+  # Audit backend configuration
+  backend:
+    # Backend type: file, elasticsearch, webhook
+    type: file
+    
+    # File backend configuration
+    file:
+      path: "/var/log/audit"
+      maxSize: "100Mi"
+      maxFiles: 10
+    
+    # Elasticsearch backend configuration
+    elasticsearch:
+      url: ""
+      index: "kube-policies-audit"
+      username: ""
+      password: ""
+    
+    # Webhook backend configuration
+    webhook:
+      url: ""
+      headers: {}
+
+# Compliance Configuration
+compliance:
+  enabled: true
+  
+  # Compliance frameworks
+  frameworks:
+    cis:
+      enabled: true
+      version: "1.6"
+    nist:
+      enabled: false
+      version: "2.0"
+    pci:
+      enabled: false
+      version: "3.2"
+  
+  # Compliance reporting
+  reporting:
+    enabled: true
+    schedule: "0 2 * * *"  # Daily at 2 AM
+    retention: "90d"
+
+# Exception Management
+exceptions:
+  enabled: true
+  
+  # Exception approval workflow
+  approval:
+    enabled: true
+    # Approval timeout
+    timeout: "24h"
+    # Required approvers
+    approvers: []
+  
+  # Exception monitoring
+  monitoring:
+    enabled: true
+    # Alert on exception usage
+    alertOnUsage: true
+
+# Network Policies
+networkPolicies:
+  enabled: false
+  
+  # Ingress rules
+  ingress: []
+  
+  # Egress rules
+  egress: []
+
+# Pod Disruption Budget
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 1
+
+# Horizontal Pod Autoscaler
+autoscaling:
+  enabled: false
+  minReplicas: 2
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 80
+  targetMemoryUtilizationPercentage: 80
+
+# Ingress Configuration
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  hosts: []
+  tls: []
+
+# Persistence Configuration
+persistence:
+  enabled: true
+  storageClass: ""
+  accessMode: ReadWriteOnce
+  size: 10Gi
+  annotations: {}
+
+# Configuration for external dependencies
+prometheus:
+  enabled: false
+  # Prometheus configuration when deployed as dependency
+  server:
+    persistentVolume:
+      enabled: true
+      size: 50Gi
+    retention: "15d"
+
+grafana:
+  enabled: false
+  # Grafana configuration when deployed as dependency
+  persistence:
+    enabled: true
+    size: 10Gi
+  adminUser: admin
+  adminPassword: admin
+  
+  # Grafana datasources
+  datasources:
+    datasources.yaml:
+      apiVersion: 1
+      datasources:
+      - name: Prometheus
+        type: prometheus
+        url: http://{{ include "kube-policies.fullname" . }}-prometheus-server
+        access: proxy
+        isDefault: true
+  
+  # Grafana dashboards
+  dashboardProviders:
+    dashboardproviders.yaml:
+      apiVersion: 1
+      providers:
+      - name: 'kube-policies'
+        orgId: 1
+        folder: 'Kube-Policies'
+        type: file
+        disableDeletion: false
+        editable: true
+        options:
+          path: /var/lib/grafana/dashboards/kube-policies
+  
+  dashboards:
+    kube-policies:
+      kube-policies-overview:
+        gnetId: 12345
+        revision: 1
+        datasource: Prometheus
+

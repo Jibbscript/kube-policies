@@ -1,0 +1,112 @@
+{{- if .Values.policyManager.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "kube-policies.policyManagerName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kube-policies.labels" . | nindent 4 }}
+    app.kubernetes.io/component: policy-manager
+spec:
+  replicas: {{ .Values.policyManager.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "kube-policies.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: policy-manager
+  template:
+    metadata:
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        {{- with .Values.policyManager.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      labels:
+        {{- include "kube-policies.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: policy-manager
+    spec:
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "kube-policies.serviceAccountName" . }}
+      securityContext:
+        {{- toYaml .Values.policyManager.podSecurityContext | nindent 8 }}
+      containers:
+        - name: policy-manager
+          securityContext:
+            {{- toYaml .Values.policyManager.securityContext | nindent 12 }}
+          image: "{{ .Values.global.imageRegistry | default .Values.policyManager.image.registry }}/{{ .Values.policyManager.image.repository }}:{{ .Values.policyManager.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.policyManager.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+            - name: metrics
+              containerPort: 8081
+              protocol: TCP
+          env:
+            - name: HTTP_PORT
+              value: "8080"
+            - name: METRICS_PORT
+              value: "8081"
+            - name: LOG_LEVEL
+              value: "info"
+            - name: NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+              scheme: HTTP
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: 8080
+              scheme: HTTP
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 3
+          resources:
+            {{- toYaml .Values.policyManager.resources | nindent 12 }}
+          volumeMounts:
+            - name: config
+              mountPath: /etc/config
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+            {{- if .Values.persistence.enabled }}
+            - name: data
+              mountPath: /var/lib/kube-policies
+            {{- end }}
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "kube-policies.configMapName" . }}
+        - name: tmp
+          emptyDir: {}
+        {{- if .Values.persistence.enabled }}
+        - name: data
+          persistentVolumeClaim:
+            claimName: {{ include "kube-policies.fullname" . }}-data
+        {{- end }}
+      {{- with .Values.policyManager.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.policyManager.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.policyManager.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}
+

@@ -1,0 +1,111 @@
+{{- if .Values.admissionWebhook.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "kube-policies.fullname" . }}-admission-webhook
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kube-policies.labels" . | nindent 4 }}
+    app.kubernetes.io/component: admission-webhook
+spec:
+  replicas: {{ .Values.admissionWebhook.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "kube-policies.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: admission-webhook
+  template:
+    metadata:
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        {{- with .Values.admissionWebhook.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      labels:
+        {{- include "kube-policies.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: admission-webhook
+    spec:
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "kube-policies.serviceAccountName" . }}
+      securityContext:
+        {{- toYaml .Values.admissionWebhook.podSecurityContext | nindent 8 }}
+      containers:
+        - name: admission-webhook
+          securityContext:
+            {{- toYaml .Values.admissionWebhook.securityContext | nindent 12 }}
+          image: "{{ .Values.global.imageRegistry | default .Values.admissionWebhook.image.registry }}/{{ .Values.admissionWebhook.image.repository }}:{{ .Values.admissionWebhook.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.admissionWebhook.image.pullPolicy }}
+          ports:
+            - name: webhook
+              containerPort: 8443
+              protocol: TCP
+            - name: metrics
+              containerPort: 8080
+              protocol: TCP
+          env:
+            - name: TLS_CERT_FILE
+              value: /etc/certs/tls.crt
+            - name: TLS_PRIVATE_KEY_FILE
+              value: /etc/certs/tls.key
+            - name: WEBHOOK_PORT
+              value: "8443"
+            - name: METRICS_PORT
+              value: "8080"
+            - name: LOG_LEVEL
+              value: "info"
+            - name: POLICY_MANAGER_URL
+              value: "http://{{ include "kube-policies.fullname" . }}-policy-manager:8080"
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+              scheme: HTTP
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: 8080
+              scheme: HTTP
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 3
+          resources:
+            {{- toYaml .Values.admissionWebhook.resources | nindent 12 }}
+          volumeMounts:
+            - name: certs
+              mountPath: /etc/certs
+              readOnly: true
+            - name: config
+              mountPath: /etc/config
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: certs
+          secret:
+            secretName: {{ include "kube-policies.fullname" . }}-admission-webhook-certs
+        - name: config
+          configMap:
+            name: {{ include "kube-policies.fullname" . }}-config
+        - name: tmp
+          emptyDir: {}
+      {{- with .Values.admissionWebhook.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.admissionWebhook.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.admissionWebhook.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}
+

@@ -1,0 +1,198 @@
+apiVersion: policies.kube-policies.io/v1
+kind: Policy
+metadata:
+  name: security-baseline
+  namespace: kube-policies-system
+  labels:
+    category: security
+    severity: high
+    compliance.framework: cis
+    compliance.version: "1.6"
+spec:
+  description: "Basic security requirements for all workloads"
+  enabled: true
+  enforcement: true
+  
+  # Target resources
+  match:
+    - apiGroups: [""]
+      apiVersions: ["v1"]
+      resources: ["pods"]
+    - apiGroups: ["apps"]
+      apiVersions: ["v1"]
+      resources: ["deployments", "replicasets", "daemonsets", "statefulsets"]
+  
+  # Namespace selector
+  namespaceSelector:
+    matchExpressions:
+    - key: name
+      operator: NotIn
+      values: ["kube-system", "kube-public", "kube-node-lease"]
+  
+  # Policy rules
+  rules:
+    # No privileged containers
+    - name: no-privileged-containers
+      severity: HIGH
+      description: "Privileged containers are not allowed"
+      rego: |
+        package kube_policies.security_baseline.no_privileged_containers
+        
+        deny[msg] {
+          input.spec.securityContext.privileged == true
+          msg := "Privileged containers are not allowed"
+        }
+        
+        deny[msg] {
+          input.spec.containers[_].securityContext.privileged == true
+          msg := "Privileged containers are not allowed"
+        }
+    
+    # No root user
+    - name: no-root-user
+      severity: HIGH
+      description: "Containers must not run as root user"
+      rego: |
+        package kube_policies.security_baseline.no_root_user
+        
+        deny[msg] {
+          input.spec.securityContext.runAsUser == 0
+          msg := "Containers must not run as root user (UID 0)"
+        }
+        
+        deny[msg] {
+          input.spec.containers[_].securityContext.runAsUser == 0
+          msg := "Containers must not run as root user (UID 0)"
+        }
+    
+    # Required security context
+    - name: required-security-context
+      severity: MEDIUM
+      description: "Security context must be defined"
+      rego: |
+        package kube_policies.security_baseline.required_security_context
+        
+        deny[msg] {
+          not input.spec.securityContext
+          msg := "Pod security context must be defined"
+        }
+        
+        deny[msg] {
+          container := input.spec.containers[_]
+          not container.securityContext
+          msg := sprintf("Container '%s' must have security context defined", [container.name])
+        }
+    
+    # No host network
+    - name: no-host-network
+      severity: HIGH
+      description: "Host network access is not allowed"
+      rego: |
+        package kube_policies.security_baseline.no_host_network
+        
+        deny[msg] {
+          input.spec.hostNetwork == true
+          msg := "Host network access is not allowed"
+        }
+    
+    # No host PID
+    - name: no-host-pid
+      severity: HIGH
+      description: "Host PID namespace access is not allowed"
+      rego: |
+        package kube_policies.security_baseline.no_host_pid
+        
+        deny[msg] {
+          input.spec.hostPID == true
+          msg := "Host PID namespace access is not allowed"
+        }
+    
+    # No host IPC
+    - name: no-host-ipc
+      severity: HIGH
+      description: "Host IPC namespace access is not allowed"
+      rego: |
+        package kube_policies.security_baseline.no_host_ipc
+        
+        deny[msg] {
+          input.spec.hostIPC == true
+          msg := "Host IPC namespace access is not allowed"
+        }
+    
+    # Required resource limits
+    - name: required-resource-limits
+      severity: MEDIUM
+      description: "Resource limits must be defined"
+      rego: |
+        package kube_policies.security_baseline.required_resource_limits
+        
+        deny[msg] {
+          container := input.spec.containers[_]
+          not container.resources.limits
+          msg := sprintf("Container '%s' must have resource limits defined", [container.name])
+        }
+        
+        deny[msg] {
+          container := input.spec.containers[_]
+          not container.resources.limits.memory
+          msg := sprintf("Container '%s' must have memory limit defined", [container.name])
+        }
+        
+        deny[msg] {
+          container := input.spec.containers[_]
+          not container.resources.limits.cpu
+          msg := sprintf("Container '%s' must have CPU limit defined", [container.name])
+        }
+    
+    # No latest image tag
+    - name: no-latest-image-tag
+      severity: MEDIUM
+      description: "Images must not use 'latest' tag"
+      rego: |
+        package kube_policies.security_baseline.no_latest_image_tag
+        
+        deny[msg] {
+          container := input.spec.containers[_]
+          endswith(container.image, ":latest")
+          msg := sprintf("Container '%s' must not use 'latest' image tag", [container.name])
+        }
+        
+        deny[msg] {
+          container := input.spec.containers[_]
+          not contains(container.image, ":")
+          msg := sprintf("Container '%s' must specify explicit image tag", [container.name])
+        }
+
+  # Exception handling
+  exceptions:
+    # Allow system namespaces to be exempt
+    - name: system-namespaces
+      description: "System namespaces are exempt from security policies"
+      namespaces: ["kube-system", "kube-public", "kube-node-lease"]
+      rules: ["*"]
+    
+    # Allow specific workloads to run privileged
+    - name: privileged-workloads
+      description: "Specific workloads that require privileged access"
+      selector:
+        matchLabels:
+          security.policy/privileged: "true"
+      rules: ["no-privileged-containers"]
+      approval:
+        required: true
+        approvers: ["security-team"]
+        duration: "30d"
+
+  # Audit configuration
+  audit:
+    enabled: true
+    level: "detailed"
+    backends: ["file", "webhook"]
+    
+  # Metrics configuration
+  metrics:
+    enabled: true
+    labels:
+      policy: "security-baseline"
+      category: "security"
+

@@ -1,0 +1,34 @@
+apiVersion: v2
+name: kube-policies
+description: Enterprise-grade Kubernetes policy enforcement system providing comprehensive security guardrails, compliance monitoring, and governance
+type: application
+version: 1.0.0
+appVersion: "1.0.0"
+home: https://github.com/kube-policies/kube-policies
+sources:
+  - https://github.com/kube-policies/kube-policies
+maintainers:
+  - name: Kube-Policies Team
+    email: maintainers@kube-policies.io
+    url: https://kube-policies.io
+keywords:
+  - kubernetes
+  - security
+  - policy
+  - compliance
+  - governance
+  - admission-controller
+  - opa
+annotations:
+  category: Security
+  licenses: Apache-2.0
+dependencies:
+  - name: prometheus
+    version: "15.18.0"
+    repository: "https://prometheus-community.github.io/helm-charts"
+    condition: prometheus.enabled
+  - name: grafana
+    version: "6.44.0"
+    repository: "https://grafana.github.io/helm-charts"
+    condition: grafana.enabled
+
