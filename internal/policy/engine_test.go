@@ -12,8 +12,6 @@ import (
 func TestNewEngine(t *testing.T) {
 	config := &config.PolicyConfig{
 		FailureMode: "fail-closed",
-		CacheSize:   100,
-		Timeout:     "5s",
 	}
 	logger := zap.NewNop()
 

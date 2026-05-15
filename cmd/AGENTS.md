@@ -36,7 +36,8 @@ Entry-point packages for the two binaries produced by this repo. Each subdirecto
 - `internal/metrics` — Prometheus collector
 - `internal/policy`, `internal/admission` — admission-webhook only
 - `internal/policymanager` — policy-manager only
-- `pkg/audit`, `pkg/logger`
+- `internal/audit` — audit-webhook only
+- `pkg/logger`
 
 ### External
 - `github.com/gin-gonic/gin` — HTTP routing

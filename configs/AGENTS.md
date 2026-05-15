@@ -4,14 +4,7 @@
 # configs
 
 ## Purpose
-Container directory reserved for environment-specific YAML configurations consumed by both binaries via `--config /etc/config/config.yaml`. Schema is defined by `internal/config.Config`.
-
-## Subdirectories
-
-| Directory | Purpose |
-|-----------|---------|
-| `local/` | Reserved for developer-machine configurations (currently empty) |
-| `production/` | Reserved for production cluster configurations (currently empty) |
+Container directory for environment-specific YAML configurations consumed by both binaries via `--config /etc/config/config.yaml`. Schema is defined by `internal/config.Config`. Per-environment overlays should be added as siblings (e.g. `local.yaml`, `production.yaml`) when needed.
 
 ## For AI Agents
 

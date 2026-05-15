@@ -4,9 +4,8 @@ import (
 	"testing"
 
 	"github.com/Jibbscript/kube-policies/internal/config"
-	"github.com/Jibbscript/kube-policies/internal/metrics"
 	"github.com/Jibbscript/kube-policies/internal/policy"
-	"github.com/Jibbscript/kube-policies/pkg/audit"
+	"github.com/Jibbscript/kube-policies/internal/audit"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
@@ -16,8 +15,6 @@ func TestNewController(t *testing.T) {
 	// Create dependencies
 	policyConfig := &config.PolicyConfig{
 		FailureMode: "fail-closed",
-		CacheSize:   100,
-		Timeout:     "5s",
 	}
 	logger := zap.NewNop()
 
@@ -30,10 +27,9 @@ func TestNewController(t *testing.T) {
 	auditLogger, err := audit.NewLogger(auditConfig)
 	require.NoError(t, err)
 
-	metricsCollector := metrics.NewCollector()
-
-	// Create controller
-	controller := NewController(policyEngine, auditLogger, metricsCollector, logger)
+	// sharedMetrics is defined in controller_behavior_test.go to avoid
+	// duplicate Prometheus registration when NewCollector is called twice.
+	controller := NewController(policyEngine, auditLogger, sharedMetrics, logger)
 
 	// Verify controller was created
 	assert.NotNil(t, controller)

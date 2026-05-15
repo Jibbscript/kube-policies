@@ -18,7 +18,6 @@ The single Helm chart that installs kube-policies into a target cluster. Renders
 | Directory | Purpose |
 |-----------|---------|
 | `templates/` | Go-templated Kubernetes manifests rendered by Helm (see `templates/AGENTS.md`) |
-| `charts/` | Reserved for sub-chart dependencies (currently empty) |
 
 ## For AI Agents
 

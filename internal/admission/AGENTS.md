@@ -32,9 +32,9 @@ HTTP handlers for Kubernetes admission webhook requests. Decodes `admissionv1.Ad
 ## Dependencies
 
 ### Internal
+- `internal/audit` — `Logger`, `Context`
 - `internal/metrics` — request counter, evaluation duration histogram
-- `internal/policy` — `Engine`, `EvaluationRequest`, `EvaluationResult`
-- `pkg/audit` — `Logger`, `Context`
+- `internal/policy` — `Evaluator`, `EvaluationRequest`, `EvaluationResult`
 
 ### External
 - `github.com/gin-gonic/gin`

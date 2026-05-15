@@ -5,15 +5,31 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sync"
 	"time"
 
 	"github.com/Jibbscript/kube-policies/internal/config"
 	"github.com/Jibbscript/kube-policies/internal/policy"
+	"go.uber.org/zap"
 	authenticationv1 "k8s.io/api/authentication/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 )
+
+// Metrics is the minimal metrics surface the audit logger uses.
+// Defined here to avoid importing internal/metrics from pkg/.
+type Metrics interface {
+	IncAuditEvents(eventType, status string)
+	SetAuditBufferSize(size float64)
+}
+
+// NopMetrics is a no-op Metrics implementation suitable for tests or
+// configurations where metrics are not collected.
+type NopMetrics struct{}
+
+func (NopMetrics) IncAuditEvents(string, string) {}
+func (NopMetrics) SetAuditBufferSize(float64)    {}
 
 // Logger handles audit logging
 type Logger struct {
@@ -23,6 +39,8 @@ type Logger struct {
 	mutex   sync.RWMutex
 	ctx     context.Context
 	cancel  context.CancelFunc
+	logger  *zap.Logger
+	metrics Metrics
 }
 
 // Backend represents an audit backend
@@ -72,31 +90,66 @@ type Context struct {
 	Metadata         map[string]interface{}
 }
 
-// NewLogger creates a new audit logger
-func NewLogger(config *config.AuditConfig) (*Logger, error) {
-	if !config.Enabled {
-		return &Logger{config: config}, nil
+// NewLogger creates a new audit logger.
+// log and metrics may be nil; nil is treated as a no-op so legacy callers
+// continue to work, but new code should always pass real implementations.
+func NewLogger(cfg *config.AuditConfig, opts ...Option) (*Logger, error) {
+	o := loggerOptions{logger: zap.NewNop(), metrics: NopMetrics{}}
+	for _, apply := range opts {
+		apply(&o)
 	}
 
-	backend, err := createBackend(config)
+	if !cfg.Enabled {
+		return &Logger{config: cfg, logger: o.logger, metrics: o.metrics}, nil
+	}
+
+	backend, err := createBackend(cfg)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create audit backend: %w", err)
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 
-	logger := &Logger{
-		config:  config,
+	l := &Logger{
+		config:  cfg,
 		backend: backend,
-		buffer:  make(chan *Event, config.BufferSize),
+		buffer:  make(chan *Event, cfg.BufferSize),
 		ctx:     ctx,
 		cancel:  cancel,
+		logger:  o.logger,
+		metrics: o.metrics,
 	}
 
 	// Start background processor
-	go logger.processEvents()
+	go l.processEvents()
 
-	return logger, nil
+	return l, nil
+}
+
+// Option configures a Logger at construction time.
+type Option func(*loggerOptions)
+
+type loggerOptions struct {
+	logger  *zap.Logger
+	metrics Metrics
+}
+
+// WithLogger attaches a zap.Logger for diagnostic output.
+func WithLogger(z *zap.Logger) Option {
+	return func(o *loggerOptions) {
+		if z != nil {
+			o.logger = z
+		}
+	}
+}
+
+// WithMetrics attaches a Metrics implementation for buffer/drop telemetry.
+func WithMetrics(m Metrics) Option {
+	return func(o *loggerOptions) {
+		if m != nil {
+			o.metrics = m
+		}
+	}
 }
 
 // LogDecision logs a policy decision
@@ -125,12 +178,7 @@ func (l *Logger) LogDecision(ctx *Context) {
 		Metadata:         ctx.Metadata,
 	}
 
-	select {
-	case l.buffer <- event:
-	default:
-		// Buffer is full, drop the event (or implement overflow handling)
-		fmt.Printf("Audit buffer full, dropping event: %s\n", event.RequestID)
-	}
+	l.enqueue(event)
 }
 
 // LogConfigChange logs a configuration change
@@ -153,11 +201,7 @@ func (l *Logger) LogConfigChange(userInfo authenticationv1.UserInfo, changeType,
 		},
 	}
 
-	select {
-	case l.buffer <- event:
-	default:
-		fmt.Printf("Audit buffer full, dropping config change event\n")
-	}
+	l.enqueue(event)
 }
 
 // LogSystemEvent logs a system event
@@ -174,10 +218,20 @@ func (l *Logger) LogSystemEvent(eventType, message string, metadata map[string]i
 		Metadata:  metadata,
 	}
 
+	l.enqueue(event)
+}
+
+// enqueue offers the event to the buffer; on overflow it logs structured-warn
+// and increments the dropped-event metric so operators can alert on it.
+func (l *Logger) enqueue(event *Event) {
 	select {
 	case l.buffer <- event:
 	default:
-		fmt.Printf("Audit buffer full, dropping system event\n")
+		l.logger.Warn("audit buffer full, dropping event",
+			zap.String("event_type", event.EventType),
+			zap.String("request_id", event.RequestID),
+		)
+		l.metrics.IncAuditEvents(event.EventType, "dropped")
 	}
 }
 
@@ -208,6 +262,7 @@ func (l *Logger) processEvents() {
 			}
 
 		case <-ticker.C:
+			l.metrics.SetAuditBufferSize(float64(len(l.buffer)))
 			if len(events) > 0 {
 				l.flushEvents(events)
 				events = events[:0]
@@ -224,7 +279,14 @@ func (l *Logger) flushEvents(events []*Event) {
 
 	for _, event := range events {
 		if err := l.backend.Write(event); err != nil {
-			fmt.Printf("Failed to write audit event: %v\n", err)
+			l.logger.Error("failed to write audit event",
+				zap.String("event_type", event.EventType),
+				zap.String("request_id", event.RequestID),
+				zap.Error(err),
+			)
+			l.metrics.IncAuditEvents(event.EventType, "write_error")
+		} else {
+			l.metrics.IncAuditEvents(event.EventType, "written")
 		}
 	}
 }
@@ -251,10 +313,6 @@ func createBackend(config *config.AuditConfig) (Backend, error) {
 		return NewFileBackend(config)
 	case "stdout":
 		return NewStdoutBackend(), nil
-	case "elasticsearch":
-		return NewElasticsearchBackend(config)
-	case "webhook":
-		return NewWebhookBackend(config)
 	default:
 		return nil, fmt.Errorf("unsupported audit backend: %s", config.Backend)
 	}
@@ -272,8 +330,8 @@ func NewFileBackend(config *config.AuditConfig) (*FileBackend, error) {
 		filename = "/var/log/kube-policies/audit.log"
 	}
 
-	// Create directory if it doesn't exist
-	if err := os.MkdirAll("/var/log/kube-policies", 0755); err != nil {
+	// Create the directory of the actual filename — not a hardcoded path.
+	if err := os.MkdirAll(filepath.Dir(filename), 0755); err != nil {
 		return nil, fmt.Errorf("failed to create log directory: %w", err)
 	}
 
@@ -322,51 +380,5 @@ func (b *StdoutBackend) Write(event *Event) error {
 
 // Close closes the stdout backend
 func (b *StdoutBackend) Close() error {
-	return nil
-}
-
-// ElasticsearchBackend writes audit events to Elasticsearch
-type ElasticsearchBackend struct {
-	// Implementation would include Elasticsearch client
-}
-
-// NewElasticsearchBackend creates a new Elasticsearch backend
-func NewElasticsearchBackend(config *config.AuditConfig) (*ElasticsearchBackend, error) {
-	// Implementation would initialize Elasticsearch client
-	return &ElasticsearchBackend{}, nil
-}
-
-// Write writes an audit event to Elasticsearch
-func (b *ElasticsearchBackend) Write(event *Event) error {
-	// Implementation would write to Elasticsearch
-	return nil
-}
-
-// Close closes the Elasticsearch backend
-func (b *ElasticsearchBackend) Close() error {
-	// Implementation would close Elasticsearch client
-	return nil
-}
-
-// WebhookBackend sends audit events to a webhook
-type WebhookBackend struct {
-	// Implementation would include HTTP client and webhook URL
-}
-
-// NewWebhookBackend creates a new webhook backend
-func NewWebhookBackend(config *config.AuditConfig) (*WebhookBackend, error) {
-	// Implementation would initialize HTTP client
-	return &WebhookBackend{}, nil
-}
-
-// Write sends an audit event to the webhook
-func (b *WebhookBackend) Write(event *Event) error {
-	// Implementation would send HTTP POST to webhook
-	return nil
-}
-
-// Close closes the webhook backend
-func (b *WebhookBackend) Close() error {
-	// Implementation would cleanup HTTP client
 	return nil
 }

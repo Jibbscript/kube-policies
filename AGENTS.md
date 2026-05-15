@@ -26,8 +26,8 @@ Enterprise-grade Kubernetes policy enforcement system. Provides real-time admiss
 | Directory | Purpose |
 |-----------|---------|
 | `cmd/` | Service entry points: `admission-webhook` and `policy-manager` (see `cmd/AGENTS.md`) |
-| `internal/` | Private application packages: admission, config, metrics, policy, policymanager (see `internal/AGENTS.md`) |
-| `pkg/` | Public packages safe for import: audit, logger (see `pkg/AGENTS.md`) |
+| `internal/` | Private application packages: admission, audit, config, metrics, policy, policymanager (see `internal/AGENTS.md`) |
+| `pkg/` | Public packages safe for import: logger (see `pkg/AGENTS.md`) |
 | `charts/` | Helm chart for deploying both services (see `charts/AGENTS.md`) |
 | `deployments/` | Raw Kubernetes manifests, CRDs, and monitoring stack (see `deployments/AGENTS.md`) |
 | `monitoring/` | Prometheus, Grafana dashboards, Alertmanager configs (see `monitoring/AGENTS.md`) |
@@ -36,10 +36,6 @@ Enterprise-grade Kubernetes policy enforcement system. Provides real-time admiss
 | `configs/` | Environment-specific runtime configs (see `configs/AGENTS.md`) |
 | `scripts/` | Test orchestration shell scripts (see `scripts/AGENTS.md`) |
 | `test/` | Integration, e2e, and shared test infrastructure (see `test/AGENTS.md`) |
-| `hack/` | Reserved for development helper scripts (see `hack/AGENTS.md`) |
-| `api/` | Reserved for generated API types (currently empty) |
-| `docs/` | Reserved for documentation (currently empty) |
-| `tests/` | Reserved for additional test data (currently empty) |
 | `.github/` | GitHub Actions workflows (`ci.yml`, `release.yml`) |
 
 ## For AI Agents

@@ -11,8 +11,6 @@ Raw deployment manifests as an alternative to the Helm chart. Includes Kubernete
 | Directory | Purpose |
 |-----------|---------|
 | `kubernetes/` | Kubernetes manifests: CRDs, base deployments, monitoring (see `kubernetes/AGENTS.md`) |
-| `docker-compose/` | Reserved for local Docker Compose stack (currently empty) |
-| `helm/` | Reserved for packaged Helm artifacts (currently empty; the chart source lives under `charts/`) |
 
 ## For AI Agents
 

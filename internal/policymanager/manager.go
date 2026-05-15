@@ -301,38 +301,10 @@ func (m *Manager) DeletePolicy(c *gin.Context) {
 	c.JSON(http.StatusNoContent, nil)
 }
 
-// TestPolicy handles POST /api/v1/policies/:id/test
+// TestPolicy handles POST /api/v1/policies/:id/test.
+// Stub: real evaluation against the policy engine is not yet implemented.
 func (m *Manager) TestPolicy(c *gin.Context) {
-	id := c.Param("id")
-
-	var testRequest struct {
-		Input map[string]interface{} `json:"input"`
-	}
-
-	if err := c.ShouldBindJSON(&testRequest); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
-	}
-
-	m.mutex.RLock()
-	policy, exists := m.policies[id]
-	m.mutex.RUnlock()
-
-	if !exists {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Policy not found"})
-		return
-	}
-
-	// Implement policy testing logic
-	result := map[string]interface{}{
-		"policy_id":   id,
-		"policy_name": policy.Name,
-		"result":      "passed",
-		"message":     "Policy test completed successfully",
-		"details":     testRequest.Input,
-	}
-
-	c.JSON(http.StatusOK, result)
+	c.JSON(http.StatusNotImplemented, gin.H{"error": "policy testing is not yet implemented"})
 }
 
 // ValidatePolicy handles POST /api/v1/policies/validate
@@ -357,58 +329,16 @@ func (m *Manager) ValidatePolicy(c *gin.Context) {
 	})
 }
 
-// DeployPolicy handles POST /api/v1/policies/:id/deploy
+// DeployPolicy handles POST /api/v1/policies/:id/deploy.
+// Stub: cluster deployment is not yet implemented.
 func (m *Manager) DeployPolicy(c *gin.Context) {
-	id := c.Param("id")
-
-	m.mutex.RLock()
-	policy, exists := m.policies[id]
-	m.mutex.RUnlock()
-
-	if !exists {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Policy not found"})
-		return
-	}
-
-	// Implement policy deployment logic
-	deploymentResult := map[string]interface{}{
-		"policy_id":       id,
-		"status":          "deployed",
-		"deployed_at":     time.Now(),
-		"target_clusters": []string{"production"},
-	}
-
-	m.logger.Info("Policy deployed",
-		zap.String("policy_id", id),
-		zap.String("policy_name", policy.Name),
-	)
-
-	c.JSON(http.StatusOK, deploymentResult)
+	c.JSON(http.StatusNotImplemented, gin.H{"error": "policy deployment is not yet implemented"})
 }
 
-// GetPolicyStatus handles GET /api/v1/policies/:id/status
+// GetPolicyStatus handles GET /api/v1/policies/:id/status.
+// Stub: live status (last evaluated, evaluation count, violation count) is not yet wired to runtime telemetry.
 func (m *Manager) GetPolicyStatus(c *gin.Context) {
-	id := c.Param("id")
-
-	m.mutex.RLock()
-	policy, exists := m.policies[id]
-	m.mutex.RUnlock()
-
-	if !exists {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Policy not found"})
-		return
-	}
-
-	status := map[string]interface{}{
-		"policy_id":        id,
-		"status":           "active",
-		"enabled":          policy.Enabled,
-		"last_evaluated":   time.Now().Add(-5 * time.Minute),
-		"evaluation_count": 1234,
-		"violation_count":  5,
-	}
-
-	c.JSON(http.StatusOK, status)
+	c.JSON(http.StatusNotImplemented, gin.H{"error": "policy status reporting is not yet implemented"})
 }
 
 // Bundle management handlers
@@ -556,81 +486,22 @@ func (m *Manager) DeleteException(c *gin.Context) {
 
 // Compliance reporting handlers
 
-// ListComplianceReports handles GET /api/v1/compliance/reports
+// ListComplianceReports handles GET /api/v1/compliance/reports.
+// Stub: report generation and storage are not yet implemented.
 func (m *Manager) ListComplianceReports(c *gin.Context) {
-	// Mock compliance reports
-	reports := []ComplianceReport{
-		{
-			ID:        "report-1",
-			Framework: "CIS",
-			Period:    "2025-01",
-			Status:    "completed",
-			Summary: ComplianceSummary{
-				TotalChecks:    100,
-				PassedChecks:   85,
-				FailedChecks:   15,
-				ComplianceRate: 85.0,
-			},
-			GeneratedAt: time.Now(),
-		},
-	}
-
-	c.JSON(http.StatusOK, gin.H{
-		"reports": reports,
-		"total":   len(reports),
-	})
+	c.JSON(http.StatusNotImplemented, gin.H{"error": "compliance reporting is not yet implemented"})
 }
 
-// GenerateComplianceReport handles POST /api/v1/compliance/reports
+// GenerateComplianceReport handles POST /api/v1/compliance/reports.
+// Stub: report generation is not yet implemented.
 func (m *Manager) GenerateComplianceReport(c *gin.Context) {
-	var request struct {
-		Framework string `json:"framework"`
-		Period    string `json:"period"`
-	}
-
-	if err := c.ShouldBindJSON(&request); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
-	}
-
-	report := ComplianceReport{
-		ID:          uuid.New().String(),
-		Framework:   request.Framework,
-		Period:      request.Period,
-		Status:      "generating",
-		GeneratedAt: time.Now(),
-	}
-
-	c.JSON(http.StatusAccepted, report)
+	c.JSON(http.StatusNotImplemented, gin.H{"error": "compliance reporting is not yet implemented"})
 }
 
-// ListComplianceFrameworks handles GET /api/v1/compliance/frameworks
+// ListComplianceFrameworks handles GET /api/v1/compliance/frameworks.
+// Stub: framework catalog is not yet sourced from configuration or a registry.
 func (m *Manager) ListComplianceFrameworks(c *gin.Context) {
-	frameworks := []map[string]interface{}{
-		{
-			"id":          "cis",
-			"name":        "CIS Kubernetes Benchmark",
-			"version":     "1.8.0",
-			"description": "Center for Internet Security Kubernetes Benchmark",
-		},
-		{
-			"id":          "nist",
-			"name":        "NIST Cybersecurity Framework",
-			"version":     "2.0",
-			"description": "NIST Cybersecurity Framework 2.0",
-		},
-		{
-			"id":          "pci",
-			"name":        "PCI DSS",
-			"version":     "4.0",
-			"description": "Payment Card Industry Data Security Standard",
-		},
-	}
-
-	c.JSON(http.StatusOK, gin.H{
-		"frameworks": frameworks,
-		"total":      len(frameworks),
-	})
+	c.JSON(http.StatusNotImplemented, gin.H{"error": "compliance framework catalog is not yet implemented"})
 }
 
 // validatePolicy validates a policy configuration

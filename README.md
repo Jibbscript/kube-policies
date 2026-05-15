@@ -7,22 +7,22 @@ Enterprise-grade Kubernetes policy enforcement system providing comprehensive se
 [![Kubernetes](https://img.shields.io/badge/Kubernetes-1.20%2B-blue.svg)](https://kubernetes.io/)
 [![Helm](https://img.shields.io/badge/Helm-3.8%2B-blue.svg)](https://helm.sh/)
 
-## 🎯 Overview
+## Overview
 
 Kube-Policies is a comprehensive policy enforcement platform designed to address the critical security and compliance challenges faced by enterprise organizations operating in cloud-native environments. Built on the foundation of [Block's pioneering implementation](https://developer.squareup.com/blog/kube-policies-guardrails-for-apps-running-in-kubernetes/), this solution extends and enhances the original concept to create a production-ready, enterprise-grade system.
 
 ### Key Features
 
-- **🛡️ Real-time Policy Enforcement**: Sub-millisecond policy evaluation with OPA-based engine
-- **🏢 Enterprise Security**: Comprehensive security controls with CIS, NIST, and custom compliance frameworks
-- **🔄 Multi-Tenant Architecture**: Hierarchical policy inheritance with tenant-specific customizations
-- **📊 Advanced Monitoring**: Prometheus metrics, Grafana dashboards, and comprehensive audit logging
-- **⚡ High Performance**: Intelligent caching and horizontal scaling for enterprise workloads
-- **🔐 Zero Trust Security**: mTLS communication, encryption at rest/transit, and minimal privilege access
-- **📋 Exception Management**: Structured exception handling with approval workflows
-- **🎛️ Policy as Code**: GitOps-enabled policy management with version control
+- **Real-time Policy Enforcement**: Sub-millisecond policy evaluation with OPA-based engine
+- **Enterprise Security**: Comprehensive security controls with CIS, NIST, and custom compliance frameworks
+- **Multi-Tenant Architecture**: Hierarchical policy inheritance with tenant-specific customizations
+- **Advanced Monitoring**: Prometheus metrics, Grafana dashboards, and comprehensive audit logging
+- **High Performance**: Intelligent caching and horizontal scaling for enterprise workloads
+- **Zero Trust Security**: mTLS communication, encryption at rest/transit, and minimal privilege access
+- **Exception Management**: Structured exception handling with approval workflows
+- **Policy as Code**: GitOps-enabled policy management with version control
 
-## 🚀 Quick Start
+## Quick Start
 
 ### Prerequisites
 
@@ -61,7 +61,7 @@ kubectl get mutatingadmissionwebhooks
 kubectl apply -f examples/policies/security-baseline.yaml
 ```
 
-## 📁 Repository Structure
+## Repository Structure
 
 ```
 kube-policies/
@@ -104,7 +104,7 @@ kube-policies/
 └── README.md                      # This file
 ```
 
-## 🏗️ Architecture
+## Architecture
 
 ### System Components
 
@@ -122,7 +122,7 @@ kube-policies/
 - **Exception Management Subsystem**: Structured exception handling with approval workflows
 - **Observability Subsystem**: Comprehensive monitoring, metrics, and alerting
 
-## 📊 Monitoring & Observability
+## Monitoring & Observability
 
 ### Grafana Dashboards
 
@@ -146,7 +146,7 @@ kube-policies/
 - Policy violation rate monitoring
 - Resource usage alerts
 
-## 🔧 Configuration
+## Configuration
 
 ### Basic Policy Example
 
@@ -185,7 +185,7 @@ spec:
     approvers: ["security-team"]
 ```
 
-## 🛠️ Development
+## Development
 
 ### Building from Source
 
@@ -220,7 +220,7 @@ make run-webhook
 make run-policy-manager
 ```
 
-## 📚 Documentation
+## Documentation
 
 - [Deployment Guide](DEPLOYMENT.md) - Comprehensive deployment instructions
 - [Architecture Documentation](docs/architecture.md) - Detailed system architecture
@@ -228,7 +228,7 @@ make run-policy-manager
 - [API Reference](docs/api-reference.md) - Complete API documentation
 - [Troubleshooting Guide](docs/troubleshooting.md) - Common issues and solutions
 
-## 🤝 Contributing
+## Contributing
 
 We welcome contributions! Please see our [Contributing Guide](CONTRIBUTING.md) for details on:
 
@@ -246,25 +246,25 @@ We welcome contributions! Please see our [Contributing Guide](CONTRIBUTING.md) f
 4. Add tests and documentation
 5. Submit a pull request
 
-## 📄 License
+## License
 
 This project is licensed under the Apache License 2.0 - see the [LICENSE](LICENSE) file for details.
 
-## 🆘 Support
+## Support
 
 - **Documentation**: [https://docs.kube-policies.io](https://docs.kube-policies.io)
 - **GitHub Issues**: [https://github.com/kube-policies/kube-policies/issues](https://github.com/kube-policies/kube-policies/issues)
 - **Community Slack**: [https://slack.kube-policies.io](https://slack.kube-policies.io)
 - **Email Support**: [support@kube-policies.io](mailto:support@kube-policies.io)
 
-## 🌟 Acknowledgments
+## Acknowledgments
 
 - Inspired by [Block's Kube-Policies implementation](https://developer.squareup.com/blog/kube-policies-guardrails-for-apps-running-in-kubernetes/)
 - Built on [Open Policy Agent (OPA)](https://www.openpolicyagent.org/)
 - Kubernetes community for admission controller patterns
 - CNCF projects for cloud-native best practices
 
-## 🔗 Related Projects
+## Related Projects
 
 - [Open Policy Agent](https://github.com/open-policy-agent/opa)
 - [Gatekeeper](https://github.com/open-policy-agent/gatekeeper)

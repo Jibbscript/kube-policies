@@ -31,10 +31,10 @@
 
 ### Internal
 - `internal/admission` — handler implementation
+- `internal/audit` — audit logger
 - `internal/config` — config loader
 - `internal/metrics` — Prometheus collector
 - `internal/policy` — engine
-- `pkg/audit` — audit logger
 - `pkg/logger` — zap logger factory
 
 ### External

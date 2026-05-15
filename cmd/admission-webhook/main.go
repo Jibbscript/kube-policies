@@ -15,7 +15,7 @@ import (
 	"github.com/Jibbscript/kube-policies/internal/config"
 	"github.com/Jibbscript/kube-policies/internal/metrics"
 	"github.com/Jibbscript/kube-policies/internal/policy"
-	"github.com/Jibbscript/kube-policies/pkg/audit"
+	"github.com/Jibbscript/kube-policies/internal/audit"
 	"github.com/Jibbscript/kube-policies/pkg/logger"
 	"github.com/gin-gonic/gin"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -28,6 +28,10 @@ var (
 	port        = flag.Int("port", 8443, "Webhook server port")
 	metricsPort = flag.Int("metrics-port", 9090, "Metrics server port")
 	configPath  = flag.String("config", "/etc/config/config.yaml", "Path to configuration file")
+
+	version = "dev"
+	commit  = "unknown"
+	date    = "unknown"
 )
 
 func main() {
@@ -36,6 +40,12 @@ func main() {
 	// Initialize logger
 	log := logger.NewLogger("admission-webhook", "info")
 	defer log.Sync()
+
+	log.Info("admission-webhook starting",
+		zap.String("version", version),
+		zap.String("commit", commit),
+		zap.String("date", date),
+	)
 
 	// Load configuration
 	cfg, err := config.LoadConfig(*configPath)
@@ -47,7 +57,10 @@ func main() {
 	metricsCollector := metrics.NewCollector()
 
 	// Initialize audit logger
-	auditLogger, err := audit.NewLogger(&cfg.Audit)
+	auditLogger, err := audit.NewLogger(&cfg.Audit,
+		audit.WithLogger(log),
+		audit.WithMetrics(metricsCollector),
+	)
 	if err != nil {
 		log.Fatal("Failed to initialize audit logger", zap.Error(err))
 	}
@@ -65,7 +78,7 @@ func main() {
 	webhookServer := setupWebhookServer(admissionController, log)
 
 	// Setup metrics server
-	metricsServer := setupMetricsServer(metricsCollector)
+	metricsServer := setupMetricsServer()
 
 	// Start servers
 	go func() {
@@ -141,7 +154,7 @@ func setupWebhookServer(controller *admission.Controller, log *zap.Logger) *http
 	return server
 }
 
-func setupMetricsServer(collector *metrics.Collector) *http.Server {
+func setupMetricsServer() *http.Server {
 	mux := http.NewServeMux()
 	mux.Handle("/metrics", promhttp.Handler())
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {

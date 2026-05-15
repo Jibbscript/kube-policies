@@ -12,10 +12,6 @@ Cross-cutting test code that does not naturally live alongside the package under
 |-----------|---------|
 | `integration/` | Integration tests for admission webhook and policy manager against envtest (see `integration/AGENTS.md`) |
 | `e2e/` | End-to-end tests + Ginkgo framework helpers (see `e2e/AGENTS.md`) |
-| `fixtures/` | Reserved for shared test fixtures (currently empty) |
-| `mocks/` | Reserved for generated/handwritten mocks (currently empty) |
-| `testdata/` | Reserved for binary test inputs (currently empty) |
-| `unit/` | Reserved for additional unit tests outside source-tree packages (currently empty) |
 
 ## For AI Agents
 

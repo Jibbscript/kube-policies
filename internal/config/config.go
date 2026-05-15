@@ -28,13 +28,7 @@ type ServerConfig struct {
 
 // PolicyConfig represents policy engine configuration
 type PolicyConfig struct {
-	BundleURL       string            `mapstructure:"bundle_url"`
-	RefreshInterval string            `mapstructure:"refresh_interval"`
-	CacheSize       int               `mapstructure:"cache_size"`
-	Timeout         string            `mapstructure:"timeout"`
-	FailureMode     string            `mapstructure:"failure_mode"` // "fail-open" or "fail-closed"
-	DefaultPolicies []string          `mapstructure:"default_policies"`
-	Frameworks      map[string]string `mapstructure:"frameworks"`
+	FailureMode string `mapstructure:"failure_mode"` // "fail-open" or "fail-closed"
 }
 
 // AuditConfig represents audit logging configuration
@@ -158,9 +152,6 @@ func setDefaults() {
 	viper.SetDefault("server.tls_key_path", "/etc/certs/tls.key")
 
 	// Policy defaults
-	viper.SetDefault("policy.refresh_interval", "30s")
-	viper.SetDefault("policy.cache_size", 1000)
-	viper.SetDefault("policy.timeout", "5s")
 	viper.SetDefault("policy.failure_mode", "fail-closed")
 
 	// Audit defaults
@@ -206,7 +197,7 @@ func validateConfig(config *Config) error {
 
 	// Validate audit configuration
 	if config.Audit.Enabled {
-		validBackends := []string{"file", "elasticsearch", "webhook", "stdout"}
+		validBackends := []string{"file", "stdout"}
 		valid := false
 		for _, backend := range validBackends {
 			if config.Audit.Backend == backend {
@@ -215,7 +206,7 @@ func validateConfig(config *Config) error {
 			}
 		}
 		if !valid {
-			return fmt.Errorf("invalid audit backend: %s", config.Audit.Backend)
+			return fmt.Errorf("invalid audit backend: %s (supported: file, stdout)", config.Audit.Backend)
 		}
 	}
 
@@ -235,55 +226,3 @@ func validateConfig(config *Config) error {
 	return nil
 }
 
-// GetDefaultConfig returns a default configuration
-func GetDefaultConfig() *Config {
-	return &Config{
-		Server: ServerConfig{
-			Port:        8443,
-			MetricsPort: 9090,
-			LogLevel:    "info",
-			TLSCertPath: "/etc/certs/tls.crt",
-			TLSKeyPath:  "/etc/certs/tls.key",
-		},
-		Policy: PolicyConfig{
-			RefreshInterval: "30s",
-			CacheSize:       1000,
-			Timeout:         "5s",
-			FailureMode:     "fail-closed",
-		},
-		Audit: AuditConfig{
-			Enabled:       true,
-			Backend:       "file",
-			BufferSize:    1000,
-			FlushInterval: "10s",
-			Retention:     "90d",
-		},
-		Metrics: MetricsConfig{
-			Enabled:   true,
-			Namespace: "kube_policies",
-			Subsystem: "admission",
-		},
-		Security: SecurityConfig{
-			TLS: TLSConfig{
-				MinVersion: "1.3",
-				ClientAuth: "require",
-			},
-			RBAC: RBACConfig{
-				Enabled: true,
-			},
-			Encryption: EncryptionConfig{
-				AtRest: EncryptionAtRestConfig{
-					Enabled:   true,
-					Algorithm: "AES-256-GCM",
-				},
-				InTransit: EncryptionInTransitConfig{
-					Enabled: true,
-					Mode:    "strict",
-				},
-			},
-		},
-		Storage: StorageConfig{
-			Type: "memory",
-		},
-	}
-}

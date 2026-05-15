@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -15,13 +16,20 @@ import (
 	admissionv1 "k8s.io/api/admission/v1"
 )
 
+// Evaluator is the minimal interface the admission controller depends on.
+// Allows test doubles without coupling to the OPA-backed Engine.
+type Evaluator interface {
+	Evaluate(ctx context.Context, req *EvaluationRequest) (*EvaluationResult, error)
+}
+
 // Engine represents the policy evaluation engine
 type Engine struct {
-	store    storage.Store
-	policies map[string]*Policy
-	mutex    sync.RWMutex
-	logger   *zap.Logger
-	config   *config.PolicyConfig
+	store           storage.Store
+	policies        map[string]*Policy
+	preparedQueries sync.Map // map[policyID+"/"+ruleID]rego.PreparedEvalQuery
+	mutex           sync.RWMutex
+	logger          *zap.Logger
+	config          *config.PolicyConfig
 }
 
 // Policy represents a security policy
@@ -208,20 +216,14 @@ func (e *Engine) evaluatePolicy(ctx context.Context, policy *Policy, input map[s
 
 // evaluateRule evaluates a single rule using OPA
 func (e *Engine) evaluateRule(ctx context.Context, policy *Policy, rule *Rule, input map[string]interface{}) (*EvaluationResult, error) {
-	// Create Rego query
-	query, err := rego.New(
-		rego.Query("data.kube_policies.evaluate"),
-		rego.Module(fmt.Sprintf("%s_%s", policy.ID, rule.ID), rule.Rego),
-		rego.Store(e.store),
-		rego.Input(input),
-	).PrepareForEval(ctx)
-
+	query, err := e.preparedQueryFor(ctx, policy, rule)
 	if err != nil {
 		return nil, fmt.Errorf("failed to prepare rego query: %w", err)
 	}
 
-	// Evaluate the rule
-	results, err := query.Eval(ctx)
+	// Evaluate with per-request input. The prepared query is cached and reused
+	// across requests so compilation cost is paid once per (policyID, ruleID).
+	results, err := query.Eval(ctx, rego.EvalInput(input))
 	if err != nil {
 		return nil, fmt.Errorf("failed to evaluate rego query: %w", err)
 	}
@@ -336,7 +338,11 @@ func (e *Engine) buildViolationMessage(violations []PolicyViolation) string {
 	return fmt.Sprintf("Multiple policy violations detected (%d violations)", len(violations))
 }
 
-// loadDefaultPolicies loads default security policies
+// loadDefaultPolicies loads default security policies.
+//
+// The Go literal below is the canonical source of the bundled defaults;
+// the YAML samples under examples/policies/ are illustrative for users
+// authoring their own policies and are NOT loaded automatically.
 func (e *Engine) loadDefaultPolicies() error {
 	// Load default policies from configuration or embedded policies
 	defaultPolicies := []*Policy{
@@ -386,12 +392,15 @@ evaluate = result {
 	return nil
 }
 
-// LoadPolicy loads a policy into the engine
+// LoadPolicy loads a policy into the engine. Any cached prepared queries for
+// rules belonging to this policy ID are invalidated so subsequent evaluations
+// recompile from the (possibly updated) rule bodies.
 func (e *Engine) LoadPolicy(policy *Policy) error {
 	e.mutex.Lock()
 	defer e.mutex.Unlock()
 
 	e.policies[policy.ID] = policy
+	e.evictPreparedLocked(policy.ID)
 	e.logger.Info("Policy loaded",
 		zap.String("policy_id", policy.ID),
 		zap.String("policy_name", policy.Name),
@@ -400,17 +409,52 @@ func (e *Engine) LoadPolicy(policy *Policy) error {
 	return nil
 }
 
-// RemovePolicy removes a policy from the engine
+// RemovePolicy removes a policy from the engine and evicts any cached
+// prepared queries for it.
 func (e *Engine) RemovePolicy(policyID string) error {
 	e.mutex.Lock()
 	defer e.mutex.Unlock()
 
 	delete(e.policies, policyID)
+	e.evictPreparedLocked(policyID)
 	e.logger.Info("Policy removed",
 		zap.String("policy_id", policyID),
 	)
 
 	return nil
+}
+
+// preparedQueryFor returns a cached PreparedEvalQuery for (policy, rule),
+// compiling and storing one on first use. Concurrent callers may race to
+// compile the same key; that is acceptable — last writer wins and both
+// queries are functionally equivalent.
+func (e *Engine) preparedQueryFor(ctx context.Context, policy *Policy, rule *Rule) (rego.PreparedEvalQuery, error) {
+	key := policy.ID + "/" + rule.ID
+	if v, ok := e.preparedQueries.Load(key); ok {
+		return v.(rego.PreparedEvalQuery), nil
+	}
+	q, err := rego.New(
+		rego.Query("data.kube_policies.evaluate"),
+		rego.Module(fmt.Sprintf("%s_%s", policy.ID, rule.ID), rule.Rego),
+		rego.Store(e.store),
+	).PrepareForEval(ctx)
+	if err != nil {
+		return rego.PreparedEvalQuery{}, err
+	}
+	e.preparedQueries.Store(key, q)
+	return q, nil
+}
+
+// evictPreparedLocked removes all cached queries for a given policy ID.
+// Caller must hold e.mutex (write).
+func (e *Engine) evictPreparedLocked(policyID string) {
+	prefix := policyID + "/"
+	e.preparedQueries.Range(func(k, _ any) bool {
+		if s, ok := k.(string); ok && strings.HasPrefix(s, prefix) {
+			e.preparedQueries.Delete(k)
+		}
+		return true
+	})
 }
 
 // ListPolicies returns all loaded policies

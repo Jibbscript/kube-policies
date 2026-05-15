@@ -9,7 +9,7 @@ import (
 
 	"github.com/Jibbscript/kube-policies/internal/metrics"
 	"github.com/Jibbscript/kube-policies/internal/policy"
-	"github.com/Jibbscript/kube-policies/pkg/audit"
+	"github.com/Jibbscript/kube-policies/internal/audit"
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
 	admissionv1 "k8s.io/api/admission/v1"
@@ -18,15 +18,16 @@ import (
 
 // Controller handles admission webhook requests
 type Controller struct {
-	policyEngine *policy.Engine
+	policyEngine policy.Evaluator
 	auditLogger  *audit.Logger
 	metrics      *metrics.Collector
 	logger       *zap.Logger
 }
 
-// NewController creates a new admission controller
+// NewController creates a new admission controller.
+// policyEngine is accepted as a policy.Evaluator interface to enable test doubles.
 func NewController(
-	policyEngine *policy.Engine,
+	policyEngine policy.Evaluator,
 	auditLogger *audit.Logger,
 	metrics *metrics.Collector,
 	logger *zap.Logger,

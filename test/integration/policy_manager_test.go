@@ -177,7 +177,7 @@ func (suite *PolicyManagerIntegrationTestSuite) TestPolicyManager_UpdatePolicy()
 	rules := createdPolicy.Object["spec"].(map[string]interface{})["rules"].([]interface{})
 	rules[0].(map[string]interface{})["severity"] = "HIGH"
 
-	updatedPolicy, err := suite.dynamicClient.Resource(policyGVR).Namespace("kube-policies-system").Update(
+	_, err = suite.dynamicClient.Resource(policyGVR).Namespace("kube-policies-system").Update(
 		suite.ctx, createdPolicy, metav1.UpdateOptions{})
 	require.NoError(suite.T(), err)
 

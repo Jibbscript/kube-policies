@@ -23,6 +23,10 @@ var (
 	port        = flag.Int("port", 8080, "Policy manager server port")
 	metricsPort = flag.Int("metrics-port", 9091, "Metrics server port")
 	configPath  = flag.String("config", "/etc/config/config.yaml", "Path to configuration file")
+
+	version = "dev"
+	commit  = "unknown"
+	date    = "unknown"
 )
 
 func main() {
@@ -32,14 +36,20 @@ func main() {
 	log := logger.NewLogger("policy-manager", "info")
 	defer log.Sync()
 
+	log.Info("policy-manager starting",
+		zap.String("version", version),
+		zap.String("commit", commit),
+		zap.String("date", date),
+	)
+
 	// Load configuration
 	cfg, err := config.LoadConfig(*configPath)
 	if err != nil {
 		log.Fatal("Failed to load configuration", zap.Error(err))
 	}
 
-	// Initialize metrics
-	metricsCollector := metrics.NewCollector()
+	// Initialize metrics (registers collectors against the global Prometheus registry).
+	_ = metrics.NewCollector()
 
 	// Initialize policy manager
 	policyManager, err := policymanager.NewManager(cfg, log)
@@ -51,7 +61,7 @@ func main() {
 	apiServer := setupAPIServer(policyManager, log)
 
 	// Setup metrics server
-	metricsServer := setupMetricsServer(metricsCollector)
+	metricsServer := setupMetricsServer()
 
 	// Start servers
 	go func() {
@@ -103,19 +113,11 @@ func setupAPIServer(manager *policymanager.Manager, log *zap.Logger) *http.Serve
 	router := gin.New()
 	router.Use(gin.Recovery())
 
-	// Enable CORS for all origins
-	router.Use(func(c *gin.Context) {
-		c.Header("Access-Control-Allow-Origin", "*")
-		c.Header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-		c.Header("Access-Control-Allow-Headers", "Content-Type, Authorization")
-
-		if c.Request.Method == "OPTIONS" {
-			c.AbortWithStatus(http.StatusNoContent)
-			return
-		}
-
-		c.Next()
-	})
+	// CORS is intentionally not configured here. The policy-manager API is
+	// expected to be exposed behind an ingress, gateway, or service mesh
+	// where CORS, authentication, and TLS termination are configured by
+	// operators per environment. A wildcard `*` middleware in this binary
+	// would defeat that boundary.
 
 	// Health check endpoints
 	router.GET("/healthz", func(c *gin.Context) {
@@ -172,7 +174,7 @@ func setupAPIServer(manager *policymanager.Manager, log *zap.Logger) *http.Serve
 	return server
 }
 
-func setupMetricsServer(collector *metrics.Collector) *http.Server {
+func setupMetricsServer() *http.Server {
 	mux := http.NewServeMux()
 	mux.Handle("/metrics", promhttp.Handler())
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {

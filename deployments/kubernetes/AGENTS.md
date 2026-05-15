@@ -13,8 +13,6 @@ Plain Kubernetes manifests applied directly with `kubectl` as an alternative to 
 | `crds/` | Custom Resource Definitions for `policies.kube-policies.io` (see `crds/AGENTS.md`) |
 | `base/` | Baseline workload manifests, e.g. admission webhook deployment (see `base/AGENTS.md`) |
 | `monitoring/` | Prometheus, Grafana, and Alertmanager Deployments/Services (see `monitoring/AGENTS.md`) |
-| `production/` | Reserved for production-only overlays (currently empty) |
-| `rbac/` | Reserved for standalone RBAC manifests (currently empty; the chart bundles its own) |
 
 ## For AI Agents
 

@@ -1,5 +1,5 @@
 # Build stage
-FROM golang:1.21-alpine AS builder
+FROM golang:1.25-alpine AS builder
 
 # Install build dependencies
 RUN apk add --no-cache git ca-certificates tzdata
@@ -19,11 +19,11 @@ COPY . .
 # Build arguments
 ARG VERSION=dev
 ARG COMMIT=unknown
-ARG BUILD_DATE=unknown
+ARG DATE=unknown
 
 # Build the binary
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
-    -ldflags="-w -s -X main.version=${VERSION} -X main.commit=${COMMIT} -X main.buildDate=${BUILD_DATE}" \
+    -ldflags="-w -s -X main.version=${VERSION} -X main.commit=${COMMIT} -X main.date=${DATE}" \
     -a -installsuffix cgo \
     -o admission-webhook \
     ./cmd/admission-webhook

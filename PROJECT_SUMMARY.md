@@ -27,8 +27,8 @@ This repository contains a comprehensive, production-ready implementation of **K
    - GitOps-enabled policy deployment
 
 3. **Audit and Compliance Subsystem**
-   - Comprehensive audit logging (`pkg/audit/`)
-   - Multiple backend support (file, Elasticsearch, webhook)
+   - Comprehensive audit logging (`internal/audit/`)
+   - Pluggable backend support (file, stdout)
    - Tamper-evident audit trails
    - Compliance reporting for CIS, NIST, PCI DSS
 
@@ -269,6 +269,4 @@ This project is licensed under the Apache License 2.0 - see the [LICENSE](LICENS
 ---
 
 **Kube-Policies** - Securing Kubernetes at Enterprise Scale
-
-*Built with ❤️ by the Enterprise Security Team*
 

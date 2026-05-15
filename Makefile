@@ -9,7 +9,7 @@ COMMIT := $(shell git rev-parse HEAD)
 DATE := $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
 
 # Go configuration
-GO_VERSION := 1.21
+GO_VERSION := 1.25
 GOOS ?= $(shell go env GOOS)
 GOARCH ?= $(shell go env GOARCH)
 CGO_ENABLED ?= 0
@@ -123,8 +123,7 @@ docker-build-admission-webhook: ## Build admission webhook container image
 		--build-arg VERSION=$(VERSION) \
 		--build-arg COMMIT=$(COMMIT) \
 		--build-arg DATE=$(DATE) \
-		-t $(ADMISSION_WEBHOOK_IMAGE):$(IMAGE_TAG) \
-		-t $(ADMISSION_WEBHOOK_IMAGE):latest .
+		-t $(ADMISSION_WEBHOOK_IMAGE):$(IMAGE_TAG) .
 	@echo "$(GREEN)Admission webhook image built: $(ADMISSION_WEBHOOK_IMAGE):$(IMAGE_TAG)$(NC)"
 
 .PHONY: docker-build-policy-manager
@@ -134,17 +133,14 @@ docker-build-policy-manager: ## Build policy manager container image
 		--build-arg VERSION=$(VERSION) \
 		--build-arg COMMIT=$(COMMIT) \
 		--build-arg DATE=$(DATE) \
-		-t $(POLICY_MANAGER_IMAGE):$(IMAGE_TAG) \
-		-t $(POLICY_MANAGER_IMAGE):latest .
+		-t $(POLICY_MANAGER_IMAGE):$(IMAGE_TAG) .
 	@echo "$(GREEN)Policy manager image built: $(POLICY_MANAGER_IMAGE):$(IMAGE_TAG)$(NC)"
 
 .PHONY: docker-push
 docker-push: ## Push container images to registry
 	@echo "$(BLUE)Pushing container images...$(NC)"
 	docker push $(ADMISSION_WEBHOOK_IMAGE):$(IMAGE_TAG)
-	docker push $(ADMISSION_WEBHOOK_IMAGE):latest
 	docker push $(POLICY_MANAGER_IMAGE):$(IMAGE_TAG)
-	docker push $(POLICY_MANAGER_IMAGE):latest
 	@echo "$(GREEN)Container images pushed$(NC)"
 
 # Testing targets

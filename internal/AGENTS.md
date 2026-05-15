@@ -11,6 +11,7 @@ Private application packages — only importable from within this module. Houses
 | Directory | Purpose |
 |-----------|---------|
 | `admission/` | Validating + mutating admission HTTP handlers, audit + metrics integration (see `admission/AGENTS.md`) |
+| `audit/` | Asynchronous audit logger with file/stdout backends and structured drop telemetry (see `audit/AGENTS.md`) |
 | `config/` | Viper-based configuration loader, defaults, and validation (see `config/AGENTS.md`) |
 | `metrics/` | Prometheus collector with admission, policy, audit, compliance metrics (see `metrics/AGENTS.md`) |
 | `policy/` | OPA Rego policy engine: types, evaluation, default policies (see `policy/AGENTS.md`) |
@@ -20,7 +21,7 @@ Private application packages — only importable from within this module. Houses
 
 ### Working In This Directory
 - Anything under `internal/` is invisible to external consumers — Go's module system enforces this. Use `pkg/` for code that must be importable.
-- Cross-package coupling: `admission` depends on `policy` + `audit` + `metrics`; `policymanager` depends on `config` + `policy`. Avoid creating new cycles.
+- Cross-package coupling: `admission` depends on `policy` + `audit` + `metrics`; `policymanager` depends on `config` + `policy`; `audit` depends on `config` + `policy`. Avoid creating new cycles.
 - Concurrency: shared mutable state (loaded policies, exceptions, etc.) is guarded by `sync.RWMutex` — keep this discipline when adding fields.
 
 ### Testing Requirements
@@ -35,7 +36,7 @@ Private application packages — only importable from within this module. Houses
 ## Dependencies
 
 ### Internal
-- `pkg/audit`, `pkg/logger` — referenced by `admission` and others
+- `pkg/logger` — referenced by `cmd/*` for structured logging
 
 ### External
 - `github.com/open-policy-agent/opa` — used by `policy`
