@@ -10,9 +10,7 @@
       {
         "name": "app",
         "image": "nginx:1.27.0",
-        "volumeMounts": [
-          { "name": "logs", "mountPath": "/var/log/host" }
-        ]
+        "volumeMounts": [{ "name": "logs", "mountPath": "/var/log/host" }]
       }
     ],
     "volumes": [

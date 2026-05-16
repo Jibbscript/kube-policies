@@ -1,5 +1,5 @@
-import { test as base, expect, type Route } from '@playwright/test';
-import { installDefaultMocks } from './mock-bff';
+import { test as base, expect, type Route } from "@playwright/test";
+import { installDefaultMocks } from "./mock-bff";
 
 /**
  * liveStream fixture: installs default BFF mocks then overrides the
@@ -16,19 +16,19 @@ const test = base.extend<{ liveStream: void }>({
 
       // Override recent to return one live decision event.
       // Registered after installDefaultMocks so it takes priority (LIFO).
-      await page.route('**/api/decisions/recent**', async (route: Route) => {
+      await page.route("**/api/decisions/recent**", async (route: Route) => {
         await route.fulfill({
           status: 200,
-          contentType: 'application/json',
+          contentType: "application/json",
           body: JSON.stringify({
             events: [
               {
-                decision: 'DENY',
-                namespace: 'default',
-                kind: 'Pod',
-                rule_id: 'no-privileged-containers',
-                policy_id: 'security-baseline',
-                timestamp: '2026-05-15T12:00:00Z',
+                decision: "DENY",
+                namespace: "default",
+                kind: "Pod",
+                rule_id: "no-privileged-containers",
+                policy_id: "security-baseline",
+                timestamp: "2026-05-15T12:00:00Z",
               },
             ],
             degraded: false,
@@ -37,16 +37,16 @@ const test = base.extend<{ liveStream: void }>({
       });
 
       // Mock the SSE stream endpoint — the BFF exposes this to browsers.
-      await page.route('**/api/decisions/stream', async (route: Route) => {
+      await page.route("**/api/decisions/stream", async (route: Route) => {
         const sseBody = [
           'data: {"decision":"DENY","namespace":"default","kind":"Pod","rule_id":"no-privileged-containers","policy_id":"security-baseline","timestamp":"2026-05-15T12:00:00Z"}',
-          '',
-          '',
-        ].join('\n');
+          "",
+          "",
+        ].join("\n");
         await route.fulfill({
           status: 200,
-          contentType: 'text/event-stream',
-          headers: { 'cache-control': 'no-cache' },
+          contentType: "text/event-stream",
+          headers: { "cache-control": "no-cache" },
           body: sseBody,
         });
       });
@@ -57,14 +57,16 @@ const test = base.extend<{ liveStream: void }>({
   ],
 });
 
-test('LiveDecisions ticker shows row within 2s of SSE message', async ({ page }) => {
-  await page.goto('/#/live');
+test("LiveDecisions ticker shows row within 2s of SSE message", async ({
+  page,
+}) => {
+  await page.goto("/#/live");
 
   // DecisionRow renders with data-testid="decision-row".
   // The row must appear within 2 s of the page loading (on-mount poll fires immediately).
-  const firstRow = page.getByTestId('decision-row').first();
+  const firstRow = page.getByTestId("decision-row").first();
   await expect(firstRow).toBeVisible({ timeout: 2000 });
 
   // The rule_id is rendered inside a RuleBadge (data-testid="rule-badge") within the row.
-  await expect(firstRow).toContainText('no-privileged-containers');
+  await expect(firstRow).toContainText("no-privileged-containers");
 });
