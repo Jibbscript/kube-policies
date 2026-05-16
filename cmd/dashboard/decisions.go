@@ -11,25 +11,16 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Jibbscript/kube-policies/internal/audit"
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
 )
 
-// PublicEvent is the dashboard-side mirror of internal/audit/public_event.go
-// (produced by T2). Kept local to avoid cross-package coupling at the binary
-// level — the policy-manager publishes these via POST /api/decisions/internal
-// and the SPA renders them.
-//
-// If the upstream contract changes, update this struct and the matching
-// types.ts in web/src/lib/types.ts.
-type PublicEvent struct {
-	Decision  string    `json:"decision"`
-	Namespace string    `json:"namespace"`
-	Kind      string    `json:"kind"`
-	RuleID    string    `json:"rule_id"`
-	PolicyID  string    `json:"policy_id"`
-	Timestamp time.Time `json:"timestamp"`
-}
+// PublicEvent is the strict-whitelist DTO defined in internal/audit. The
+// dashboard re-exports it here for proximity; the SPA shape is mirrored in
+// web/src/lib/types.ts. Keep the JSON tags in audit/public_event.go stable —
+// the SPA depends on these field names.
+type PublicEvent = audit.PublicEvent
 
 // Ring is a fixed-capacity, ring-buffered store of recent PublicEvents.
 // Concurrent-safe; reads return a copy so callers can iterate without
@@ -148,7 +139,7 @@ func NewIngestHandler(cfg *Config, ring *Ring, log *zap.Logger) gin.HandlerFunc 
 
 // NewRecentHandler returns a handler for GET /api/decisions/recent?limit=N.
 //
-// The response shape is `{"decisions":[...], "degraded": bool}`. degraded
+// The response shape is `{"events":[...], "degraded": bool}`. degraded
 // is true when the ring is empty — a signal to the SPA's ModeBanner that
 // the live publisher is not yet wired (M1 reality).
 func NewRecentHandler(ring *Ring, log *zap.Logger) gin.HandlerFunc {
@@ -167,8 +158,8 @@ func NewRecentHandler(ring *Ring, log *zap.Logger) gin.HandlerFunc {
 		}
 		items := ring.Recent(limit)
 		c.JSON(http.StatusOK, gin.H{
-			"decisions": items,
-			"degraded":  len(items) == 0,
+			"events":   items,
+			"degraded": len(items) == 0,
 		})
 	}
 }

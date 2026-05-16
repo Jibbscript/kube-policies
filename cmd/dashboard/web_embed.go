@@ -4,10 +4,9 @@ package main
 
 import (
 	"embed"
+	"errors"
 	"io/fs"
 	"net/http"
-	"os"
-	"strings"
 )
 
 // webEmbedFS embeds the built SPA assets that the Makefile populates into
@@ -46,7 +45,7 @@ func (s spaFS) Open(name string) (http.File, error) {
 	if err == nil {
 		return f, nil
 	}
-	if os.IsNotExist(err) || strings.HasSuffix(err.Error(), "file does not exist") {
+	if errors.Is(err, fs.ErrNotExist) {
 		// Try index.html for SPA fallback. If that also fails the original
 		// error is more informative.
 		if idx, ierr := s.fs.Open("index.html"); ierr == nil {

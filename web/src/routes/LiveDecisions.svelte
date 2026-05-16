@@ -15,7 +15,7 @@
       (e) =>
         (filterDecision === 'ALL' || e.decision === filterDecision) &&
         (filterNamespace === '' ||
-          e.namespace.toLowerCase().includes(filterNamespace.toLowerCase())),
+          (e.namespace ?? '').toLowerCase().includes(filterNamespace.toLowerCase())),
     ),
   );
 
@@ -38,7 +38,6 @@
 
 <section class="space-y-3">
   <h1 class="text-2xl font-semibold">Live decisions</h1>
-  <p class="text-sm text-slate-500">M1 polls <code>/api/decisions/recent</code> every 2 s. M2 will switch to SSE.</p>
 
   <div class="flex flex-wrap gap-2 text-sm">
     {#each ['ALL', 'ALLOW', 'DENY'] as opt (opt)}
@@ -70,15 +69,14 @@
         <th class="px-3 py-2">Kind/Name</th>
         <th class="px-3 py-2">Decision</th>
         <th class="px-3 py-2">Rule</th>
-        <th class="px-3 py-2 text-right">Latency</th>
       </tr>
     </thead>
     <tbody data-testid="decisions-tbody">
-      {#each filtered as e (e.timestamp + e.namespace + (e.name ?? ''))}
+      {#each filtered as e (e.timestamp + (e.namespace ?? '') + (e.name ?? ''))}
         <DecisionRow event={e} />
       {/each}
       {#if filtered.length === 0}
-        <tr><td colspan="6" class="px-3 py-4 text-slate-500">No matching decisions.</td></tr>
+        <tr><td colspan="5" class="px-3 py-4 text-slate-500">No matching decisions.</td></tr>
       {/if}
     </tbody>
   </table>

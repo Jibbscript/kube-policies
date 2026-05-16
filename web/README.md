@@ -25,8 +25,8 @@ so the BFF write-mode gate is active in dev (plan §4).
 - `lib/api.ts` is the single fetch wrapper; same-origin (empty base URL).
 - M1 ships poll-based live decisions (`getRecentDecisions` every 2 s). `sse.ts`
   is ready for M2 — flip the call in `LiveDecisions.svelte`.
-- Write-mode is gated at build time by `VITE_ALLOW_WRITES` and at runtime by
-  the BFF returning 403 on writes regardless.
+- The SPA is read-only. Writes are gated server-side: the BFF returns 403 on
+  `POST/PUT/PATCH/DELETE` to `/api/v1/*` unless `ALLOW_WRITES=true`.
 
 ## Tests
 
@@ -36,7 +36,7 @@ so the BFF write-mode gate is active in dev (plan §4).
   - `metrics-parser.test.ts` — assert `metricsToTiles` produces expected values.
 - Playwright e2e under `tests/e2e/`:
   - `demo-60s.spec.ts` — Home → Playground → privileged sample → DENY badge.
-  - `read-only.spec.ts` — write-mode buttons hidden, direct POST returns 403.
+  - `read-only.spec.ts` — direct `POST /api/v1/policies` returns 403.
   - `mock-bff.ts` provides the network-layer mock fixture used by both specs.
 
 The Playwright base URL can be overridden via `PLAYWRIGHT_BASE_URL` to point

@@ -108,7 +108,7 @@ func TestIngestThenRecent_RoundTrip(t *testing.T) {
 	cfg := &Config{InternalToken: "secret-abc"}
 	r := newTestRouter(t, cfg)
 
-	body := `{"decision":"DENY","namespace":"default","kind":"Pod","rule_id":"no-privileged-containers","policy_id":"security-baseline"}`
+	body := `{"decision":"DENY","namespace":"default","kind":"Pod","name":"my-pod","rule_id":"no-privileged-containers","policy_id":"security-baseline"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/decisions/internal", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer secret-abc")
@@ -124,11 +124,18 @@ func TestIngestThenRecent_RoundTrip(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("recent status = %d, want 200", w.Code)
 	}
-	if !strings.Contains(w.Body.String(), `"decision":"DENY"`) {
-		t.Errorf("recent body missing the ingested event; got %s", w.Body.String())
+	got := w.Body.String()
+	if !strings.Contains(got, `"events":`) {
+		t.Errorf("recent body must use the events envelope; got %s", got)
 	}
-	if strings.Contains(w.Body.String(), `"degraded":true`) {
-		t.Errorf("ring has events; degraded must be false; got %s", w.Body.String())
+	if !strings.Contains(got, `"decision":"DENY"`) {
+		t.Errorf("recent body missing the ingested event; got %s", got)
+	}
+	if !strings.Contains(got, `"name":"my-pod"`) {
+		t.Errorf("recent body must preserve the upstream Name field; got %s", got)
+	}
+	if strings.Contains(got, `"degraded":true`) {
+		t.Errorf("ring has events; degraded must be false; got %s", got)
 	}
 }
 
@@ -261,6 +268,91 @@ kube_policies_audit_buffer_size 7
 	}
 	if _, ok := families["kube_policies_audit_buffer_size"]; !ok {
 		t.Errorf("expected audit_buffer_size family; got keys %v", families)
+	}
+}
+
+// TestMetricsHandler_AggregatesUpstreamFamilies verifies that the /api/metrics/summary
+// handler scrapes both upstream /metrics endpoints, derives the typed summary, and
+// returns 200 with the expected fields populated.
+func TestMetricsHandler_AggregatesUpstreamFamilies(t *testing.T) {
+	pm := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/plain; version=0.0.4")
+		_, _ = io.WriteString(w, `# HELP kube_policies_policy_loaded_total Loaded policies.
+# TYPE kube_policies_policy_loaded_total gauge
+kube_policies_policy_loaded_total 3
+# HELP kube_policies_policy_evaluations_total Policy evaluations.
+# TYPE kube_policies_policy_evaluations_total counter
+kube_policies_policy_evaluations_total{rule_id="r1",result="denied"} 5
+kube_policies_policy_evaluations_total{rule_id="r2",result="denied"} 2
+kube_policies_policy_evaluations_total{rule_id="r3",result="allowed"} 99
+`)
+	}))
+	defer pm.Close()
+
+	aw := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/plain; version=0.0.4")
+		_, _ = io.WriteString(w, `# HELP kube_policies_admission_requests_total Admission requests.
+# TYPE kube_policies_admission_requests_total counter
+kube_policies_admission_requests_total{status="allowed"} 12
+kube_policies_admission_requests_total{status="denied"} 3
+# HELP kube_policies_audit_buffer_size Audit buffer.
+# TYPE kube_policies_audit_buffer_size gauge
+kube_policies_audit_buffer_size 7
+`)
+	}))
+	defer aw.Close()
+
+	cfg := &Config{
+		PolicyManagerMetricsURL:    pm.URL,
+		AdmissionWebhookMetricsURL: aw.URL,
+	}
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	r.GET("/api/metrics/summary", NewMetricsHandler(cfg, zap.NewNop()))
+
+	req := httptest.NewRequest(http.MethodGet, "/api/metrics/summary", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	body := w.Body.String()
+	for _, want := range []string{
+		`"policies_loaded":3`,
+		`"policy_manager_degraded":false`,
+		`"admission_webhook_degraded":false`,
+		`"rule_id":"r1"`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("body missing %q; got %s", want, body)
+		}
+	}
+}
+
+// TestMetricsHandler_ReportsDegradedOnScrapeFailure verifies acceptance #8:
+// an unreachable upstream sets the per-source degraded flag and returns 200,
+// never a 5xx.
+func TestMetricsHandler_ReportsDegradedOnScrapeFailure(t *testing.T) {
+	cfg := &Config{
+		PolicyManagerMetricsURL:    "http://127.0.0.1:1/dead",
+		AdmissionWebhookMetricsURL: "http://127.0.0.1:1/dead",
+	}
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	r.GET("/api/metrics/summary", NewMetricsHandler(cfg, zap.NewNop()))
+
+	req := httptest.NewRequest(http.MethodGet, "/api/metrics/summary", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 even when upstream is unreachable; body=%s", w.Code, w.Body.String())
+	}
+	body := w.Body.String()
+	if !strings.Contains(body, `"policy_manager_degraded":true`) {
+		t.Errorf("body must report policy_manager_degraded:true; got %s", body)
+	}
+	if !strings.Contains(body, `"admission_webhook_degraded":true`) {
+		t.Errorf("body must report admission_webhook_degraded:true; got %s", body)
 	}
 }
 

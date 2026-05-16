@@ -14,8 +14,6 @@
   let item = $state<Exception | null>(null);
   let err = $state<string | null>(null);
 
-  const allowWrites = import.meta.env.VITE_ALLOW_WRITES === 'true';
-
   onMount(async () => {
     if (!id) return;
     try {
@@ -39,9 +37,6 @@
       <h1 class="text-xl font-semibold">{item.id}</h1>
       <p class="mt-2 text-sm text-slate-600">{item.reason}</p>
       <pre class="mt-3 overflow-x-auto rounded bg-slate-50 p-2 text-xs">{prettyJson(item)}</pre>
-      {#if allowWrites}
-        <button class="mt-3 rounded bg-red-100 px-3 py-1 text-sm text-red-800">Delete</button>
-      {/if}
     </div>
   {/if}
 </section>

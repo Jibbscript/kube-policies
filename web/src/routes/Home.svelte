@@ -73,7 +73,7 @@
     {:else}
       <table class="w-full">
         <tbody>
-          {#each recent as e (e.timestamp + e.namespace + (e.name ?? ''))}
+          {#each recent as e (e.timestamp + (e.namespace ?? '') + (e.name ?? ''))}
             <DecisionRow event={e} />
           {/each}
         </tbody>

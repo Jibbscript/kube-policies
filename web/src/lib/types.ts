@@ -76,16 +76,15 @@ export interface MetricsSummary {
 
 export interface PublicEvent {
   decision: Decision;
-  namespace: string;
+  namespace?: string;
   kind: string;
+  name?: string;
   rule_id?: string;
   policy_id?: string;
   timestamp: string;
-  name?: string;
-  latency_ms?: number;
 }
 
 export interface RecentDecisionsResponse {
   events: PublicEvent[];
-  degraded?: boolean;
+  degraded: boolean;
 }

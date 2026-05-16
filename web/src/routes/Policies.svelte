@@ -7,8 +7,6 @@
   let policies = $state<Policy[]>([]);
   let err = $state<string | null>(null);
 
-  const allowWrites = import.meta.env.VITE_ALLOW_WRITES === 'true';
-
   onMount(async () => {
     try {
       policies = await listPolicies();
@@ -19,15 +17,8 @@
 </script>
 
 <section class="space-y-4">
-  <header class="flex items-center justify-between">
+  <header>
     <h1 class="text-2xl font-semibold">Policies</h1>
-    {#if allowWrites}
-      <button
-        type="button"
-        class="rounded bg-slate-900 px-3 py-1.5 text-sm text-white"
-        data-testid="new-policy-btn">+ New policy</button
-      >
-    {/if}
   </header>
 
   {#if err}

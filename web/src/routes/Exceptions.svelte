@@ -7,8 +7,6 @@
   let items = $state<Exception[]>([]);
   let err = $state<string | null>(null);
 
-  const allowWrites = import.meta.env.VITE_ALLOW_WRITES === 'true';
-
   onMount(async () => {
     try {
       items = await listExceptions();
@@ -19,13 +17,8 @@
 </script>
 
 <section class="space-y-4">
-  <header class="flex items-center justify-between">
+  <header>
     <h1 class="text-2xl font-semibold">Exceptions</h1>
-    {#if allowWrites}
-      <button class="rounded bg-slate-900 px-3 py-1.5 text-sm text-white" data-testid="new-exception-btn">
-        + New exception
-      </button>
-    {/if}
   </header>
 
   {#if err}<p class="text-sm text-amber-700">{err}</p>{/if}

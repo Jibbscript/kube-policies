@@ -15,8 +15,6 @@
   let policy = $state<Policy | null>(null);
   let err = $state<string | null>(null);
 
-  const allowWrites = import.meta.env.VITE_ALLOW_WRITES === 'true';
-
   onMount(async () => {
     if (!id) return;
     try {
@@ -35,17 +33,9 @@
   {:else if !policy}
     <p class="text-sm text-slate-500">Loading…</p>
   {:else}
-    <header class="flex items-center justify-between">
-      <div>
-        <h1 class="text-2xl font-semibold">{policy.name}</h1>
-        <p class="text-sm text-slate-500">{policy.description ?? '—'}</p>
-      </div>
-      {#if allowWrites}
-        <div class="flex gap-2">
-          <button class="rounded bg-slate-200 px-3 py-1 text-sm" data-testid="edit-btn">Edit</button>
-          <button class="rounded bg-red-100 px-3 py-1 text-sm text-red-800" data-testid="delete-btn">Delete</button>
-        </div>
-      {/if}
+    <header>
+      <h1 class="text-2xl font-semibold">{policy.name}</h1>
+      <p class="text-sm text-slate-500">{policy.description ?? '—'}</p>
     </header>
 
     <ul class="space-y-2">
