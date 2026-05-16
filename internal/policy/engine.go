@@ -343,8 +343,21 @@ func (e *Engine) buildViolationMessage(violations []PolicyViolation) string {
 // The Go literal below is the canonical source of the bundled defaults;
 // the YAML samples under examples/policies/ are illustrative for users
 // authoring their own policies and are NOT loaded automatically.
+//
+// Each rule's Rego is authored against the engine contract enforced in
+// evaluateRule():
+//   - Query: data.kube_policies.evaluate
+//   - Input: the K8s object lives at input.object.* (see prepareInput).
+//   - Output: a map with {allowed: bool}; when allowed=false, also
+//     {message: string, path: string}.
+//
+// Rules use OPA v1 syntax (`import rego.v1`). When multiple potential
+// denials match (e.g. several containers violate the same rule) each
+// rule deterministically reports the lowest-indexed violation so the
+// engine's single-violation-per-rule contract is preserved without
+// triggering complete-doc conflicts.
 func (e *Engine) loadDefaultPolicies() error {
-	// Load default policies from configuration or embedded policies
+	now := time.Now()
 	defaultPolicies := []*Policy{
 		{
 			ID:          "security-baseline",
@@ -359,29 +372,134 @@ func (e *Engine) loadDefaultPolicies() error {
 					Description: "Containers must not run in privileged mode",
 					Severity:    "HIGH",
 					Category:    "Security",
-					Frameworks:  []string{"CIS", "NIST"},
-					Rego: `
-package kube_policies
+					Frameworks:  []string{"CIS-1.8.0", "NIST-800-53"},
+					Rego: `package kube_policies
 
-evaluate = result {
+import rego.v1
+
+default evaluate := {"allowed": true}
+
+evaluate := {
+	"allowed": false,
+	"message": "Pod must not run in privileged mode",
+	"path": "spec.securityContext.privileged",
+} if {
 	input.object.spec.securityContext.privileged == true
-	result := {
-		"allowed": false,
-		"message": "Privileged containers are not allowed",
-		"path": "spec.securityContext.privileged"
-	}
 }
 
-evaluate = result {
-	not input.object.spec.securityContext.privileged
-	result := {
-		"allowed": true
-	}
-}`,
+evaluate := {
+	"allowed": false,
+	"message": "Container must not run in privileged mode",
+	"path": sprintf("spec.containers[%d].securityContext.privileged", [i]),
+} if {
+	not pod_privileged
+	indexes := [j |
+		some j
+		input.object.spec.containers[j].securityContext.privileged == true
+	]
+	count(indexes) > 0
+	i := indexes[0]
+}
+
+pod_privileged if input.object.spec.securityContext.privileged == true
+`,
+				},
+				{
+					ID:          "no-host-path-volumes",
+					Name:        "No HostPath Volumes",
+					Description: "HostPath volumes are not allowed",
+					Severity:    "HIGH",
+					Category:    "Security",
+					Frameworks:  []string{"CIS-1.8.0"},
+					Rego: `package kube_policies
+
+import rego.v1
+
+default evaluate := {"allowed": true}
+
+evaluate := {
+	"allowed": false,
+	"message": "hostPath volumes are not allowed",
+	"path": sprintf("spec.volumes[%d].hostPath", [i]),
+} if {
+	indexes := [j |
+		some j
+		input.object.spec.volumes[j].hostPath
+	]
+	count(indexes) > 0
+	i := indexes[0]
+}
+`,
+				},
+				{
+					ID:          "no-latest-image-tag",
+					Name:        "No Latest Image Tag",
+					Description: "Container images must not use ':latest' or an implicit latest tag",
+					Severity:    "MEDIUM",
+					Category:    "Security",
+					Frameworks:  []string{"CIS-1.8.0"},
+					Rego: `package kube_policies
+
+import rego.v1
+
+default evaluate := {"allowed": true}
+
+evaluate := {
+	"allowed": false,
+	"message": sprintf("Container image '%s' must specify an explicit non-':latest' tag", [input.object.spec.containers[i].image]),
+	"path": sprintf("spec.containers[%d].image", [i]),
+} if {
+	indexes := [j |
+		some j
+		bad_image(input.object.spec.containers[j].image)
+	]
+	count(indexes) > 0
+	i := indexes[0]
+}
+
+bad_image(image) if endswith(image, ":latest")
+
+bad_image(image) if not contains(image, ":")
+`,
+				},
+				{
+					ID:          "required-security-context",
+					Name:        "Required Security Context",
+					Description: "Containers must declare a securityContext that runs as non-root and disallows privilege escalation",
+					Severity:    "MEDIUM",
+					Category:    "Security",
+					Frameworks:  []string{"CIS-1.8.0", "PSS-restricted"},
+					Rego: `package kube_policies
+
+import rego.v1
+
+default evaluate := {"allowed": true}
+
+evaluate := {
+	"allowed": false,
+	"message": sprintf("Container at index %d must declare runAsNonRoot=true and allowPrivilegeEscalation!=true in securityContext", [i]),
+	"path": sprintf("spec.containers[%d].securityContext", [i]),
+} if {
+	indexes := [j |
+		some j
+		missing_required_sc(input.object.spec.containers[j])
+	]
+	count(indexes) > 0
+	i := indexes[0]
+}
+
+missing_required_sc(c) if not c.securityContext
+
+missing_required_sc(c) if not c.securityContext.runAsNonRoot
+
+missing_required_sc(c) if c.securityContext.runAsNonRoot == false
+
+missing_required_sc(c) if c.securityContext.allowPrivilegeEscalation == true
+`,
 				},
 			},
-			CreatedAt: time.Now(),
-			UpdatedAt: time.Now(),
+			CreatedAt: now,
+			UpdatedAt: now,
 		},
 	}
 

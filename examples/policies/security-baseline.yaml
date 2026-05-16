@@ -7,12 +7,12 @@ metadata:
     category: security
     severity: high
     compliance.framework: cis
-    compliance.version: "1.6"
+    compliance.version: "1.8.0"
 spec:
   description: "Basic security requirements for all workloads"
   enabled: true
   enforcement: true
-  
+
   # Target resources
   match:
     - apiGroups: [""]
@@ -21,157 +21,154 @@ spec:
     - apiGroups: ["apps"]
       apiVersions: ["v1"]
       resources: ["deployments", "replicasets", "daemonsets", "statefulsets"]
-  
+
   # Namespace selector
   namespaceSelector:
     matchExpressions:
-    - key: name
-      operator: NotIn
-      values: ["kube-system", "kube-public", "kube-node-lease"]
-  
-  # Policy rules
+      - key: name
+        operator: NotIn
+        values: ["kube-system", "kube-public", "kube-node-lease"]
+
+  # Policy rules — authored against the kube-policies engine contract:
+  #   query:  data.kube_policies.evaluate
+  #   input:  the K8s object lives at input.object.* (see internal/policy.prepareInput)
+  #   output: {"allowed": bool} and, when allowed=false, also {"message": str, "path": str}
+  #
+  # Rules use OPA v1 syntax (`import rego.v1`). When multiple potential denials
+  # match (e.g. several containers violate the same rule) each rule reports the
+  # lowest-indexed violation deterministically so the engine receives exactly
+  # one verdict per rule and no complete-doc conflict is raised.
   rules:
-    # No privileged containers
+    # 1. No privileged containers
     - name: no-privileged-containers
       severity: HIGH
-      description: "Privileged containers are not allowed"
+      description: "Containers must not run in privileged mode"
+      frameworks: ["CIS-1.8.0", "NIST-800-53"]
       rego: |
-        package kube_policies.security_baseline.no_privileged_containers
-        
-        deny[msg] {
-          input.spec.securityContext.privileged == true
-          msg := "Privileged containers are not allowed"
+        package kube_policies
+
+        import rego.v1
+
+        default evaluate := {"allowed": true}
+
+        evaluate := {
+          "allowed": false,
+          "message": "Pod must not run in privileged mode",
+          "path": "spec.securityContext.privileged",
+        } if {
+          input.object.spec.securityContext.privileged == true
         }
-        
-        deny[msg] {
-          input.spec.containers[_].securityContext.privileged == true
-          msg := "Privileged containers are not allowed"
+
+        evaluate := {
+          "allowed": false,
+          "message": "Container must not run in privileged mode",
+          "path": sprintf("spec.containers[%d].securityContext.privileged", [i]),
+        } if {
+          not pod_privileged
+          indexes := [j |
+            some j
+            input.object.spec.containers[j].securityContext.privileged == true
+          ]
+          count(indexes) > 0
+          i := indexes[0]
         }
-    
-    # No root user
-    - name: no-root-user
+
+        pod_privileged if input.object.spec.securityContext.privileged == true
+
+    # 2. No hostPath volumes
+    - name: no-host-path-volumes
       severity: HIGH
-      description: "Containers must not run as root user"
+      description: "hostPath volumes are not allowed"
+      frameworks: ["CIS-1.8.0"]
       rego: |
-        package kube_policies.security_baseline.no_root_user
-        
-        deny[msg] {
-          input.spec.securityContext.runAsUser == 0
-          msg := "Containers must not run as root user (UID 0)"
+        package kube_policies
+
+        import rego.v1
+
+        default evaluate := {"allowed": true}
+
+        evaluate := {
+          "allowed": false,
+          "message": "hostPath volumes are not allowed",
+          "path": sprintf("spec.volumes[%d].hostPath", [i]),
+        } if {
+          indexes := [j |
+            some j
+            input.object.spec.volumes[j].hostPath
+          ]
+          count(indexes) > 0
+          i := indexes[0]
         }
-        
-        deny[msg] {
-          input.spec.containers[_].securityContext.runAsUser == 0
-          msg := "Containers must not run as root user (UID 0)"
-        }
-    
-    # Required security context
-    - name: required-security-context
-      severity: MEDIUM
-      description: "Security context must be defined"
-      rego: |
-        package kube_policies.security_baseline.required_security_context
-        
-        deny[msg] {
-          not input.spec.securityContext
-          msg := "Pod security context must be defined"
-        }
-        
-        deny[msg] {
-          container := input.spec.containers[_]
-          not container.securityContext
-          msg := sprintf("Container '%s' must have security context defined", [container.name])
-        }
-    
-    # No host network
-    - name: no-host-network
-      severity: HIGH
-      description: "Host network access is not allowed"
-      rego: |
-        package kube_policies.security_baseline.no_host_network
-        
-        deny[msg] {
-          input.spec.hostNetwork == true
-          msg := "Host network access is not allowed"
-        }
-    
-    # No host PID
-    - name: no-host-pid
-      severity: HIGH
-      description: "Host PID namespace access is not allowed"
-      rego: |
-        package kube_policies.security_baseline.no_host_pid
-        
-        deny[msg] {
-          input.spec.hostPID == true
-          msg := "Host PID namespace access is not allowed"
-        }
-    
-    # No host IPC
-    - name: no-host-ipc
-      severity: HIGH
-      description: "Host IPC namespace access is not allowed"
-      rego: |
-        package kube_policies.security_baseline.no_host_ipc
-        
-        deny[msg] {
-          input.spec.hostIPC == true
-          msg := "Host IPC namespace access is not allowed"
-        }
-    
-    # Required resource limits
-    - name: required-resource-limits
-      severity: MEDIUM
-      description: "Resource limits must be defined"
-      rego: |
-        package kube_policies.security_baseline.required_resource_limits
-        
-        deny[msg] {
-          container := input.spec.containers[_]
-          not container.resources.limits
-          msg := sprintf("Container '%s' must have resource limits defined", [container.name])
-        }
-        
-        deny[msg] {
-          container := input.spec.containers[_]
-          not container.resources.limits.memory
-          msg := sprintf("Container '%s' must have memory limit defined", [container.name])
-        }
-        
-        deny[msg] {
-          container := input.spec.containers[_]
-          not container.resources.limits.cpu
-          msg := sprintf("Container '%s' must have CPU limit defined", [container.name])
-        }
-    
-    # No latest image tag
+
+    # 3. No ":latest" (or implicit-latest) image tags
     - name: no-latest-image-tag
       severity: MEDIUM
-      description: "Images must not use 'latest' tag"
+      description: "Container images must not use ':latest' or an implicit latest tag"
+      frameworks: ["CIS-1.8.0"]
       rego: |
-        package kube_policies.security_baseline.no_latest_image_tag
-        
-        deny[msg] {
-          container := input.spec.containers[_]
-          endswith(container.image, ":latest")
-          msg := sprintf("Container '%s' must not use 'latest' image tag", [container.name])
+        package kube_policies
+
+        import rego.v1
+
+        default evaluate := {"allowed": true}
+
+        evaluate := {
+          "allowed": false,
+          "message": sprintf("Container image '%s' must specify an explicit non-':latest' tag", [input.object.spec.containers[i].image]),
+          "path": sprintf("spec.containers[%d].image", [i]),
+        } if {
+          indexes := [j |
+            some j
+            bad_image(input.object.spec.containers[j].image)
+          ]
+          count(indexes) > 0
+          i := indexes[0]
         }
-        
-        deny[msg] {
-          container := input.spec.containers[_]
-          not contains(container.image, ":")
-          msg := sprintf("Container '%s' must specify explicit image tag", [container.name])
+
+        bad_image(image) if endswith(image, ":latest")
+
+        bad_image(image) if not contains(image, ":")
+
+    # 4. Required securityContext (runAsNonRoot=true, allowPrivilegeEscalation!=true)
+    - name: required-security-context
+      severity: MEDIUM
+      description: "Containers must declare a securityContext that runs as non-root and disallows privilege escalation"
+      frameworks: ["CIS-1.8.0", "PSS-restricted"]
+      rego: |
+        package kube_policies
+
+        import rego.v1
+
+        default evaluate := {"allowed": true}
+
+        evaluate := {
+          "allowed": false,
+          "message": sprintf("Container at index %d must declare runAsNonRoot=true and allowPrivilegeEscalation!=true in securityContext", [i]),
+          "path": sprintf("spec.containers[%d].securityContext", [i]),
+        } if {
+          indexes := [j |
+            some j
+            missing_required_sc(input.object.spec.containers[j])
+          ]
+          count(indexes) > 0
+          i := indexes[0]
         }
+
+        missing_required_sc(c) if not c.securityContext
+
+        missing_required_sc(c) if not c.securityContext.runAsNonRoot
+
+        missing_required_sc(c) if c.securityContext.runAsNonRoot == false
+
+        missing_required_sc(c) if c.securityContext.allowPrivilegeEscalation == true
 
   # Exception handling
   exceptions:
-    # Allow system namespaces to be exempt
     - name: system-namespaces
       description: "System namespaces are exempt from security policies"
       namespaces: ["kube-system", "kube-public", "kube-node-lease"]
       rules: ["*"]
-    
-    # Allow specific workloads to run privileged
+
     - name: privileged-workloads
       description: "Specific workloads that require privileged access"
       selector:
@@ -188,7 +185,7 @@ spec:
     enabled: true
     level: "detailed"
     backends: ["file", "webhook"]
-    
+
   # Metrics configuration
   metrics:
     enabled: true
@@ -196,3 +193,8 @@ spec:
       policy: "security-baseline"
       category: "security"
 
+# NOTE: The previous 4 non-Playground rules (no-root-user, no-host-network,
+# no-host-pid, no-host-ipc, required-resource-limits) used the legacy `deny[msg]`
+# contract and are non-functional under the current engine. They are deferred to
+# M3 — rewrite alongside these in a single PR, or move to
+# examples/policies/extras-pending-rewrite.yaml.

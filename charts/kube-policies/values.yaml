@@ -265,9 +265,12 @@ audit:
     # Backend type: file, elasticsearch, webhook
     type: file
     
-    # File backend configuration
+    # File backend configuration.
+    # The path must match the writable mount in
+    # templates/admission-webhook-deployment.yaml (emptyDir at
+    # /var/log/kube-policies). The audit logger appends `/audit.log`.
     file:
-      path: "/var/log/audit"
+      path: "/var/log/kube-policies"
       maxSize: "100Mi"
       maxFiles: 10
     
@@ -380,7 +383,7 @@ grafana:
     size: 10Gi
   adminUser: admin
   adminPassword: admin
-  
+
   # Grafana datasources
   datasources:
     datasources.yaml:
@@ -391,7 +394,7 @@ grafana:
         url: http://{{ include "kube-policies.fullname" . }}-prometheus-server
         access: proxy
         isDefault: true
-  
+
   # Grafana dashboards
   dashboardProviders:
     dashboardproviders.yaml:
@@ -405,11 +408,66 @@ grafana:
         editable: true
         options:
           path: /var/lib/grafana/dashboards/kube-policies
-  
+
   dashboards:
     kube-policies:
       kube-policies-overview:
         gnetId: 12345
         revision: 1
         datasource: Prometheus
+
+# Dashboard configuration (M1 - svelte-dashboard)
+dashboard:
+  # Off by default; set enabled=true to deploy the read-only Svelte SPA + Go BFF.
+  enabled: false
+
+  # Two-flag write gate: ALLOW_WRITES env is only "true" when this AND enabled are both true.
+  allowWrites: false
+
+  replicaCount: 1
+
+  image:
+    repository: ghcr.io/Jibbscript/dashboard
+    # Defaults to .Chart.AppVersion when empty.
+    tag: ""
+    pullPolicy: IfNotPresent
+
+  service:
+    type: ClusterIP
+
+  ingress:
+    enabled: false
+    className: nginx
+    annotations: {}
+    hosts:
+      - host: kube-policies-dashboard.local
+        paths:
+          - path: /
+            pathType: Prefix
+    tls: []
+
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 200m
+      memory: 256Mi
+
+  podAnnotations: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+
+  # Override the upstream policy-manager SSE URL. Empty = use the
+  # in-cluster policy-manager Service via the default rendered into the
+  # deployment env.
+  streamURL: ""
+
+# Shared bearer secret used by admission-webhook → policy-manager
+# /api/v1/decisions/internal POSTs and as the trust anchor for the
+# /api/v1/decisions/stream SSE fan-out (see svelte-dashboard plan §7).
+# If empty (default), the chart auto-generates a 48-char random token
+# at first install and preserves it across helm upgrades via lookup.
+internalToken: ""
 

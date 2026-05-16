@@ -29,7 +29,7 @@ func TestNewController(t *testing.T) {
 
 	// sharedMetrics is defined in controller_behavior_test.go to avoid
 	// duplicate Prometheus registration when NewCollector is called twice.
-	controller := NewController(policyEngine, auditLogger, sharedMetrics, logger)
+	controller := NewController(policyEngine, auditLogger, sharedMetrics, logger, nil)
 
 	// Verify controller was created
 	assert.NotNil(t, controller)

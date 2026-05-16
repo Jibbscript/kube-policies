@@ -37,24 +37,35 @@ spec:
             {{- toYaml .Values.policyManager.securityContext | nindent 12 }}
           image: "{{ .Values.global.imageRegistry | default .Values.policyManager.image.registry }}/{{ .Values.policyManager.image.repository }}:{{ .Values.policyManager.image.tag | default .Chart.AppVersion }}"
           imagePullPolicy: {{ .Values.policyManager.image.pullPolicy }}
+          # cmd/policy-manager/main.go reads only flags (not env vars). The
+          # HTTP_PORT/METRICS_PORT env vars previously set here were ignored
+          # by the binary, which silently caused a port mismatch (binary
+          # listened on the flag defaults while the Service exposed the
+          # env-var values). Use explicit args for clarity.
+          args:
+            - --port=8080
+            - --metrics-port=9091
+            - --config=/etc/config/config.yaml
           ports:
             - name: http
               containerPort: 8080
               protocol: TCP
             - name: metrics
-              containerPort: 8081
+              containerPort: 9091
               protocol: TCP
           env:
-            - name: HTTP_PORT
-              value: "8080"
-            - name: METRICS_PORT
-              value: "8081"
             - name: LOG_LEVEL
               value: "info"
             - name: NAMESPACE
               valueFrom:
                 fieldRef:
                   fieldPath: metadata.namespace
+            - name: POLICY_MANAGER_INTERNAL_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "kube-policies.fullname" . }}-internal-token
+                  key: token
+                  optional: true
           livenessProbe:
             httpGet:
               path: /healthz

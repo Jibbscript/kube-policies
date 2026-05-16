@@ -54,21 +54,24 @@ func nonPrivilegedPodReq(t testing.TB) *EvaluationRequest {
 }
 
 // TestEngine_PreparedQueryCachedOnce verifies that repeated evaluation of the same
-// rule does not recompile the Rego query. The default security-baseline policy has
-// exactly one rule, so after N evaluations the cache must hold exactly one entry.
+// rules does not recompile the Rego queries. The default security-baseline policy
+// has 4 rules (no-privileged-containers, no-host-path-volumes, no-latest-image-tag,
+// required-security-context), so after N evaluations the cache must hold exactly
+// 4 entries — one per rule, not one per evaluation.
 func TestEngine_PreparedQueryCachedOnce(t *testing.T) {
 	engine := mustNewBenchEngine(t)
 	req := nonPrivilegedPodReq(t)
 
 	const evals = 25
+	const expectedRules = 4
 	for i := 0; i < evals; i++ {
 		_, err := engine.Evaluate(context.Background(), req)
 		require.NoError(t, err)
 	}
 
-	assert.Equal(t, 1, engine.preparedQueryCount(),
-		"expected exactly one cached prepared query after %d evaluations, got %d",
-		evals, engine.preparedQueryCount())
+	assert.Equal(t, expectedRules, engine.preparedQueryCount(),
+		"expected exactly %d cached prepared queries (one per default rule) after %d evaluations, got %d",
+		expectedRules, evals, engine.preparedQueryCount())
 }
 
 // TestEngine_LoadPolicy_EvictsCache verifies that re-loading a policy invalidates
@@ -79,7 +82,8 @@ func TestEngine_LoadPolicy_EvictsCache(t *testing.T) {
 
 	_, err := engine.Evaluate(context.Background(), req)
 	require.NoError(t, err)
-	require.Equal(t, 1, engine.preparedQueryCount())
+	require.Equal(t, 4, engine.preparedQueryCount(),
+		"default security-baseline policy has 4 rules; expected 4 cached queries after one evaluation")
 
 	// Re-load the same policy ID with a different rule body.
 	require.NoError(t, engine.LoadPolicy(&Policy{

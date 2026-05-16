@@ -1,0 +1,52 @@
+# syntax=docker/dockerfile:1.6
+#
+# Multi-stage build for the kube-policies dashboard.
+#   Stage 1: build the Svelte SPA into web/dist using pnpm pinned to the
+#            version that produced the lockfile.
+#   Stage 2: copy SPA assets into cmd/dashboard/web_dist (where //go:embed
+#            looks) and build the Go binary for the target arch.
+#   Stage 3: distroless-style scratch image with just the binary.
+
+# Stage 1: Build SPA -----------------------------------------------------------
+FROM --platform=${BUILDPLATFORM:-linux/amd64} node:22-alpine AS web-builder
+
+# Pin pnpm to the version that wrote the lockfile (T3 used 10.28.1). Pulling
+# a newer major (corepack's default) imports node:sqlite which is only
+# available on Node 22.5+. Pin keeps this deterministic across host envs.
+ARG PNPM_VERSION=10.28.1
+RUN corepack enable && corepack prepare pnpm@${PNPM_VERSION} --activate
+
+WORKDIR /src/web
+COPY web/package.json web/pnpm-lock.yaml web/.npmrc ./
+RUN pnpm install --frozen-lockfile
+COPY web/ ./
+RUN pnpm build
+
+# Stage 2: Build Go binary -----------------------------------------------------
+FROM --platform=${BUILDPLATFORM:-linux/amd64} golang:1.25-alpine AS go-builder
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+
+# Place the SPA assets where //go:embed all:web_dist (in
+# cmd/dashboard/web_embed.go) looks for them. The .placeholder is preserved
+# alongside the real assets so the embed pattern always matches at least
+# one file even if the SPA build emits nothing.
+COPY --from=web-builder /src/web/dist/. /src/cmd/dashboard/web_dist/
+
+ARG TARGETOS=linux
+ARG TARGETARCH=amd64
+RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build \
+    -trimpath \
+    -ldflags="-s -w" \
+    -o /out/dashboard \
+    ./cmd/dashboard
+
+# Stage 3: Minimal runtime image ----------------------------------------------
+FROM scratch
+COPY --from=go-builder /out/dashboard /dashboard
+COPY --from=go-builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
+USER 65532:65532
+EXPOSE 8090 9092
+ENTRYPOINT ["/dashboard"]

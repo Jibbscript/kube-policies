@@ -1,5 +1,8 @@
-# Build stage
-FROM golang:1.25-alpine AS builder
+# Build stage — use BUILDPLATFORM to build natively for the host arch,
+# then cross-compile to TARGETARCH if invoked via `docker buildx --platform=...`.
+# When the host == target (the common `make demo-up` path on arm64 Macs and
+# amd64 CI), no emulation runs.
+FROM --platform=${BUILDPLATFORM:-linux/amd64} golang:1.25-alpine AS builder
 
 # Install build dependencies
 RUN apk add --no-cache git ca-certificates tzdata
@@ -20,11 +23,13 @@ COPY . .
 ARG VERSION=dev
 ARG COMMIT=unknown
 ARG DATE=unknown
+ARG TARGETOS=linux
+ARG TARGETARCH=amd64
 
 # Build the binary
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
+RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build \
     -ldflags="-w -s -X main.version=${VERSION} -X main.commit=${COMMIT} -X main.date=${DATE}" \
-    -a -installsuffix cgo \
+    -trimpath \
     -o admission-webhook \
     ./cmd/admission-webhook
 

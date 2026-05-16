@@ -56,6 +56,7 @@ func main() {
 	if err != nil {
 		log.Fatal("Failed to initialize policy manager", zap.Error(err))
 	}
+	policyManager.SetInternalToken(os.Getenv("POLICY_MANAGER_INTERNAL_TOKEN"))
 
 	// Setup API server
 	apiServer := setupAPIServer(policyManager, log)
@@ -161,6 +162,11 @@ func setupAPIServer(manager *policymanager.Manager, log *zap.Logger) *http.Serve
 		api.GET("/compliance/reports", manager.ListComplianceReports)
 		api.POST("/compliance/reports", manager.GenerateComplianceReport)
 		api.GET("/compliance/frameworks", manager.ListComplianceFrameworks)
+
+		// Decisions live-ticker endpoints (M2 — svelte-dashboard plan §6, §7)
+		api.POST("/decisions/internal", manager.IngestInternal)
+		api.GET("/decisions/stream", manager.StreamDecisions)
+		api.GET("/decisions/recent", manager.RecentDecisions)
 	}
 
 	server := &http.Server{

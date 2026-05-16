@@ -29,6 +29,9 @@ type Collector struct {
 	// Compliance metrics
 	complianceViolations *prometheus.CounterVec
 	complianceReports    *prometheus.CounterVec
+
+	// Webhook decision publisher metrics
+	webhookDecisionPublishDropped prometheus.Counter
 }
 
 // NewCollector creates a new metrics collector
@@ -142,6 +145,15 @@ func NewCollector() *Collector {
 			},
 			[]string{"framework", "status"},
 		),
+
+		webhookDecisionPublishDropped: promauto.NewCounter(
+			prometheus.CounterOpts{
+				Namespace: "kube_policies",
+				Subsystem: "webhook",
+				Name:      "decision_publish_dropped_total",
+				Help:      "Total number of webhook decision publish events dropped due to a full buffer",
+			},
+		),
 	}
 }
 
@@ -200,6 +212,11 @@ func (c *Collector) IncComplianceReports(framework, status string) {
 	c.complianceReports.WithLabelValues(framework, status).Inc()
 }
 
+// IncWebhookDecisionPublishDropped increments the dropped webhook decision publish events counter
+func (c *Collector) IncWebhookDecisionPublishDropped() {
+	c.webhookDecisionPublishDropped.Inc()
+}
+
 // GetMetrics returns all metrics for testing or inspection
 func (c *Collector) GetMetrics() map[string]prometheus.Collector {
 	return map[string]prometheus.Collector{
@@ -212,7 +229,8 @@ func (c *Collector) GetMetrics() map[string]prometheus.Collector {
 		"cache_hits":            c.cacheHits,
 		"audit_events":          c.auditEvents,
 		"audit_buffer_size":     c.auditBufferSize,
-		"compliance_violations": c.complianceViolations,
-		"compliance_reports":    c.complianceReports,
+		"compliance_violations":              c.complianceViolations,
+		"compliance_reports":                 c.complianceReports,
+		"webhook_decision_publish_dropped":   c.webhookDecisionPublishDropped,
 	}
 }

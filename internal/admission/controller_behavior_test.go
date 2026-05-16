@@ -42,7 +42,7 @@ func newControllerWithStub(t *testing.T, eval policy.Evaluator) *Controller {
 	t.Helper()
 	auditLogger, err := audit.NewLogger(&config.AuditConfig{Enabled: false})
 	require.NoError(t, err)
-	return NewController(eval, auditLogger, sharedMetrics, zap.NewNop())
+	return NewController(eval, auditLogger, sharedMetrics, zap.NewNop(), nil)
 }
 
 func newControllerWithEngine(t *testing.T) (*Controller, *policy.Engine) {
@@ -51,7 +51,7 @@ func newControllerWithEngine(t *testing.T) (*Controller, *policy.Engine) {
 	require.NoError(t, err)
 	auditLogger, err := audit.NewLogger(&config.AuditConfig{Enabled: false})
 	require.NoError(t, err)
-	return NewController(engine, auditLogger, sharedMetrics, zap.NewNop()), engine
+	return NewController(engine, auditLogger, sharedMetrics, zap.NewNop(), nil), engine
 }
 
 func postAdmissionReview(t *testing.T, handler gin.HandlerFunc, review admissionv1.AdmissionReview) admissionv1.AdmissionReview {
@@ -142,7 +142,7 @@ func TestValidateHandler_DeniesPrivilegedPod(t *testing.T) {
 	assert.False(t, out.Response.Allowed, "privileged Pod must be denied by the default policy")
 	require.NotNil(t, out.Response.Result)
 	assert.Equal(t, int32(http.StatusForbidden), out.Response.Result.Code)
-	assert.Contains(t, out.Response.Result.Message, "Privileged")
+	assert.Contains(t, out.Response.Result.Message, "privileged")
 }
 
 // TestMutateHandler_ReturnsValidJSONPatch verifies that when a policy emits patches,

@@ -1,0 +1,23 @@
+@import "tailwindcss";
+
+/* Design tokens — keep small; rely on Tailwind utilities. */
+:root {
+  --color-allow: #16a34a;
+  --color-deny: #dc2626;
+  --color-degraded: #f59e0b;
+}
+
+.badge-allow {
+  background-color: #dcfce7;
+  color: var(--color-allow);
+}
+
+.badge-deny {
+  background-color: #fee2e2;
+  color: var(--color-deny);
+}
+
+.badge-degraded {
+  background-color: #fef3c7;
+  color: var(--color-degraded);
+}

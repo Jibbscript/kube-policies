@@ -1,0 +1,20 @@
+{
+  "apiVersion": "v1",
+  "kind": "Pod",
+  "metadata": {
+    "name": "compliant-pod",
+    "namespace": "default"
+  },
+  "spec": {
+    "containers": [
+      {
+        "name": "app",
+        "image": "nginx:1.27.0",
+        "securityContext": {
+          "runAsNonRoot": true,
+          "allowPrivilegeEscalation": false
+        }
+      }
+    ]
+  }
+}

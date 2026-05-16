@@ -22,21 +22,25 @@ type Controller struct {
 	auditLogger  *audit.Logger
 	metrics      *metrics.Collector
 	logger       *zap.Logger
+	publisher    *DecisionPublisher
 }
 
 // NewController creates a new admission controller.
 // policyEngine is accepted as a policy.Evaluator interface to enable test doubles.
+// publisher may be nil, in which case decision publishing is disabled.
 func NewController(
 	policyEngine policy.Evaluator,
 	auditLogger *audit.Logger,
 	metrics *metrics.Collector,
 	logger *zap.Logger,
+	publisher *DecisionPublisher,
 ) *Controller {
 	return &Controller{
 		policyEngine: policyEngine,
 		auditLogger:  auditLogger,
 		metrics:      metrics,
 		logger:       logger,
+		publisher:    publisher,
 	}
 }
 
@@ -90,6 +94,9 @@ func (c *Controller) ValidateHandler(ctx *gin.Context) {
 		auditCtx.Decision = "ERROR"
 		auditCtx.Reason = fmt.Sprintf("Policy evaluation failed: %v", err)
 		c.auditLogger.LogDecision(auditCtx)
+		if c.publisher != nil {
+			c.publisher.Publish(audit.NewPublicEvent(auditCtx, nil))
+		}
 
 		// Fail-safe behavior - deny by default
 		response := &admissionv1.AdmissionResponse{
@@ -127,6 +134,13 @@ func (c *Controller) ValidateHandler(ctx *gin.Context) {
 	auditCtx.PolicyViolations = decision.Violations
 	auditCtx.ProcessingTime = time.Since(startTime)
 	c.auditLogger.LogDecision(auditCtx)
+	if c.publisher != nil {
+		var firstViolation *policy.PolicyViolation
+		if len(decision.Violations) > 0 {
+			firstViolation = &decision.Violations[0]
+		}
+		c.publisher.Publish(audit.NewPublicEvent(auditCtx, firstViolation))
+	}
 
 	// Record metrics
 	status := "allowed"
@@ -190,6 +204,9 @@ func (c *Controller) MutateHandler(ctx *gin.Context) {
 		auditCtx.Decision = "ERROR"
 		auditCtx.Reason = fmt.Sprintf("Policy evaluation failed: %v", err)
 		c.auditLogger.LogDecision(auditCtx)
+		if c.publisher != nil {
+			c.publisher.Publish(audit.NewPublicEvent(auditCtx, nil))
+		}
 
 		// Fail-safe behavior - allow without mutations
 		response := &admissionv1.AdmissionResponse{
@@ -240,6 +257,13 @@ func (c *Controller) MutateHandler(ctx *gin.Context) {
 	auditCtx.Mutations = decision.Patches
 	auditCtx.ProcessingTime = time.Since(startTime)
 	c.auditLogger.LogDecision(auditCtx)
+	if c.publisher != nil {
+		var firstViolation *policy.PolicyViolation
+		if len(decision.Violations) > 0 {
+			firstViolation = &decision.Violations[0]
+		}
+		c.publisher.Publish(audit.NewPublicEvent(auditCtx, firstViolation))
+	}
 
 	// Record metrics
 	status := "allowed"

@@ -1,0 +1,114 @@
+name: UI Pipeline
+
+on:
+  push:
+    branches: [main, develop]
+    paths:
+      - 'web/**'
+      - 'cmd/dashboard/**'
+      - 'internal/policymanager/test_handler*.go'
+      - 'internal/policy/evaluator_for_policy*.go'
+      - 'internal/policy/bundled_defaults_test.go'
+      - 'examples/policies/security-baseline.yaml'
+      - 'Makefile'
+      - 'build/Dockerfile.dashboard'
+      - '.github/workflows/ui.yml'
+  pull_request:
+    branches: [main, develop]
+    paths:
+      - 'web/**'
+      - 'cmd/dashboard/**'
+      - 'internal/policymanager/test_handler*.go'
+      - 'internal/policy/evaluator_for_policy*.go'
+      - 'internal/policy/bundled_defaults_test.go'
+      - 'examples/policies/security-baseline.yaml'
+      - 'Makefile'
+      - 'build/Dockerfile.dashboard'
+      - '.github/workflows/ui.yml'
+
+env:
+  GO_VERSION: '1.25'
+  NODE_VERSION: '20'
+  PNPM_VERSION: '10'
+
+jobs:
+  ui:
+    name: Lint, Test, and Build UI
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - name: Get pnpm store directory
+        id: pnpm-cache
+        run: echo "STORE_PATH=$(pnpm store path --silent)" >> $GITHUB_OUTPUT
+
+      - name: Cache pnpm store
+        uses: actions/cache@v4
+        with:
+          path: ${{ steps.pnpm-cache.outputs.STORE_PATH }}
+          key: ${{ runner.os }}-pnpm-${{ hashFiles('web/pnpm-lock.yaml') }}
+          restore-keys: |
+            ${{ runner.os }}-pnpm-
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: go.sum
+
+      - name: Install Helm
+        run: curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+
+      - name: UI lint
+        run: make ui-lint
+
+      - name: UI test (JS/Vitest)
+        run: make ui-test-js
+
+      - name: UI test (Rego bundled defaults)
+        run: make ui-test-rego
+
+      - name: UI build
+        run: make ui-build
+
+      - name: Bundle size report
+        env:
+          GIT_SHA: ${{ github.sha }}
+        run: |
+          mkdir -p .omc/research
+          SIZE=$(du -sb web/dist 2>/dev/null | cut -f1 || echo "0")
+          TIMESTAMP=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          printf '{"bytes":%s,"timestamp":"%s","ref":"%s"}\n' "$SIZE" "$TIMESTAMP" "$GIT_SHA" \
+            | tee .omc/research/bundle-size-m1.json
+          echo "Bundle size: ${SIZE} bytes"
+          du -sh web/dist/* 2>/dev/null | sort -rh | head -20 || true
+
+      - name: Upload bundle size report
+        uses: actions/upload-artifact@v4
+        with:
+          name: bundle-size-report
+          path: .omc/research/bundle-size-m1.json
+
+      - name: Build dashboard binary (with UI)
+        run: WITH_UI=1 make build-dashboard
+
+      - name: Helm lint
+        run: helm lint charts/kube-policies
+
+      - name: Upload dist artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dashboard-dist
+          path: dist/dashboard-*
+          retention-days: 7

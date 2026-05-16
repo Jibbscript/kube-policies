@@ -1,0 +1,4 @@
+This file keeps //go:embed all:web_dist happy when the Makefile has not
+yet copied the real SPA assets from ../../web/dist/ into this directory.
+The Makefile's build-dashboard target overwrites the rest of this directory
+with the freshly built SPA; this placeholder is preserved across copies.

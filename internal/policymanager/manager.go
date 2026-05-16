@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Jibbscript/kube-policies/internal/audit"
 	"github.com/Jibbscript/kube-policies/internal/config"
 	"github.com/Jibbscript/kube-policies/internal/policy"
 	"github.com/gin-gonic/gin"
@@ -24,6 +25,12 @@ type Manager struct {
 	mutex      sync.RWMutex
 	ctx        context.Context
 	cancel     context.CancelFunc
+
+	// M2 live-ticker: fan-out pub-sub bus, bounded recent-event ring, and the
+	// shared bearer secret that guards POST /api/v1/decisions/internal.
+	bus           *audit.Bus
+	recentRing    *Ring
+	internalToken string
 }
 
 // PolicyBundle represents a collection of policies
@@ -93,7 +100,11 @@ type ComplianceViolation struct {
 	Timestamp   time.Time `json:"timestamp"`
 }
 
-// NewManager creates a new policy manager
+// NewManager creates a new policy manager. The bundled-default policies
+// shipped by the engine (see internal/policy/engine.go::loadDefaultPolicies)
+// are pre-loaded into the manager so /api/v1/policies and the Playground
+// surface the same baseline the admission webhook evaluates. The engine
+// remains the single source of truth — the manager only mirrors it.
 func NewManager(config *config.Config, logger *zap.Logger) (*Manager, error) {
 	ctx, cancel := context.WithCancel(context.Background())
 
@@ -105,9 +116,36 @@ func NewManager(config *config.Config, logger *zap.Logger) (*Manager, error) {
 		exceptions: make(map[string]*Exception),
 		ctx:        ctx,
 		cancel:     cancel,
+		bus:        audit.NewBus(256, logger),
+		recentRing: NewRing(256),
+	}
+
+	// Mirror the engine's bundled defaults into the manager registry so
+	// API consumers (dashboard SPA, future CLIs) see the same policies the
+	// webhook would enforce. Failure here is non-fatal — an empty registry
+	// is still a valid state — but we log loudly so operators notice.
+	bootstrapEngine, err := policy.NewEngine(&config.Policy, logger)
+	if err != nil {
+		logger.Warn("could not bootstrap engine to mirror bundled defaults; manager will start with an empty policy registry",
+			zap.Error(err),
+		)
+	} else {
+		for _, p := range bootstrapEngine.ListPolicies() {
+			manager.policies[p.ID] = p
+		}
+		logger.Info("policy manager seeded from engine bundled defaults",
+			zap.Int("count", len(manager.policies)),
+		)
 	}
 
 	return manager, nil
+}
+
+// SetInternalToken sets the shared bearer secret used to authenticate
+// POST /api/v1/decisions/internal requests from the admission webhook.
+// An empty token disables the endpoint (every request returns 401).
+func (m *Manager) SetInternalToken(token string) {
+	m.internalToken = token
 }
 
 // Start starts the policy manager background processes
@@ -121,6 +159,7 @@ func (m *Manager) Start(ctx context.Context) {
 	go m.monitorExceptions(ctx)
 
 	<-ctx.Done()
+	m.bus.Close()
 	m.logger.Info("Policy manager stopped")
 }
 
@@ -302,9 +341,10 @@ func (m *Manager) DeletePolicy(c *gin.Context) {
 }
 
 // TestPolicy handles POST /api/v1/policies/:id/test.
-// Stub: real evaluation against the policy engine is not yet implemented.
+// Evaluates the given admission object (bare K8s object or full AdmissionReview)
+// against ONLY the picked policy's rules via policy.NewEvaluatorForPolicy.
 func (m *Manager) TestPolicy(c *gin.Context) {
-	c.JSON(http.StatusNotImplemented, gin.H{"error": "policy testing is not yet implemented"})
+	m.testPolicyImpl(c)
 }
 
 // ValidatePolicy handles POST /api/v1/policies/validate

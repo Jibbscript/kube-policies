@@ -1,0 +1,45 @@
+{{- if .Values.dashboard.enabled }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "kube-policies.fullname" . }}-dashboard
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kube-policies.labels" . | nindent 4 }}
+    app.kubernetes.io/component: dashboard
+---
+# Narrow Role: read-only access to policy-manager and admission-webhook Services only.
+# No access to CRDs, Secrets, or other namespace resources.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "kube-policies.fullname" . }}-dashboard
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kube-policies.labels" . | nindent 4 }}
+    app.kubernetes.io/component: dashboard
+rules:
+- apiGroups: [""]
+  resources: ["services"]
+  resourceNames:
+    - {{ include "kube-policies.fullname" . }}-policy-manager
+    - {{ include "kube-policies.fullname" . }}-admission-webhook
+  verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "kube-policies.fullname" . }}-dashboard
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kube-policies.labels" . | nindent 4 }}
+    app.kubernetes.io/component: dashboard
+subjects:
+- kind: ServiceAccount
+  name: {{ include "kube-policies.fullname" . }}-dashboard
+  namespace: {{ .Release.Namespace }}
+roleRef:
+  kind: Role
+  name: {{ include "kube-policies.fullname" . }}-dashboard
+  apiGroup: rbac.authorization.k8s.io
+{{- end }}

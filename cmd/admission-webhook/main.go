@@ -71,8 +71,18 @@ func main() {
 		log.Fatal("Failed to initialize policy engine", zap.Error(err))
 	}
 
+	// Initialize decision publisher (fire-and-forget forwarding to policy-manager).
+	// If POLICY_MANAGER_INTERNAL_TOKEN is empty the publisher is a no-op.
+	pmURL := os.Getenv("POLICY_MANAGER_INTERNAL_URL")
+	if pmURL == "" {
+		pmURL = "http://policy-manager:8080/api/v1/decisions/internal"
+	}
+	pmToken := os.Getenv("POLICY_MANAGER_INTERNAL_TOKEN")
+	publisher := admission.NewDecisionPublisher(pmURL, pmToken, log, metricsCollector)
+	defer publisher.Stop()
+
 	// Initialize admission controller
-	admissionController := admission.NewController(policyEngine, auditLogger, metricsCollector, log)
+	admissionController := admission.NewController(policyEngine, auditLogger, metricsCollector, log, publisher)
 
 	// Setup webhook server
 	webhookServer := setupWebhookServer(admissionController, log)

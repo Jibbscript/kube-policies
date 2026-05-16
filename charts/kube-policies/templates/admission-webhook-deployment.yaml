@@ -37,41 +37,56 @@ spec:
             {{- toYaml .Values.admissionWebhook.securityContext | nindent 12 }}
           image: "{{ .Values.global.imageRegistry | default .Values.admissionWebhook.image.registry }}/{{ .Values.admissionWebhook.image.repository }}:{{ .Values.admissionWebhook.image.tag | default .Chart.AppVersion }}"
           imagePullPolicy: {{ .Values.admissionWebhook.image.pullPolicy }}
+          # Probes target the metrics server (port 9090) where /healthz and
+          # /readyz are mounted. The webhook TLS port (8443) cannot serve a
+          # plain-HTTP probe, so containerPort `metrics` is the only safe
+          # target for httpGet.
+          args:
+            - --port=8443
+            - --metrics-port=9090
+            - --cert-path=/etc/certs/tls.crt
+            - --key-path=/etc/certs/tls.key
+            - --config=/etc/config/config.yaml
           ports:
             - name: webhook
               containerPort: 8443
               protocol: TCP
             - name: metrics
-              containerPort: 8080
+              containerPort: 9090
               protocol: TCP
           env:
-            - name: TLS_CERT_FILE
-              value: /etc/certs/tls.crt
-            - name: TLS_PRIVATE_KEY_FILE
-              value: /etc/certs/tls.key
-            - name: WEBHOOK_PORT
-              value: "8443"
-            - name: METRICS_PORT
-              value: "8080"
             - name: LOG_LEVEL
               value: "info"
             - name: POLICY_MANAGER_URL
               value: "http://{{ include "kube-policies.fullname" . }}-policy-manager:8080"
+            - name: POLICY_MANAGER_INTERNAL_URL
+              value: "http://{{ include "kube-policies.fullname" . }}-policy-manager:8080/api/v1/decisions/internal"
+            - name: POLICY_MANAGER_INTERNAL_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "kube-policies.fullname" . }}-internal-token
+                  key: token
+                  optional: true
           livenessProbe:
             httpGet:
               path: /healthz
-              port: 8080
+              port: metrics
               scheme: HTTP
-            initialDelaySeconds: 30
+            initialDelaySeconds: 15
             periodSeconds: 10
             timeoutSeconds: 5
             failureThreshold: 3
+          # /readyz is not registered on the admission-webhook metrics server
+          # (see cmd/admission-webhook/main.go::setupMetricsServer). Probe the
+          # /healthz endpoint that IS registered. Real readiness lives behind
+          # the TLS webhook server; that requires TLS-aware probing which a
+          # plain httpGet cannot do.
           readinessProbe:
             httpGet:
-              path: /readyz
-              port: 8080
+              path: /healthz
+              port: metrics
               scheme: HTTP
-            initialDelaySeconds: 5
+            initialDelaySeconds: 3
             periodSeconds: 5
             timeoutSeconds: 3
             failureThreshold: 3
@@ -86,6 +101,8 @@ spec:
               readOnly: true
             - name: tmp
               mountPath: /tmp
+            - name: audit-log
+              mountPath: /var/log/kube-policies
       volumes:
         - name: certs
           secret:
@@ -94,6 +111,13 @@ spec:
           configMap:
             name: {{ include "kube-policies.fullname" . }}-config
         - name: tmp
+          emptyDir: {}
+        # Writable mount for the audit file backend. readOnlyRootFilesystem
+        # blocks mkdir at /var/log/kube-policies on the pod's overlay; this
+        # emptyDir gives the audit logger a writable directory matching the
+        # default filename. For persistence beyond pod lifetime, replace
+        # with a PVC.
+        - name: audit-log
           emptyDir: {}
       {{- with .Values.admissionWebhook.nodeSelector }}
       nodeSelector:

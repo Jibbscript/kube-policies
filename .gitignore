@@ -58,3 +58,15 @@ helm-template-output.yaml
 
 # Helm
 charts/*.tgz
+
+# Dashboard build-time SPA copy — managed by `make build-dashboard`.
+# The .placeholder file is committed so //go:embed all:web_dist stays valid
+# before the first SPA build has run.
+cmd/dashboard/web_dist/*
+!cmd/dashboard/web_dist/.placeholder
+
+# Built SPA artifacts (T3 owns web/, dist is build output).
+web/dist/
+web/node_modules/
+web/playwright-report/
+web/test-results/
