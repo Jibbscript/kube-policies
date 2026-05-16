@@ -6,6 +6,7 @@ import (
 	"crypto/tls"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"testing"
 	"time"
@@ -23,6 +24,11 @@ import (
 	"k8s.io/client-go/rest"
 	"sigs.k8s.io/controller-runtime/pkg/envtest"
 )
+
+// webhookAddr is the address the suite probes and sends admission reviews to.
+// Tests skip themselves if no listener is reachable; the envtest control plane
+// alone is not enough — these tests target a live webhook deployment.
+const webhookAddr = "localhost:8443"
 
 type AdmissionWebhookIntegrationTestSuite struct {
 	suite.Suite
@@ -52,6 +58,24 @@ func (suite *AdmissionWebhookIntegrationTestSuite) SetupSuite() {
 	// Create Kubernetes client
 	suite.k8sClient, err = kubernetes.NewForConfig(suite.cfg)
 	require.NoError(suite.T(), err)
+
+	// The validating/mutating webhook is expected to be running externally
+	// (deploy via Helm before running this suite). If the port is not
+	// reachable, skip the whole suite cleanly rather than letting every
+	// test fail with a `connection refused` and — for the concurrent
+	// suite — deadlock its result channel.
+	if err := probeWebhook(webhookAddr); err != nil {
+		suite.T().Skipf("webhook %s unreachable: %v — run `make deploy-webhook` first", webhookAddr, err)
+	}
+}
+
+// probeWebhook returns nil if a TCP listener answers on addr within 500ms.
+func probeWebhook(addr string) error {
+	conn, err := net.DialTimeout("tcp", addr, 500*time.Millisecond)
+	if err != nil {
+		return err
+	}
+	return conn.Close()
 }
 
 func (suite *AdmissionWebhookIntegrationTestSuite) TearDownSuite() {
@@ -485,7 +509,10 @@ func (suite *AdmissionWebhookIntegrationTestSuite) TestAdmissionWebhook_Concurre
 	numRequestsPerGoroutine := 10
 	results := make(chan bool, numGoroutines*numRequestsPerGoroutine)
 
-	// Launch concurrent requests
+	// Launch concurrent requests. The goroutine MUST write exactly
+	// numRequestsPerGoroutine results, otherwise the collector loop below
+	// deadlocks — that means handling request errors locally instead of
+	// `require.X`, which calls runtime.Goexit and skips the channel send.
 	for i := 0; i < numGoroutines; i++ {
 		go func(id int) {
 			for j := 0; j < numRequestsPerGoroutine; j++ {
@@ -512,13 +539,18 @@ func (suite *AdmissionWebhookIntegrationTestSuite) TestAdmissionWebhook_Concurre
 					Request: admissionReq,
 				}
 
-				response := suite.sendAdmissionRequest(admissionReview, "/validate")
+				response, err := suite.trySendAdmissionRequest(admissionReview, "/validate")
+				if err != nil {
+					suite.T().Logf("concurrent request (%d,%d) failed: %v", id, j, err)
+					results <- false
+					continue
+				}
 				results <- response.Response.Allowed
 			}
 		}(i)
 	}
 
-	// Collect results
+	// Collect results — bounded by the goroutines' write contract above.
 	successCount := 0
 	for i := 0; i < numGoroutines*numRequestsPerGoroutine; i++ {
 		if <-results {
@@ -530,12 +562,24 @@ func (suite *AdmissionWebhookIntegrationTestSuite) TestAdmissionWebhook_Concurre
 	assert.Equal(suite.T(), numGoroutines*numRequestsPerGoroutine, successCount)
 }
 
+// sendAdmissionRequest is the assertion-on-failure wrapper used by sequential
+// tests. For concurrent callers use trySendAdmissionRequest — require.X here
+// invokes runtime.Goexit and would skip the spawning goroutine's channel send.
 func (suite *AdmissionWebhookIntegrationTestSuite) sendAdmissionRequest(admissionReview *admissionv1.AdmissionReview, endpoint string) *admissionv1.AdmissionReview {
-	// Marshal admission review
-	reqBody, err := json.Marshal(admissionReview)
+	resp, err := suite.trySendAdmissionRequest(admissionReview, endpoint)
 	require.NoError(suite.T(), err)
+	return resp
+}
 
-	// Create HTTP client with TLS config
+// trySendAdmissionRequest is the error-returning variant safe to call from
+// goroutines. Returns a wrapped error for any marshal, transport, or decode
+// failure so callers can react without aborting the parent test.
+func (suite *AdmissionWebhookIntegrationTestSuite) trySendAdmissionRequest(admissionReview *admissionv1.AdmissionReview, endpoint string) (*admissionv1.AdmissionReview, error) {
+	reqBody, err := json.Marshal(admissionReview)
+	if err != nil {
+		return nil, fmt.Errorf("marshal admission review: %w", err)
+	}
+
 	tr := &http.Transport{
 		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
 	}
@@ -544,23 +588,24 @@ func (suite *AdmissionWebhookIntegrationTestSuite) sendAdmissionRequest(admissio
 		Timeout:   10 * time.Second,
 	}
 
-	// Send request to webhook (assuming webhook is running on localhost:8443)
-	webhookURL := fmt.Sprintf("https://localhost:8443%s", endpoint)
-	req, err := http.NewRequest("POST", webhookURL, bytes.NewReader(reqBody))
-	require.NoError(suite.T(), err)
-
+	webhookURL := fmt.Sprintf("https://%s%s", webhookAddr, endpoint)
+	req, err := http.NewRequestWithContext(suite.ctx, http.MethodPost, webhookURL, bytes.NewReader(reqBody))
+	if err != nil {
+		return nil, fmt.Errorf("build request: %w", err)
+	}
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := client.Do(req)
-	require.NoError(suite.T(), err)
+	if err != nil {
+		return nil, fmt.Errorf("post to webhook: %w", err)
+	}
 	defer resp.Body.Close()
 
-	// Parse response
 	var responseReview admissionv1.AdmissionReview
-	err = json.NewDecoder(resp.Body).Decode(&responseReview)
-	require.NoError(suite.T(), err)
-
-	return &responseReview
+	if err := json.NewDecoder(resp.Body).Decode(&responseReview); err != nil {
+		return nil, fmt.Errorf("decode response: %w", err)
+	}
+	return &responseReview, nil
 }
 
 func TestAdmissionWebhookIntegrationTestSuite(t *testing.T) {
