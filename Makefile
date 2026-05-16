@@ -249,8 +249,12 @@ security: ## Run security scans
 		echo "$(YELLOW)govulncheck not installed, skipping vulnerability check$(NC)"; \
 	fi
 
+.PHONY: check-logger-wiring
+check-logger-wiring: ## Verify no direct .SetLogger or ctrl-runtime/klog imports outside pkg/logger/
+	bash scripts/check-logger-wiring.sh
+
 .PHONY: check
-check: lint vet security ## Run all quality checks
+check: lint vet security check-logger-wiring ## Run all quality checks
 
 # Helm targets
 .PHONY: helm-lint

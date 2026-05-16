@@ -46,7 +46,11 @@ func main() {
 	flag.Parse()
 
 	// Initialize logger
-	log := logger.NewLogger("policy-manager", "info")
+	log := logger.NewLoggerFromEnv("policy-manager")
+	// Wire controller-runtime/klog to our zap pipeline BEFORE ctrl.GetConfig
+	// (line ~127) so manager init and any client-go reflector chatter route
+	// through the same JSON stream as the rest of this binary.
+	logger.SetControllerRuntimeLogger(log)
 	defer func() { _ = log.Sync() }()
 
 	log.Info("policy-manager starting",

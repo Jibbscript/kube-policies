@@ -53,7 +53,11 @@ func main() {
 	flag.Parse()
 
 	// Initialize logger
-	log := logger.NewLogger("admission-webhook", "info")
+	log := logger.NewLoggerFromEnv("admission-webhook")
+	// Wire controller-runtime/klog to our zap pipeline BEFORE ctrl.GetConfig
+	// (line ~137) so manager init and any client-go reflector chatter route
+	// through the same JSON stream as the rest of this binary.
+	logger.SetControllerRuntimeLogger(log)
 	defer func() { _ = log.Sync() }()
 
 	log.Info("admission-webhook starting",

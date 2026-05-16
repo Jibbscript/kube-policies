@@ -1,10 +1,23 @@
 package logger
 
 import (
+	"fmt"
 	"os"
+	"runtime"
+	"sync"
 
+	"github.com/go-logr/zapr"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
+	"k8s.io/klog/v2"
+	ctrlruntimelog "sigs.k8s.io/controller-runtime/pkg/log"
+)
+
+// Package-level state for SetControllerRuntimeLogger idempotency guard.
+var (
+	ctrlLogMu          sync.Mutex
+	ctrlLogFirst       *zap.Logger
+	ctrlLogFirstCaller string
 )
 
 // NewLogger creates a new structured logger
@@ -86,4 +99,50 @@ func NewLoggerFromEnv(service string) *zap.Logger {
 	}
 
 	return NewLogger(service, level)
+}
+
+// SetControllerRuntimeLogger wires the global controller-runtime and klog v2
+// loggers to route through the supplied zap logger via go-logr/zapr. Call this
+// once from main() AFTER constructing the zap logger and BEFORE any
+// controller-runtime / client-go / klog code path runs (otherwise
+// controller-runtime emits "[controller-runtime] log.SetLogger(...) was never
+// called; logs will not be displayed" and routes everything to a no-op).
+//
+// Idempotent for repeat calls with the SAME *zap.Logger pointer (silent
+// no-op). Panics on a second call with a DIFFERENT pointer, naming both
+// call sites — the genuine misuse case (two binaries fighting over the
+// global root) must fail loud at boot.
+//
+// Note on JSON keys: zapr adds additive structured fields to log lines
+// originating from controller-runtime (controller, reconciler group/kind,
+// name, namespace). The base schema documented in NewLogger above
+// (timestamp/level/caller/message/stacktrace/service) is preserved.
+func SetControllerRuntimeLogger(log *zap.Logger) {
+	ctrlLogMu.Lock()
+	defer ctrlLogMu.Unlock()
+
+	if ctrlLogFirst == nil {
+		// First call: record caller, wire both global loggers.
+		_, file, line, _ := runtime.Caller(1)
+		ctrlLogFirstCaller = fmt.Sprintf("%s:%d", file, line)
+		ctrlLogFirst = log
+
+		zlogr := zapr.NewLogger(log)
+		ctrlruntimelog.SetLogger(zlogr)
+		klog.SetLogger(zlogr)
+		return
+	}
+
+	if ctrlLogFirst == log {
+		// Same pointer — silent no-op.
+		return
+	}
+
+	// Different pointer — fail loud with both call sites named.
+	_, file, line, _ := runtime.Caller(1)
+	secondCaller := fmt.Sprintf("%s:%d", file, line)
+	panic(fmt.Sprintf(
+		"logger.SetControllerRuntimeLogger: already wired from %s with a different *zap.Logger; second call from %s",
+		ctrlLogFirstCaller, secondCaller,
+	))
 }

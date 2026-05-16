@@ -30,7 +30,11 @@ var (
 func main() {
 	flag.Parse()
 
-	log := logger.NewLogger("dashboard", "info")
+	log := logger.NewLoggerFromEnv("dashboard")
+	// Defensive no-op today (Dashboard does not import controller-runtime).
+	// Future informer-driven features benefit immediately and stay consistent
+	// with the other two Operator binaries.
+	logger.SetControllerRuntimeLogger(log)
 	defer func() { _ = log.Sync() }()
 
 	log.Info("dashboard starting",

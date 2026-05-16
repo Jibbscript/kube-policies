@@ -111,6 +111,10 @@ func StartControllers(ctx context.Context, cfg *rest.Config, log *zap.Logger, op
 	// suites in the same `go test` binary) each spin up a reconciler with
 	// the canonical "policy"/"policyexception" name.
 	skipNameValidation := true
+	// Root logger is wired in cmd/*/main.go via logger.SetControllerRuntimeLogger;
+	// we deliberately do NOT call ctrl.SetLogger from here so library callers
+	// retain control of global state and integration tests can mount this manager
+	// multiple times under a single shared wiring established in TestMain.
 	mgr, err := manager.New(cfg, manager.Options{
 		Scheme: scheme,
 		// The calling binary (policy-manager or admission-webhook) already

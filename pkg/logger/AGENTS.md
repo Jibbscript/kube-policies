@@ -33,4 +33,31 @@ Factory functions for zap-based structured loggers. Provides production (JSON, I
 - `go.uber.org/zap`
 - `go.uber.org/zap/zapcore`
 
+## Controller-runtime / klog bridge
+
+`SetControllerRuntimeLogger(*zap.Logger)` wires the global `sigs.k8s.io/controller-runtime/pkg/log` and `k8s.io/klog/v2` loggers to route through the supplied zap logger via `go-logr/zapr`. Call once from each binary's `main()` after constructing the zap logger and before any controller-runtime / client-go code path runs.
+
+### Idempotency contract
+- Same `*zap.Logger` pointer on repeat: silent no-op.
+- Different `*zap.Logger` pointer on repeat: panic, naming both call sites. (Loud-at-boot for the genuine misuse case.)
+
+### V-level mapping (controller-runtime / klog -> zap)
+| `LOG_LEVEL` | What you see from controller-runtime / klog |
+|-------------|----------------------------------------------|
+| `info` (default) | INFO from reconcilers, WARN/ERROR from reconcile failures, leader-election transitions. No V(1+) reflector chatter. |
+| `debug` | Above + V(1)+ chatter: watch event details, list-and-watch lifecycle, lease renewals every ~10s. |
+| `warn`/`error` | Suppresses INFO from controller startup; ERROR still appears. |
+
+### Additive zapr JSON keys
+zapr decorates controller-runtime-originated log lines with additive structured fields: `controller`, `reconciler group`, `reconciler kind`, `name`, `namespace`. The base schema (`timestamp`, `level`, `caller`, `message`, `stacktrace`, `service`) is preserved.
+
+### main() pattern
+All three binaries (`cmd/admission-webhook`, `cmd/policy-manager`, `cmd/dashboard`) use this pattern:
+```go
+log := logger.NewLoggerFromEnv("svc-name")
+logger.SetControllerRuntimeLogger(log)
+defer func() { _ = log.Sync() }()
+```
+Note: `NewLoggerFromEnv` replaced earlier hard-coded `NewLogger("svc", "info")` calls so the `LOG_LEVEL` env in pod specs actually takes effect.
+
 <!-- MANUAL: -->

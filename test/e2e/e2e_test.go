@@ -1,7 +1,10 @@
 package e2e
 
 import (
+	"encoding/json"
 	"fmt"
+	"io"
+	"strings"
 	"testing"
 	"time"
 
@@ -594,3 +597,78 @@ func TestE2E(t *testing.T) {
 	gomega.RegisterFailHandler(ginkgo.Fail)
 	ginkgo.RunSpecs(t, "Kube-Policies E2E Test Suite")
 }
+
+// operatorNamespace is the namespace where the Operator pods run.
+const operatorNamespace = "kube-policies-system"
+
+// getOperatorPodLogs returns the last 500 log lines from the first running pod
+// whose name contains the given component string in the operator namespace.
+// Fails the spec if no matching running pod is found.
+func getOperatorPodLogs(f *framework.Framework, component string) string {
+	pods, err := f.ClientSet.CoreV1().Pods(operatorNamespace).List(
+		f.Context, metav1.ListOptions{})
+	gomega.Expect(err).NotTo(gomega.HaveOccurred(),
+		"listing pods in namespace %s", operatorNamespace)
+
+	for i := range pods.Items {
+		pod := &pods.Items[i]
+		if !strings.Contains(pod.Name, component) {
+			continue
+		}
+		if pod.Status.Phase != corev1.PodRunning {
+			continue
+		}
+		tail := int64(500)
+		req := f.ClientSet.CoreV1().Pods(operatorNamespace).GetLogs(pod.Name, &corev1.PodLogOptions{
+			TailLines: &tail,
+		})
+		stream, streamErr := req.Stream(f.Context)
+		gomega.Expect(streamErr).NotTo(gomega.HaveOccurred(),
+			"streaming logs from pod %s", pod.Name)
+		defer stream.Close() //nolint:gocritic // intentional: one defer per found pod
+
+		var buf strings.Builder
+		_, copyErr := io.Copy(&buf, stream)
+		gomega.Expect(copyErr).NotTo(gomega.HaveOccurred())
+		return buf.String()
+	}
+
+	ginkgo.Fail(fmt.Sprintf("no running pod found for component %q in namespace %s", component, operatorNamespace))
+	return ""
+}
+
+var _ = ginkgo.Describe("Controller-runtime logger wiring", func() {
+	f := framework.NewFramework("logger-wiring")
+
+	ginkgo.It("Operator pods emit JSON logs and never warn about SetLogger", func() {
+		const setLoggerWarning = "[controller-runtime] log.SetLogger(...) was never called; logs will not be displayed"
+
+		for _, component := range []string{"admission-webhook", "policy-manager"} {
+			podLogs := getOperatorPodLogs(f, component)
+
+			gomega.Expect(podLogs).NotTo(
+				gomega.ContainSubstring(setLoggerWarning),
+				"%s pod should not emit the controller-runtime SetLogger warning", component,
+			)
+
+			// Parse at least one JSON line per pod and assert service+caller.
+			sawJSON := false
+			for _, line := range strings.Split(podLogs, "\n") {
+				line = strings.TrimSpace(line)
+				if line == "" {
+					continue
+				}
+				var rec map[string]any
+				if err := json.Unmarshal([]byte(line), &rec); err != nil {
+					continue
+				}
+				if rec["service"] != nil && rec["caller"] != nil {
+					sawJSON = true
+					break
+				}
+			}
+			gomega.Expect(sawJSON).To(gomega.BeTrue(),
+				"%s pod did not emit any JSON log line with service+caller", component)
+		}
+	})
+})
