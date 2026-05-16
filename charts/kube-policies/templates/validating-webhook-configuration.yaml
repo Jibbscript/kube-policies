@@ -1,0 +1,63 @@
+{{- if .Values.admissionWebhook.enabled }}
+{{- /*
+ValidatingWebhookConfiguration — registers the kube-policies admission
+webhook with the API server so /validate is called on Pod create/update.
+
+caBundle:
+  Resolved via `lookup` against the in-cluster Secret
+  `<release>-admission-webhook-certs` (created by
+  scripts/gen-webhook-cert.sh in the demo flow, or by cert-manager in
+  production). The Secret MUST contain a `ca.crt` key — the CA that
+  signed the webhook's leaf cert. On `helm template` (no cluster)
+  lookup returns nothing and caBundle renders empty; the operator is
+  expected to create the Secret before installing the chart (see
+  Makefile demo-up [4/6]).
+
+failurePolicy:
+  Default `Fail`. The namespaceSelector below excludes kube-system,
+  kube-public, kube-node-lease, local-path-storage, and the release
+  namespace itself so failurePolicy=Fail cannot break cluster
+  bootstrap or self-host the chart's own pods.
+*/ -}}
+{{- $secretName := printf "%s-admission-webhook-certs" (include "kube-policies.fullname" .) -}}
+{{- $secret := lookup "v1" "Secret" .Release.Namespace $secretName -}}
+{{- $caBundle := "" -}}
+{{- if and $secret $secret.data -}}
+  {{- $caBundle = index $secret.data "ca.crt" | default "" -}}
+{{- end -}}
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingWebhookConfiguration
+metadata:
+  name: {{ include "kube-policies.fullname" . }}-validating-webhook
+  labels:
+    {{- include "kube-policies.labels" . | nindent 4 }}
+webhooks:
+  - name: validate.kube-policies.io
+    admissionReviewVersions: ["v1"]
+    sideEffects: None
+    failurePolicy: {{ .Values.admissionWebhook.webhook.failurePolicy | default "Fail" }}
+    timeoutSeconds: {{ .Values.admissionWebhook.webhook.timeoutSeconds | default 10 }}
+    clientConfig:
+      service:
+        name: {{ include "kube-policies.fullname" . }}-admission-webhook
+        namespace: {{ .Release.Namespace }}
+        path: /validate
+        port: 8443
+      caBundle: {{ $caBundle | quote }}
+    rules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["pods"]
+        scope: "Namespaced"
+    namespaceSelector:
+      matchExpressions:
+        - key: kubernetes.io/metadata.name
+          operator: NotIn
+          values:
+            - kube-system
+            - kube-public
+            - kube-node-lease
+            - local-path-storage
+            - {{ .Release.Namespace }}
+{{- end }}
