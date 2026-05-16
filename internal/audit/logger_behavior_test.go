@@ -9,11 +9,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Jibbscript/kube-policies/internal/config"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	authenticationv1 "k8s.io/api/authentication/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
+	"github.com/Jibbscript/kube-policies/internal/config"
 )
 
 // captureStdout swaps os.Stdout for a pipe, runs fn, then returns whatever fn wrote.

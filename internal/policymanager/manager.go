@@ -7,12 +7,13 @@ import (
 	"sync"
 	"time"
 
-	"github.com/Jibbscript/kube-policies/internal/audit"
-	"github.com/Jibbscript/kube-policies/internal/config"
-	"github.com/Jibbscript/kube-policies/internal/policy"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"go.uber.org/zap"
+
+	"github.com/Jibbscript/kube-policies/internal/audit"
+	"github.com/Jibbscript/kube-policies/internal/config"
+	"github.com/Jibbscript/kube-policies/internal/policy"
 )
 
 // Manager handles policy management operations
@@ -159,6 +160,7 @@ func (m *Manager) Start(ctx context.Context) {
 	go m.monitorExceptions(ctx)
 
 	<-ctx.Done()
+	m.cancel() // release the manager-owned context the constructor created
 	m.bus.Close()
 	m.logger.Info("Policy manager stopped")
 }

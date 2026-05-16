@@ -11,15 +11,16 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/Jibbscript/kube-policies/internal/admission"
-	"github.com/Jibbscript/kube-policies/internal/config"
-	"github.com/Jibbscript/kube-policies/internal/metrics"
-	"github.com/Jibbscript/kube-policies/internal/policy"
-	"github.com/Jibbscript/kube-policies/internal/audit"
-	"github.com/Jibbscript/kube-policies/pkg/logger"
 	"github.com/gin-gonic/gin"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"go.uber.org/zap"
+
+	"github.com/Jibbscript/kube-policies/internal/admission"
+	"github.com/Jibbscript/kube-policies/internal/audit"
+	"github.com/Jibbscript/kube-policies/internal/config"
+	"github.com/Jibbscript/kube-policies/internal/metrics"
+	"github.com/Jibbscript/kube-policies/internal/policy"
+	"github.com/Jibbscript/kube-policies/pkg/logger"
 )
 
 var (
@@ -39,7 +40,7 @@ func main() {
 
 	// Initialize logger
 	log := logger.NewLogger("admission-webhook", "info")
-	defer log.Sync()
+	defer func() { _ = log.Sync() }()
 
 	log.Info("admission-webhook starting",
 		zap.String("version", version),
@@ -167,9 +168,9 @@ func setupWebhookServer(controller *admission.Controller, log *zap.Logger) *http
 func setupMetricsServer() *http.Server {
 	mux := http.NewServeMux()
 	mux.Handle("/metrics", promhttp.Handler())
-	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("OK"))
+		_, _ = w.Write([]byte("OK"))
 	})
 
 	server := &http.Server{

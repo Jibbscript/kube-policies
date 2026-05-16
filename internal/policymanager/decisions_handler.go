@@ -7,8 +7,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Jibbscript/kube-policies/internal/audit"
 	"github.com/gin-gonic/gin"
+
+	"github.com/Jibbscript/kube-policies/internal/audit"
 )
 
 // IngestInternal handles POST /api/v1/decisions/internal.
@@ -104,7 +105,7 @@ func (m *Manager) StreamDecisions(c *gin.Context) {
 // RecentDecisions handles GET /api/v1/decisions/recent?limit=N.
 //
 // Returns {"decisions":[...], "degraded": bool}. degraded is true when the
-// ring is empty, signalling to the SPA that no events have been published yet.
+// ring is empty, signaling to the SPA that no events have been published yet.
 // Default limit 20, max 100. Matches the dashboard's /api/decisions/recent shape.
 func (m *Manager) RecentDecisions(c *gin.Context) {
 	limit := 20

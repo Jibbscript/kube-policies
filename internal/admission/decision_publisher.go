@@ -2,14 +2,16 @@ package admission
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"sync"
 	"time"
 
-	"github.com/Jibbscript/kube-policies/internal/audit"
 	"go.uber.org/zap"
+
+	"github.com/Jibbscript/kube-policies/internal/audit"
 )
 
 const defaultPublisherBufSize = 256
@@ -119,13 +121,17 @@ func (p *DecisionPublisher) dispatch() {
 
 // post marshals ev to JSON and POSTs it to p.url with a Bearer token header.
 // Returns an error on marshal failure, HTTP transport errors, or non-2xx status.
+// The per-request context bounds the dial+send to the client timeout so a hung
+// upstream cannot park the dispatcher goroutine indefinitely.
 func (p *DecisionPublisher) post(ev audit.PublicEvent) error {
 	body, err := json.Marshal(ev)
 	if err != nil {
 		return fmt.Errorf("marshal: %w", err)
 	}
 
-	req, err := http.NewRequest(http.MethodPost, p.url, bytes.NewReader(body))
+	ctx, cancel := context.WithTimeout(context.Background(), p.client.Timeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, p.url, bytes.NewReader(body))
 	if err != nil {
 		return fmt.Errorf("new request: %w", err)
 	}

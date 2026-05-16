@@ -6,15 +6,15 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sync"
 	"time"
 
-	"github.com/Jibbscript/kube-policies/internal/config"
-	"github.com/Jibbscript/kube-policies/internal/policy"
 	"go.uber.org/zap"
 	authenticationv1 "k8s.io/api/authentication/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+
+	"github.com/Jibbscript/kube-policies/internal/config"
+	"github.com/Jibbscript/kube-policies/internal/policy"
 )
 
 // Metrics is the minimal metrics surface the audit logger uses.
@@ -36,7 +36,6 @@ type Logger struct {
 	config  *config.AuditConfig
 	backend Backend
 	buffer  chan *Event
-	mutex   sync.RWMutex
 	ctx     context.Context
 	cancel  context.CancelFunc
 	logger  *zap.Logger
@@ -330,12 +329,13 @@ func NewFileBackend(config *config.AuditConfig) (*FileBackend, error) {
 		filename = "/var/log/kube-policies/audit.log"
 	}
 
-	// Create the directory of the actual filename — not a hardcoded path.
-	if err := os.MkdirAll(filepath.Dir(filename), 0755); err != nil {
+	// Audit logs can contain sensitive request context, so the directory and
+	// file are created with restrictive perms: 0750 dir, 0600 file.
+	if err := os.MkdirAll(filepath.Dir(filename), 0o750); err != nil {
 		return nil, fmt.Errorf("failed to create log directory: %w", err)
 	}
 
-	file, err := os.OpenFile(filename, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	file, err := os.OpenFile(filename, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open audit log file: %w", err)
 	}

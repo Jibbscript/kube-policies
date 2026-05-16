@@ -7,13 +7,14 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/Jibbscript/kube-policies/internal/metrics"
-	"github.com/Jibbscript/kube-policies/internal/policy"
-	"github.com/Jibbscript/kube-policies/internal/audit"
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
 	admissionv1 "k8s.io/api/admission/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
+	"github.com/Jibbscript/kube-policies/internal/audit"
+	"github.com/Jibbscript/kube-policies/internal/metrics"
+	"github.com/Jibbscript/kube-policies/internal/policy"
 )
 
 // Controller handles admission webhook requests
@@ -82,7 +83,6 @@ func (c *Controller) ValidateHandler(ctx *gin.Context) {
 		AdmissionRequest: req,
 		Operation:        "validate",
 	})
-
 	if err != nil {
 		c.logger.Error("Policy evaluation failed",
 			zap.Error(err),
@@ -192,7 +192,6 @@ func (c *Controller) MutateHandler(ctx *gin.Context) {
 		AdmissionRequest: req,
 		Operation:        "mutate",
 	})
-
 	if err != nil {
 		c.logger.Error("Policy evaluation failed",
 			zap.Error(err),

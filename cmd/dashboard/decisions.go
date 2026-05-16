@@ -11,9 +11,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/Jibbscript/kube-policies/internal/audit"
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
+
+	"github.com/Jibbscript/kube-policies/internal/audit"
 )
 
 // PublicEvent is the strict-whitelist DTO defined in internal/audit. The
@@ -233,13 +234,6 @@ func (h *streamHub) sendOne(ch chan PublicEvent, ev PublicEvent) {
 			)
 		}
 	}
-}
-
-// numSubs returns the current subscriber count. Used in tests.
-func (h *streamHub) numSubs() int {
-	h.mu.RLock()
-	defer h.mu.RUnlock()
-	return len(h.subs)
 }
 
 // streamHandler manages a single upstream SSE subscription and fans out to N

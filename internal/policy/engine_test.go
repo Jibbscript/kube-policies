@@ -3,10 +3,11 @@ package policy
 import (
 	"testing"
 
-	"github.com/Jibbscript/kube-policies/internal/config"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
+
+	"github.com/Jibbscript/kube-policies/internal/config"
 )
 
 func TestNewEngine(t *testing.T) {
@@ -42,6 +43,8 @@ func TestPolicy_Structure(t *testing.T) {
 
 	assert.Equal(t, "test-policy", policy.ID)
 	assert.Equal(t, "Test Policy", policy.Name)
+	assert.Equal(t, "A test policy", policy.Description)
+	assert.Equal(t, "1.0", policy.Version)
 	assert.True(t, policy.Enabled)
 	assert.Len(t, policy.Rules, 1)
 	assert.Equal(t, "rule-1", policy.Rules[0].ID)

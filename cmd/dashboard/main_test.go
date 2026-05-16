@@ -533,9 +533,9 @@ func TestStreamHandler_OneUpstreamConnection(t *testing.T) {
 	wg.Wait()
 }
 
-// TestStreamHandler_BrowserDisconnect verifies that cancelling a browser
+// TestStreamHandler_BrowserDisconnect verifies that canceling a browser
 // request context cleans up the per-browser goroutine without leaking.
-// The upstream subscriber context is also cancelled before the final goroutine
+// The upstream subscriber context is also canceled before the final goroutine
 // count so the subscriber and its upstream HTTP connection both exit cleanly,
 // making the assertion stable across platforms.
 func TestStreamHandler_BrowserDisconnect(t *testing.T) {

@@ -1,8 +1,8 @@
 package policymanager
 
 import (
-	"bytes"
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"net/http"
@@ -11,10 +11,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Jibbscript/kube-policies/internal/audit"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/Jibbscript/kube-policies/internal/audit"
 )
 
 // init() for gin.TestMode is already declared in test_handler_test.go.

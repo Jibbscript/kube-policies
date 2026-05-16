@@ -1,9 +1,10 @@
 package policy
 
 import (
-	"github.com/Jibbscript/kube-policies/internal/config"
 	"github.com/open-policy-agent/opa/storage/inmem"
 	"go.uber.org/zap"
+
+	"github.com/Jibbscript/kube-policies/internal/config"
 )
 
 // NewEvaluatorForPolicy constructs an Engine scoped strictly to the given

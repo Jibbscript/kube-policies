@@ -8,8 +8,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Jibbscript/kube-policies/internal/config"
-	"github.com/Jibbscript/kube-policies/internal/policy"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -18,6 +16,9 @@ import (
 	authenticationv1 "k8s.io/api/authentication/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+
+	"github.com/Jibbscript/kube-policies/internal/config"
+	"github.com/Jibbscript/kube-policies/internal/policy"
 )
 
 func init() {

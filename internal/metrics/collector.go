@@ -220,17 +220,17 @@ func (c *Collector) IncWebhookDecisionPublishDropped() {
 // GetMetrics returns all metrics for testing or inspection
 func (c *Collector) GetMetrics() map[string]prometheus.Collector {
 	return map[string]prometheus.Collector{
-		"admission_requests":    c.admissionRequests,
-		"evaluation_duration":   c.evaluationDuration,
-		"policy_evaluations":    c.policyEvaluations,
-		"policies_loaded":       c.policiesLoaded,
-		"policy_updates":        c.policyUpdates,
-		"system_errors":         c.systemErrors,
-		"cache_hits":            c.cacheHits,
-		"audit_events":          c.auditEvents,
-		"audit_buffer_size":     c.auditBufferSize,
-		"compliance_violations":              c.complianceViolations,
-		"compliance_reports":                 c.complianceReports,
-		"webhook_decision_publish_dropped":   c.webhookDecisionPublishDropped,
+		"admission_requests":               c.admissionRequests,
+		"evaluation_duration":              c.evaluationDuration,
+		"policy_evaluations":               c.policyEvaluations,
+		"policies_loaded":                  c.policiesLoaded,
+		"policy_updates":                   c.policyUpdates,
+		"system_errors":                    c.systemErrors,
+		"cache_hits":                       c.cacheHits,
+		"audit_events":                     c.auditEvents,
+		"audit_buffer_size":                c.auditBufferSize,
+		"compliance_violations":            c.complianceViolations,
+		"compliance_reports":               c.complianceReports,
+		"webhook_decision_publish_dropped": c.webhookDecisionPublishDropped,
 	}
 }

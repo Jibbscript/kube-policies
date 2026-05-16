@@ -203,13 +203,21 @@ func (f *Framework) WaitForPolicyActive(policyName, policyNamespace string, time
 			return false, err
 		}
 
+		// Polling: treat "not yet populated" as keep-polling rather than fatal.
+		// Surface real decoding errors so a malformed status doesn't loop forever.
 		status, found, err := unstructured.NestedMap(policy.Object, "status")
-		if err != nil || !found {
+		if err != nil {
+			return false, err
+		}
+		if !found {
 			return false, nil
 		}
 
 		phase, found, err := unstructured.NestedString(status, "phase")
-		if err != nil || !found {
+		if err != nil {
+			return false, err
+		}
+		if !found {
 			return false, nil
 		}
 

@@ -8,8 +8,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Jibbscript/kube-policies/internal/audit"
 	"go.uber.org/zap"
+
+	"github.com/Jibbscript/kube-policies/internal/audit"
 )
 
 // fakePublisherMetrics implements publisherMetrics for testing without importing
@@ -83,7 +84,7 @@ func TestDecisionPublisher_HappyPath(t *testing.T) {
 // the metrics counter incremented) when the dispatcher is busy and the buffer
 // is full.
 func TestDecisionPublisher_DropOnFullBuffer(t *testing.T) {
-	// serverReady is signalled by the first request handler to indicate the
+	// serverReady is signaled by the first request handler to indicate the
 	// dispatcher goroutine is now blocked inside the HTTP call.
 	serverReady := make(chan struct{}, 1)
 	blocked := make(chan struct{}) // close to unblock the server handler

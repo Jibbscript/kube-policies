@@ -225,4 +225,3 @@ func validateConfig(config *Config) error {
 
 	return nil
 }
-

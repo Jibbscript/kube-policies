@@ -83,7 +83,7 @@ func TestBus_CancelClosesChannelOtherUnaffected(t *testing.T) {
 			t.Errorf("ch2: want ALLOW, got %q", ev.Decision)
 		}
 	case <-time.After(time.Second):
-		t.Fatal("timeout: ch2 did not receive after ch1 was cancelled")
+		t.Fatal("timeout: ch2 did not receive after ch1 was canceled")
 	}
 
 	if b.NumSubscribers() != 1 {
@@ -164,7 +164,7 @@ func TestBus_NumSubscribers(t *testing.T) {
 
 	cancel2()
 	if n := b.NumSubscribers(); n != 0 {
-		t.Errorf("want 0 subscribers after all cancelled, got %d", n)
+		t.Errorf("want 0 subscribers after all canceled, got %d", n)
 	}
 }
 

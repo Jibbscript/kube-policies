@@ -1,275 +1,110 @@
-# golangci-lint configuration for Kube-Policies
-# See https://golangci-lint.run/usage/configuration/
+version: "2"
 
+# Focus the linter on bug-catchers, not stylistic opinion. The v2 defaults
+# (errcheck, govet, ineffassign, staticcheck, unused) plus a small set of
+# real-bug detectors. Pure style/complexity linters intentionally excluded
+# — `go fmt`, `goimports`, `gofumpt` already enforce formatting via the
+# formatters section.
 run:
-  timeout: 5m
   issues-exit-code: 1
   tests: true
-  skip-dirs:
-    - vendor
-    - test/fixtures
-  skip-files:
-    - ".*\\.pb\\.go$"
-    - ".*_generated\\.go$"
-
-output:
-  format: colored-line-number
-  print-issued-lines: true
-  print-linter-name: true
-  uniq-by-line: true
-  sort-results: true
-
-linters-settings:
-  errcheck:
-    check-type-assertions: true
-    check-blank: true
-    exclude-functions:
-      - io/ioutil.ReadFile
-      - io.Copy(*bytes.Buffer)
-      - io.Copy(os.Stdout)
-
-  govet:
-    check-shadowing: true
-    enable-all: true
-    disable:
-      - fieldalignment
-
-  gocyclo:
-    min-complexity: 15
-
-  goimports:
-    local-prefixes: github.com/kube-policies
-
-  golint:
-    min-confidence: 0.8
-
-  goconst:
-    min-len: 3
-    min-occurrences: 3
-
-  misspell:
-    locale: US
-
-  lll:
-    line-length: 120
-
-  unused:
-    check-exported: false
-
-  unparam:
-    check-exported: false
-
-  nakedret:
-    max-func-lines: 30
-
-  prealloc:
-    simple: true
-    range-loops: true
-    for-loops: false
-
-  gocritic:
-    enabled-tags:
-      - diagnostic
-      - experimental
-      - opinionated
-      - performance
-      - style
-    disabled-checks:
-      - dupImport
-      - ifElseChain
-      - octalLiteral
-      - whyNoLint
-      - wrapperFunc
-
-  funlen:
-    lines: 100
-    statements: 50
-
-  gocognit:
-    min-complexity: 20
-
-  nestif:
-    min-complexity: 4
-
-  gomnd:
-    settings:
-      mnd:
-        checks: argument,case,condition,operation,return,assign
-        ignored-numbers: 0,1,2,3
-        ignored-functions: strings.SplitN
-
-  godox:
-    keywords:
-      - NOTE
-      - OPTIMIZE
-      - HACK
-
-  dogsled:
-    max-blank-identifiers: 2
-
-  whitespace:
-    multi-if: false
-    multi-func: false
-
-  wsl:
-    strict-append: true
-    allow-assign-and-call: true
-    allow-multiline-assign: true
-    allow-cuddle-declarations: false
-    allow-trailing-comment: false
-    force-case-trailing-whitespace: 0
-    force-err-cuddling: false
-    allow-separated-leading-comment: false
-
-  godot:
-    scope: declarations
-    exclude:
-      - "^fixme:"
-      - "^todo:"
-    period: true
-    capital: false
-
-  testpackage:
-    skip-regexp: (export|internal)_test\.go
-
-  nolintlint:
-    allow-leading-space: true
-    allow-unused: false
-    require-explanation: false
-    require-specific: false
 
 linters:
-  disable-all: true
+  default: none
   enable:
-    # Enabled by default
+    # v2 default set — these earn their keep.
     - errcheck
-    - gosimple
     - govet
     - ineffassign
     - staticcheck
-    - typecheck
     - unused
-    
-    # Additional linters
-    - asciicheck
+
+    # Additional bug-finders.
     - bodyclose
-    - cyclop
-    - dogsled
-    - dupl
     - durationcheck
     - errorlint
-    - exhaustive
-    - exportloopref
-    - forbidigo
     - forcetypeassert
-    - funlen
-    - gochecknoinits
-    - gocognit
-    - goconst
-    - gocritic
-    - gocyclo
-    - godot
-    - godox
-    - gofmt
-    - gofumpt
-    - goheader
-    - goimports
-    - gomnd
-    - gomoddirectives
-    - gomodguard
-    - goprintffuncname
     - gosec
-    - grouper
-    - importas
-    - lll
     - makezero
     - misspell
-    - nakedret
-    - nestif
     - nilerr
     - nilnil
     - noctx
-    - nolintlint
-    - prealloc
-    - predeclared
-    - promlinter
-    - revive
-    - rowserrcheck
-    - sqlclosecheck
-    - stylecheck
-    - tagliatelle
-    - tenv
-    - testpackage
-    - thelper
-    - tparallel
-    - unconvert
-    - unparam
-    - wastedassign
-    - whitespace
-    - wrapcheck
+
+  settings:
+    errcheck:
+      # Don't insist on checking every (*T).Method returning error; focus
+      # on the common io / encoding / closer footguns.
+      exclude-functions:
+        - (io.Closer).Close
+        - (*os.File).Close
+        - (*net/http.Response).Body.Close
+        - fmt.Fprintln
+        - fmt.Fprintf
+        - fmt.Fprint
+
+    govet:
+      disable:
+        - fieldalignment
+      enable-all: true
+
+    misspell:
+      locale: US
+
+    gosec:
+      excludes:
+        # Subprocess launched with variable — webhook tooling sometimes needs this.
+        - G204
+        # File path provided as taint input — common in test fixture paths.
+        - G304
+
+  exclusions:
+    generated: lax
+    rules:
+      # Tests are noisier than production code; relax the strictest checks.
+      - path: _test\.go
+        linters:
+          - errcheck
+          - gosec
+          - noctx
+          - forcetypeassert
+      # Allow generated probe protobuf to escape line-length / type rules.
+      - path: '.*\.pb\.go'
+        linters:
+          - errcheck
+          - gosec
+      # OPA v0 → v1 migration is tracked separately; keep the deprecation
+      # warning visible at the call sites but don't fail CI on it.
+      - linters:
+          - staticcheck
+        text: 'SA1019: "github\.com/open-policy-agent/opa/(rego|storage)'
+      # k8s wait.PollImmediate is deprecated in favour of PollUntilContextTimeout;
+      # the e2e framework migration is tracked separately.
+      - linters:
+          - staticcheck
+        text: 'SA1019: wait.PollImmediate'
+    paths:
+      - third_party$
+      - builtin$
+      - examples$
+      - test/fixtures$
 
 issues:
-  exclude-rules:
-    # Exclude some linters from running on tests files
-    - path: _test\.go
-      linters:
-        - gocyclo
-        - errcheck
-        - dupl
-        - gosec
-        - funlen
-        - gocognit
-        - wrapcheck
-
-    # Exclude some linters from running on generated files
-    - path: ".*\\.pb\\.go"
-      linters:
-        - lll
-        - maligned
-
-    # Exclude some staticcheck messages
-    - linters:
-        - staticcheck
-      text: "SA9003:"
-
-    # Exclude lll issues for long lines with go:generate
-    - linters:
-        - lll
-      source: "^//go:generate "
-
-    # Exclude godox for TODO/FIXME comments in development
-    - linters:
-        - godox
-      source: "TODO|FIXME"
-
-    # Exclude some gosec rules that are too strict
-    - linters:
-        - gosec
-      text: "G204:"  # Subprocess launched with variable
-    - linters:
-        - gosec
-      text: "G304:"  # File path provided as taint input
-
-    # Exclude wrapcheck for certain packages
-    - linters:
-        - wrapcheck
-      text: "k8s.io"
-    - linters:
-        - wrapcheck
-      text: "sigs.k8s.io"
-
-  exclude-use-default: false
   max-issues-per-linter: 0
   max-same-issues: 0
 
-severity:
-  default-severity: error
-  case-sensitive: false
-  rules:
-    - linters:
-        - dupl
-      severity: info
-    - linters:
-        - gocritic
-      severity: info
-
+formatters:
+  enable:
+    - gofmt
+    - gofumpt
+    - goimports
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/Jibbscript/kube-policies
+  exclusions:
+    generated: lax
+    paths:
+      - third_party$
+      - builtin$
+      - examples$

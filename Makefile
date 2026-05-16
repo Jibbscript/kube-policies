@@ -62,7 +62,9 @@ setup: ## Set up development environment
 	go mod download
 	go install github.com/onsi/ginkgo/v2/ginkgo@latest
 	go install sigs.k8s.io/controller-runtime/tools/setup-envtest@latest
-	go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
+	go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2
+	@# Prime the envtest binary cache so test-integration finds etcd/kube-apiserver.
+	setup-envtest use 1.28.0 --bin-dir /tmp/envtest-bins -p path > /dev/null
 	@echo "$(GREEN)Development environment ready$(NC)"
 
 .PHONY: clean
@@ -159,7 +161,13 @@ test-unit: ## Run unit tests
 .PHONY: test-integration
 test-integration: ## Run integration tests
 	@echo "$(BLUE)Running integration tests...$(NC)"
-	export KUBEBUILDER_ASSETS=$$(setup-envtest use 1.28.0 --bin-dir /tmp/envtest-bins -p path 2>/dev/null || echo ""); \
+	@# Fail loudly if setup-envtest is missing or cannot fetch binaries — empty
+	@# KUBEBUILDER_ASSETS would make envtest fall back to /usr/local/kubebuilder/bin
+	@# and produce a confusing "no such file or directory" error mid-run.
+	@command -v setup-envtest >/dev/null || { \
+		echo "$(YELLOW)setup-envtest not found; run 'make setup' first$(NC)" >&2; exit 1; \
+	}
+	export KUBEBUILDER_ASSETS=$$(setup-envtest use 1.28.0 --bin-dir /tmp/envtest-bins -p path) && \
 	go test -v -race -coverprofile=coverage-integration.out ./test/integration/...
 	@if [ "$(TEST_COVERAGE)" = "true" ]; then \
 		go tool cover -html=coverage-integration.out -o coverage-integration.html; \

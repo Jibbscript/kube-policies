@@ -14,7 +14,7 @@ import (
 var writeMethods = map[string]struct{}{
 	http.MethodPost:   {},
 	http.MethodPut:    {},
-	http.MethodPatch: {},
+	http.MethodPatch:  {},
 	http.MethodDelete: {},
 }
 
@@ -30,7 +30,7 @@ func isWriteMethod(m string) bool {
 // Playground UX (`POST /policies/:id/test`) works in the default read-only
 // deployment without operators having to flip `allowWrites=true`.
 //
-// Currently recognised:
+// Currently recognized:
 //   - /policies/<id>/test    — evaluates a candidate object against a policy
 //   - /policies/validate     — validates a policy spec without persisting it
 func isReadOnlyRPC(method, proxyPath string) bool {

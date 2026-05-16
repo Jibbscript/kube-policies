@@ -10,13 +10,14 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/gin-gonic/gin"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"go.uber.org/zap"
+
 	"github.com/Jibbscript/kube-policies/internal/config"
 	"github.com/Jibbscript/kube-policies/internal/metrics"
 	"github.com/Jibbscript/kube-policies/internal/policymanager"
 	"github.com/Jibbscript/kube-policies/pkg/logger"
-	"github.com/gin-gonic/gin"
-	"github.com/prometheus/client_golang/prometheus/promhttp"
-	"go.uber.org/zap"
 )
 
 var (
@@ -34,7 +35,7 @@ func main() {
 
 	// Initialize logger
 	log := logger.NewLogger("policy-manager", "info")
-	defer log.Sync()
+	defer func() { _ = log.Sync() }()
 
 	log.Info("policy-manager starting",
 		zap.String("version", version),
@@ -183,9 +184,9 @@ func setupAPIServer(manager *policymanager.Manager, log *zap.Logger) *http.Serve
 func setupMetricsServer() *http.Server {
 	mux := http.NewServeMux()
 	mux.Handle("/metrics", promhttp.Handler())
-	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("OK"))
+		_, _ = w.Write([]byte("OK"))
 	})
 
 	server := &http.Server{

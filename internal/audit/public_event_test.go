@@ -5,8 +5,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Jibbscript/kube-policies/internal/policy"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
+	"github.com/Jibbscript/kube-policies/internal/policy"
 )
 
 func TestNewPublicEvent_EmptyContext(t *testing.T) {

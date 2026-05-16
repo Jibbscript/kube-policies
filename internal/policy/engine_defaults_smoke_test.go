@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/Jibbscript/kube-policies/internal/config"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
@@ -13,6 +12,8 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+
+	"github.com/Jibbscript/kube-policies/internal/config"
 )
 
 // TestDefaultPolicies_PlaygroundVerdicts exercises each of the 4 bundled
@@ -46,8 +47,8 @@ func TestDefaultPolicies_PlaygroundVerdicts(t *testing.T) {
 							"name":  "c",
 							"image": "nginx:1.25",
 							"securityContext": map[string]any{
-								"privileged":             true,
-								"runAsNonRoot":           true,
+								"privileged":               true,
+								"runAsNonRoot":             true,
 								"allowPrivilegeEscalation": false,
 							},
 						},

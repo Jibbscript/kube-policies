@@ -11,10 +11,11 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/Jibbscript/kube-policies/pkg/logger"
 	"github.com/gin-gonic/gin"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"go.uber.org/zap"
+
+	"github.com/Jibbscript/kube-policies/pkg/logger"
 )
 
 var (
@@ -49,7 +50,7 @@ func main() {
 		zap.Bool("csp_unsafe_inline_style", cfg.CSPUnsafeInlineStyle),
 	)
 
-	// svcCtx is cancelled on SIGTERM/SIGINT to stop the upstream SSE subscriber.
+	// svcCtx is canceled on SIGTERM/SIGINT to stop the upstream SSE subscriber.
 	svcCtx, svcCancel := context.WithCancel(context.Background())
 	defer svcCancel()
 
@@ -163,7 +164,7 @@ func newMetricsServer(port int) *http.Server {
 // Tailwind v4 + the shipped SPA build emits no inline <style> tags, so the
 // default keeps style-src 'self'. The env var
 // DASHBOARD_CSP_UNSAFE_INLINE_STYLE re-introduces 'unsafe-inline' on
-// style-src for operators who customise the SPA in ways that emit inline
+// style-src for operators who customize the SPA in ways that emit inline
 // styles.
 func cspMiddleware(unsafeInline bool) gin.HandlerFunc {
 	style := "'self'"

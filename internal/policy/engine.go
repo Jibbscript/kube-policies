@@ -8,12 +8,13 @@ import (
 	"sync"
 	"time"
 
-	"github.com/Jibbscript/kube-policies/internal/config"
 	"github.com/open-policy-agent/opa/rego"
 	"github.com/open-policy-agent/opa/storage"
 	"github.com/open-policy-agent/opa/storage/inmem"
 	"go.uber.org/zap"
 	admissionv1 "k8s.io/api/admission/v1"
+
+	"github.com/Jibbscript/kube-policies/internal/config"
 )
 
 // Evaluator is the minimal interface the admission controller depends on.
@@ -237,7 +238,10 @@ func (e *Engine) evaluateRule(ctx context.Context, policy *Policy, rule *Rule, i
 	}
 
 	if len(results) > 0 && len(results[0].Expressions) > 0 {
-		evalResult := results[0].Expressions[0].Value.(map[string]interface{})
+		evalResult, ok := results[0].Expressions[0].Value.(map[string]interface{})
+		if !ok {
+			return result, nil
+		}
 
 		if allowed, ok := evalResult["allowed"].(bool); ok {
 			result.Allowed = allowed
@@ -549,7 +553,9 @@ func (e *Engine) RemovePolicy(policyID string) error {
 func (e *Engine) preparedQueryFor(ctx context.Context, policy *Policy, rule *Rule) (rego.PreparedEvalQuery, error) {
 	key := policy.ID + "/" + rule.ID
 	if v, ok := e.preparedQueries.Load(key); ok {
-		return v.(rego.PreparedEvalQuery), nil
+		if q, ok := v.(rego.PreparedEvalQuery); ok {
+			return q, nil
+		}
 	}
 	q, err := rego.New(
 		rego.Query("data.kube_policies.evaluate"),

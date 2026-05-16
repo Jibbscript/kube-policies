@@ -8,7 +8,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Jibbscript/kube-policies/internal/policy"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	admissionv1 "k8s.io/api/admission/v1"
@@ -16,6 +15,8 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+
+	"github.com/Jibbscript/kube-policies/internal/policy"
 )
 
 // bundledEngineVersion is the hardcoded OPA version for M1, sourced from go.mod
@@ -126,13 +127,13 @@ func (m *Manager) testPolicyImpl(c *gin.Context) {
 func parseAdmissionBody(bodyBytes []byte) (*admissionv1.AdmissionRequest, error) {
 	var raw map[string]json.RawMessage
 	if err := json.Unmarshal(bodyBytes, &raw); err != nil {
-		return nil, fmt.Errorf("invalid JSON: %v", err)
+		return nil, fmt.Errorf("invalid JSON: %w", err)
 	}
 
 	if _, isReview := raw["request"]; isReview {
 		var review admissionv1.AdmissionReview
 		if err := json.Unmarshal(bodyBytes, &review); err != nil {
-			return nil, fmt.Errorf("invalid AdmissionReview: %v", err)
+			return nil, fmt.Errorf("invalid AdmissionReview: %w", err)
 		}
 		if review.Request == nil {
 			return nil, fmt.Errorf("AdmissionReview.request is null")
@@ -143,7 +144,7 @@ func parseAdmissionBody(bodyBytes []byte) (*admissionv1.AdmissionRequest, error)
 	// Bare object — synthesize.
 	var obj map[string]interface{}
 	if err := json.Unmarshal(bodyBytes, &obj); err != nil {
-		return nil, fmt.Errorf("invalid object JSON: %v", err)
+		return nil, fmt.Errorf("invalid object JSON: %w", err)
 	}
 
 	apiVersion, _ := obj["apiVersion"].(string)
