@@ -17,14 +17,19 @@ export interface JSONPatch {
   value?: unknown;
 }
 
+// Field names match the Go JSON tags on TestResponse / EvaluationResult
+// (internal/policymanager/test_handler.go and internal/policy/engine.go).
+// They were originally declared in PascalCase here, which silently broke
+// the VerdictPanel because every property access returned undefined; the
+// API has always emitted lowercase keys.
 export interface EvaluationResult {
-  Allowed: boolean;
-  Decision: Decision;
-  Reason?: string;
-  Message?: string;
-  Violations: PolicyViolation[];
-  Patches: JSONPatch[];
-  Metadata: Record<string, unknown>;
+  allowed: boolean;
+  decision: Decision;
+  reason?: string;
+  message?: string;
+  violations: PolicyViolation[];
+  patches?: JSONPatch[];
+  metadata?: Record<string, unknown>;
 }
 
 export interface Rule {

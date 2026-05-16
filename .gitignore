@@ -56,8 +56,15 @@ helm-template-output.yaml
 # Docker
 .dockerignore
 
-# Helm
+# Helm packaged-chart artifacts at the chart root.
 charts/*.tgz
+# Helm subchart dependency cache (auto-fetched by `helm dep update`).
+charts/*/charts/
+
+# oh-my-claudecode + Claude Code runtime state (not source).
+.omc/
+web/.omc/
+.claude/
 
 # Dashboard build-time SPA copy — managed by `make build-dashboard`.
 # The .placeholder file is committed so //go:embed all:web_dist stays valid

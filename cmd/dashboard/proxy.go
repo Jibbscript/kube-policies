@@ -33,20 +33,27 @@ func isWriteMethod(m string) bool {
 // Currently recognized:
 //   - /policies/<id>/test    — evaluates a candidate object against a policy
 //   - /policies/validate     — validates a policy spec without persisting it
+//   - /policies/evaluate     — ad-hoc evaluation: inline policy + resource,
+//     nothing persisted (used by CI hooks and future "diff this manifest"
+//     UX before a policy is saved).
 func isReadOnlyRPC(method, proxyPath string) bool {
 	if strings.ToUpper(method) != http.MethodPost {
 		return false
 	}
 	// Normalise: proxyPath always starts with "/" because Gin captures the
 	// suffix beginning at the slash.
-	if proxyPath == "/policies/validate" {
+	if proxyPath == "/policies/validate" || proxyPath == "/policies/evaluate" {
 		return true
 	}
 	if strings.HasPrefix(proxyPath, "/policies/") && strings.HasSuffix(proxyPath, "/test") {
-		// Guard against /policies/test (zero-length id) and the validate
-		// case above.
+		// Guard against /policies/test (zero-length id). Note: previously
+		// this also forbade slashes inside the id, which broke CRD-derived
+		// IDs originally minted as "crd/<ns>/<name>". The CRD ID format
+		// has since been changed to "crd:<ns>:<name>" so the slash guard
+		// was redundant, but kept the mid-empty check because that one
+		// still matters (otherwise /policies//test sneaks through).
 		mid := strings.TrimSuffix(strings.TrimPrefix(proxyPath, "/policies/"), "/test")
-		return mid != "" && !strings.Contains(mid, "/")
+		return mid != ""
 	}
 	return false
 }

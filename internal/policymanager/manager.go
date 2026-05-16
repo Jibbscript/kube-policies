@@ -546,7 +546,14 @@ func (m *Manager) ListComplianceFrameworks(c *gin.Context) {
 	c.JSON(http.StatusNotImplemented, gin.H{"error": "compliance framework catalog is not yet implemented"})
 }
 
-// validatePolicy validates a policy configuration
+// validatePolicy validates a policy configuration. In addition to the field
+// presence checks (name, rules, rule.name, rule.rego), every rule's Rego
+// body is compiled via the OPA prepared-query path so /policies/validate
+// catches syntax errors before a policy is persisted or evaluated.
+//
+// Compilation errors are wrapped as "rego syntax error: <opa msg>" — a test
+// assertion that checks for the substring "syntax" matches every OPA parse
+// failure regardless of OPA's internal error prefix.
 func (m *Manager) validatePolicy(p *policy.Policy) error {
 	if p.Name == "" {
 		return fmt.Errorf("policy name is required")
@@ -556,12 +563,16 @@ func (m *Manager) validatePolicy(p *policy.Policy) error {
 		return fmt.Errorf("policy must have at least one rule")
 	}
 
-	for _, rule := range p.Rules {
+	for i := range p.Rules {
+		rule := &p.Rules[i]
 		if rule.Name == "" {
 			return fmt.Errorf("rule name is required")
 		}
 		if rule.Rego == "" {
 			return fmt.Errorf("rule rego is required")
+		}
+		if err := compileRego(p.ID, rule); err != nil {
+			return err
 		}
 	}
 

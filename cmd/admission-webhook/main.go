@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"flag"
 	"fmt"
 	"net/http"
@@ -14,14 +15,21 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"go.uber.org/zap"
+	ctrl "sigs.k8s.io/controller-runtime"
 
 	"github.com/Jibbscript/kube-policies/internal/admission"
 	"github.com/Jibbscript/kube-policies/internal/audit"
 	"github.com/Jibbscript/kube-policies/internal/config"
 	"github.com/Jibbscript/kube-policies/internal/metrics"
 	"github.com/Jibbscript/kube-policies/internal/policy"
+	"github.com/Jibbscript/kube-policies/internal/policymanager"
 	"github.com/Jibbscript/kube-policies/pkg/logger"
 )
+
+// Note on the --kubeconfig flag: controller-runtime's
+// sigs.k8s.io/controller-runtime/pkg/client/config init() already registers
+// the flag globally. Re-registering it here would panic with
+// "flag redefined: kubeconfig" on startup. ctrl.GetConfig() reads it.
 
 var (
 	certPath    = flag.String("cert-path", "/etc/certs/tls.crt", "Path to TLS certificate")
@@ -29,6 +37,12 @@ var (
 	port        = flag.Int("port", 8443, "Webhook server port")
 	metricsPort = flag.Int("metrics-port", 9090, "Metrics server port")
 	configPath  = flag.String("config", "/etc/config/config.yaml", "Path to configuration file")
+
+	// disableControllers turns off CRD watching. Off by default: the webhook
+	// loads bundled defaults AND watches Policy CRDs so kubectl apply changes
+	// real admission decisions. Operators who run an explicitly bundled-only
+	// webhook (no RBAC for the policies.kube-policies.io group) flip this on.
+	disableControllers = flag.Bool("disable-controllers", false, "Disable CRD reconcilers; enforce bundled-default policies only.")
 
 	version = "dev"
 	commit  = "unknown"
@@ -106,6 +120,48 @@ func main() {
 		}
 	}()
 
+	// Background-process context. Cancelled on SIGINT/SIGTERM below; the CRD
+	// controllers stop when this is cancelled.
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Start CRD controllers so kubectl-applied Policy resources change real
+	// admission decisions. Kubeconfig resolution failures are fatal by
+	// default — the whole value proposition of the webhook in operator mode
+	// is enforcing user-defined policies, so silently degrading to
+	// bundled-only would be misleading. Operators that intentionally run in
+	// API-only/bundled-only mode pass --disable-controllers.
+	if !*disableControllers {
+		// ctrl.GetConfig() resolves: --kubeconfig flag (auto-registered by
+		// controller-runtime) > KUBECONFIG env > $HOME/.kube/config > in-cluster.
+		restCfg, err := ctrl.GetConfig()
+		if err != nil {
+			log.Fatal("could not resolve a Kubernetes config for the CRD controllers",
+				zap.Error(err),
+				zap.String("hint", "set --kubeconfig=PATH, run inside a Pod with a service-account token, or pass --disable-controllers to fall back to bundled-default policies"),
+			)
+		}
+		sink := newEngineSink(policyEngine, log.Named("engine-sink"))
+		opts := policymanager.ControllerOptions{
+			// Distinct lease ID — when both policy-manager and webhook run
+			// controllers in the same namespace, they must not contend over
+			// the same leader-election lease.
+			LeaderElectionID: "kube-policies-admission-webhook",
+			PolicySink:       sink,
+			// ExceptionSink intentionally nil: the engine has no exception
+			// enforcement path; wiring it would imply a behavior change that
+			// is out of scope for the webhook extension.
+		}
+		go func() {
+			log.Info("starting CRD controllers")
+			if err := policymanager.StartControllers(ctx, restCfg, log, opts); err != nil && !errors.Is(err, context.Canceled) {
+				log.Error("CRD controller manager exited with error", zap.Error(err))
+			}
+		}()
+	} else {
+		log.Warn("CRD controllers disabled via --disable-controllers; admission decisions will use bundled-default policies only")
+	}
+
 	// Wait for interrupt signal
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
@@ -113,15 +169,17 @@ func main() {
 
 	log.Info("Shutting down servers...")
 
-	// Graceful shutdown
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
+	cancel() // stop CRD controllers
 
-	if err := webhookServer.Shutdown(ctx); err != nil {
+	// Graceful shutdown
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer shutdownCancel()
+
+	if err := webhookServer.Shutdown(shutdownCtx); err != nil {
 		log.Error("Failed to shutdown webhook server", zap.Error(err))
 	}
 
-	if err := metricsServer.Shutdown(ctx); err != nil {
+	if err := metricsServer.Shutdown(shutdownCtx); err != nil {
 		log.Error("Failed to shutdown metrics server", zap.Error(err))
 	}
 

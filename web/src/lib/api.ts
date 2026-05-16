@@ -33,8 +33,14 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return (await res.json()) as T;
 }
 
-export function listPolicies(): Promise<Policy[]> {
-  return request<Policy[]>('/api/v1/policies');
+// The policy-manager wraps list responses in {policies:[...], total:N} (and
+// {exceptions:[...], total:N} for exceptions). listPolicies/listExceptions
+// unwrap so callers can iterate directly. This fixes a long-standing shape
+// drift where listPolicies's typed return (Policy[]) didn't match the actual
+// JSON body, leaving the Playground policy picker silently empty.
+export async function listPolicies(): Promise<Policy[]> {
+  const res = await request<{ policies: Policy[]; total: number }>('/api/v1/policies');
+  return res.policies ?? [];
 }
 
 export function getPolicy(id: string): Promise<Policy> {
@@ -48,8 +54,9 @@ export function testPolicy(id: string, body: unknown): Promise<EvaluationResult>
   });
 }
 
-export function listExceptions(): Promise<Exception[]> {
-  return request<Exception[]>('/api/v1/exceptions');
+export async function listExceptions(): Promise<Exception[]> {
+  const res = await request<{ exceptions: Exception[]; total: number }>('/api/v1/exceptions');
+  return res.exceptions ?? [];
 }
 
 export function getMetricsSummary(): Promise<MetricsSummary> {
