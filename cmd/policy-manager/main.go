@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"net/http"
@@ -10,9 +11,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/gin-gonic/gin"
-	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"go.uber.org/zap"
+	ctrl "sigs.k8s.io/controller-runtime"
 
 	"github.com/Jibbscript/kube-policies/internal/config"
 	"github.com/Jibbscript/kube-policies/internal/metrics"
@@ -20,10 +20,22 @@ import (
 	"github.com/Jibbscript/kube-policies/pkg/logger"
 )
 
+// Note on the --kubeconfig flag: controller-runtime's
+// sigs.k8s.io/controller-runtime/pkg/client/config init() already registers
+// the flag globally. Re-registering it here would panic with
+// "flag redefined: kubeconfig" on startup. ctrl.GetConfig() reads it.
+
 var (
 	port        = flag.Int("port", 8080, "Policy manager server port")
 	metricsPort = flag.Int("metrics-port", 9091, "Metrics server port")
 	configPath  = flag.String("config", "/etc/config/config.yaml", "Path to configuration file")
+
+	// disableControllers disables the CRD reconcilers. Off by default — the
+	// whole point of the policy-manager is to reconcile Policy and
+	// PolicyException CRDs into its in-memory registry. Operators running
+	// without RBAC access to the policies.kube-policies.io group can flip
+	// this to keep the HTTP API functional with bundled defaults only.
+	disableControllers = flag.Bool("disable-controllers", false, "Disable CRD reconcilers; serve only bundled defaults via the HTTP API.")
 
 	version = "dev"
 	commit  = "unknown"
@@ -59,11 +71,23 @@ func main() {
 	}
 	policyManager.SetInternalToken(os.Getenv("POLICY_MANAGER_INTERNAL_TOKEN"))
 
-	// Setup API server
-	apiServer := setupAPIServer(policyManager, log)
-
-	// Setup metrics server
-	metricsServer := setupMetricsServer()
+	// Setup API server and metrics server. Router definitions live in
+	// internal/policymanager so integration tests can mount the same routes
+	// against an in-process Manager without duplicating the route table.
+	apiServer := &http.Server{
+		Addr:         fmt.Sprintf(":%d", *port),
+		Handler:      policymanager.NewAPIRouter(policyManager),
+		ReadTimeout:  30 * time.Second,
+		WriteTimeout: 30 * time.Second,
+		IdleTimeout:  60 * time.Second,
+	}
+	metricsServer := &http.Server{
+		Addr:         fmt.Sprintf(":%d", *metricsPort),
+		Handler:      policymanager.NewMetricsRouter(),
+		ReadTimeout:  10 * time.Second,
+		WriteTimeout: 10 * time.Second,
+		IdleTimeout:  30 * time.Second,
+	}
 
 	// Start servers
 	go func() {
@@ -86,6 +110,43 @@ func main() {
 
 	go policyManager.Start(ctx)
 
+	// Start the CRD controllers unless explicitly disabled. The controllers
+	// run inside the same process as the HTTP API, sharing the in-memory
+	// registry: a CRD applied through kubectl becomes visible on /api/v1/policies
+	// after one reconcile pass (typically <1s on a healthy apiserver).
+	//
+	// CRD reconciliation is the policy-manager's defining responsibility, so
+	// kubeconfig resolution failures are fatal by default. Operators who
+	// genuinely intend to run the API in API-only mode (developer workflows,
+	// SPA work against bundled defaults) must pass --disable-controllers
+	// explicitly; this prevents misconfigured deployments from silently
+	// serving stale data.
+	if !*disableControllers {
+		// ctrl.GetConfig() resolves: --kubeconfig flag (auto-registered by
+		// controller-runtime) > KUBECONFIG env > $HOME/.kube/config > in-cluster.
+		restCfg, err := ctrl.GetConfig()
+		if err != nil {
+			log.Fatal("could not resolve a Kubernetes config for the CRD controllers",
+				zap.Error(err),
+				zap.String("hint", "set --kubeconfig=PATH, run inside a Pod with a service-account token, or pass --disable-controllers if you intentionally want API-only mode"),
+			)
+		}
+		go func() {
+			log.Info("starting CRD controllers")
+			// The policy-manager consumes both kinds: Policies feed the
+			// HTTP/list registry, Exceptions feed /api/v1/exceptions.
+			opts := policymanager.ControllerOptions{
+				PolicySink:    policyManager,
+				ExceptionSink: policyManager,
+			}
+			if err := policymanager.StartControllers(ctx, restCfg, log, opts); err != nil && !errors.Is(err, context.Canceled) {
+				log.Error("CRD controller manager exited with error", zap.Error(err))
+			}
+		}()
+	} else {
+		log.Warn("CRD controllers disabled via --disable-controllers; the HTTP API will serve only bundled-default policies")
+	}
+
 	// Wait for interrupt signal
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
@@ -97,7 +158,7 @@ func main() {
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer shutdownCancel()
 
-	cancel() // Stop policy manager
+	cancel() // Stop policy manager and CRD controllers
 
 	if err := apiServer.Shutdown(shutdownCtx); err != nil {
 		log.Error("Failed to shutdown API server", zap.Error(err))
@@ -110,92 +171,3 @@ func main() {
 	log.Info("Servers stopped")
 }
 
-func setupAPIServer(manager *policymanager.Manager, log *zap.Logger) *http.Server {
-	gin.SetMode(gin.ReleaseMode)
-	router := gin.New()
-	router.Use(gin.Recovery())
-
-	// CORS is intentionally not configured here. The policy-manager API is
-	// expected to be exposed behind an ingress, gateway, or service mesh
-	// where CORS, authentication, and TLS termination are configured by
-	// operators per environment. A wildcard `*` middleware in this binary
-	// would defeat that boundary.
-
-	// Health check endpoints
-	router.GET("/healthz", func(c *gin.Context) {
-		c.JSON(http.StatusOK, gin.H{"status": "healthy"})
-	})
-
-	router.GET("/readyz", func(c *gin.Context) {
-		c.JSON(http.StatusOK, gin.H{"status": "ready"})
-	})
-
-	// Policy management API
-	api := router.Group("/api/v1")
-	{
-		// Policy CRUD operations
-		api.GET("/policies", manager.ListPolicies)
-		api.GET("/policies/:id", manager.GetPolicy)
-		api.POST("/policies", manager.CreatePolicy)
-		api.PUT("/policies/:id", manager.UpdatePolicy)
-		api.DELETE("/policies/:id", manager.DeletePolicy)
-
-		// Policy testing
-		api.POST("/policies/:id/test", manager.TestPolicy)
-		api.POST("/policies/validate", manager.ValidatePolicy)
-
-		// Policy deployment
-		api.POST("/policies/:id/deploy", manager.DeployPolicy)
-		api.GET("/policies/:id/status", manager.GetPolicyStatus)
-
-		// Policy bundles
-		api.GET("/bundles", manager.ListBundles)
-		api.GET("/bundles/:id", manager.GetBundle)
-		api.POST("/bundles", manager.CreateBundle)
-
-		// Exception management
-		api.GET("/exceptions", manager.ListExceptions)
-		api.POST("/exceptions", manager.CreateException)
-		api.PUT("/exceptions/:id", manager.UpdateException)
-		api.DELETE("/exceptions/:id", manager.DeleteException)
-
-		// Compliance reporting
-		api.GET("/compliance/reports", manager.ListComplianceReports)
-		api.POST("/compliance/reports", manager.GenerateComplianceReport)
-		api.GET("/compliance/frameworks", manager.ListComplianceFrameworks)
-
-		// Decisions live-ticker endpoints (M2 — svelte-dashboard plan §6, §7)
-		api.POST("/decisions/internal", manager.IngestInternal)
-		api.GET("/decisions/stream", manager.StreamDecisions)
-		api.GET("/decisions/recent", manager.RecentDecisions)
-	}
-
-	server := &http.Server{
-		Addr:         fmt.Sprintf(":%d", *port),
-		Handler:      router,
-		ReadTimeout:  30 * time.Second,
-		WriteTimeout: 30 * time.Second,
-		IdleTimeout:  60 * time.Second,
-	}
-
-	return server
-}
-
-func setupMetricsServer() *http.Server {
-	mux := http.NewServeMux()
-	mux.Handle("/metrics", promhttp.Handler())
-	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte("OK"))
-	})
-
-	server := &http.Server{
-		Addr:         fmt.Sprintf(":%d", *metricsPort),
-		Handler:      mux,
-		ReadTimeout:  10 * time.Second,
-		WriteTimeout: 10 * time.Second,
-		IdleTimeout:  30 * time.Second,
-	}
-
-	return server
-}

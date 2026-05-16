@@ -1,0 +1,135 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: policyexceptions.policies.kube-policies.io
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.13.0
+spec:
+  group: policies.kube-policies.io
+  names:
+    kind: PolicyException
+    listKind: PolicyExceptionList
+    plural: policyexceptions
+    singular: policyexception
+    shortNames:
+    - polex
+    - pe
+  scope: Namespaced
+  versions:
+  - name: v1
+    served: true
+    storage: true
+    subresources:
+      status: {}
+    schema:
+      openAPIV3Schema:
+        description: PolicyException carves out a narrow exemption from a Policy for a specific set of resources, users, or groups, with an optional expiry.
+        type: object
+        properties:
+          apiVersion:
+            description: 'APIVersion defines the versioned schema of this representation of an object.'
+            type: string
+          kind:
+            description: 'Kind is a string value representing the REST resource this object represents.'
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: PolicyExceptionSpec defines the desired state of the exception.
+            type: object
+            required:
+            - policy_id
+            properties:
+              description:
+                description: Description provides a human-readable description of the exception.
+                type: string
+              policy_id:
+                description: PolicyID identifies the Policy this exception applies to.
+                type: string
+              rule_id:
+                description: RuleID narrows the exception to a single rule of the parent policy.
+                type: string
+              justification:
+                description: Justification documents why the exception was granted (audit trail).
+                type: string
+              approver:
+                description: Approver records who authorized the exception (audit trail).
+                type: string
+              expires_at:
+                description: ExpiresAt is the timestamp after which the exception is no longer honored. Omit for a non-expiring exception.
+                type: string
+                format: date-time
+              scope:
+                description: Scope selects which resources, users, or groups the exception covers.
+                type: object
+                properties:
+                  namespaces:
+                    description: Namespaces lists namespaces covered by the exception.
+                    type: array
+                    items:
+                      type: string
+                  resources:
+                    description: Resources lists resource types covered by the exception (e.g. "pods", "deployments").
+                    type: array
+                    items:
+                      type: string
+                  users:
+                    description: Users lists user identities covered by the exception.
+                    type: array
+                    items:
+                      type: string
+                  groups:
+                    description: Groups lists user groups covered by the exception.
+                    type: array
+                    items:
+                      type: string
+          status:
+            description: PolicyExceptionStatus is the observed state, populated by the controller.
+            type: object
+            properties:
+              phase:
+                description: Phase reflects the controller's view of the exception (Pending / Active / Expired / Failed).
+                type: string
+                enum: ["Pending", "Active", "Expired", "Failed"]
+              conditions:
+                description: Conditions records reconcile-loop transitions for observability.
+                type: array
+                items:
+                  type: object
+                  required:
+                  - type
+                  - status
+                  properties:
+                    type:
+                      description: Type of condition.
+                      type: string
+                    status:
+                      description: Status of the condition.
+                      type: string
+                      enum: ["True", "False", "Unknown"]
+                    lastTransitionTime:
+                      description: Last time the condition transitioned.
+                      type: string
+                      format: date-time
+                    reason:
+                      description: Reason for the condition's last transition.
+                      type: string
+                    message:
+                      description: Human-readable message indicating details about last transition.
+                      type: string
+    additionalPrinterColumns:
+    - name: Policy
+      type: string
+      jsonPath: .spec.policy_id
+    - name: Rule
+      type: string
+      jsonPath: .spec.rule_id
+    - name: Phase
+      type: string
+      jsonPath: .status.phase
+    - name: ExpiresAt
+      type: string
+      jsonPath: .spec.expires_at
+    - name: Age
+      type: date
+      jsonPath: .metadata.creationTimestamp

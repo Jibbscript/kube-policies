@@ -1,5 +1,5 @@
-import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
-import { connectSse } from '../../src/lib/sse';
+import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
+import { connectSse } from "../../src/lib/sse";
 
 class FakeEventSource {
   static instances: FakeEventSource[] = [];
@@ -16,14 +16,14 @@ class FakeEventSource {
     this.closed = true;
   }
   fireError(): void {
-    this.onerror?.(new Event('error'));
+    this.onerror?.(new Event("error"));
   }
   fireMessage(data: unknown): void {
     this.onmessage?.({ data: JSON.stringify(data) } as MessageEvent);
   }
 }
 
-describe('connectSse', () => {
+describe("connectSse", () => {
   beforeEach(() => {
     vi.useFakeTimers();
     FakeEventSource.instances = [];
@@ -32,10 +32,10 @@ describe('connectSse', () => {
     vi.useRealTimers();
   });
 
-  it('reconnects with exponential backoff after error', () => {
+  it("reconnects with exponential backoff after error", () => {
     const messages: unknown[] = [];
     const conn = connectSse({
-      url: '/api/decisions/stream',
+      url: "/api/decisions/stream",
       onMessage: (m) => messages.push(m),
       factory: (u) => new FakeEventSource(u) as unknown as EventSource,
       initialBackoffMs: 100,
@@ -63,10 +63,10 @@ describe('connectSse', () => {
     expect(FakeEventSource.instances[2].closed).toBe(true);
   });
 
-  it('resets backoff on successful message', () => {
+  it("resets backoff on successful message", () => {
     let received = 0;
     const conn = connectSse<{ ok: boolean }>({
-      url: '/api/decisions/stream',
+      url: "/api/decisions/stream",
       onMessage: () => {
         received += 1;
       },

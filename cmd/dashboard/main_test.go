@@ -231,7 +231,15 @@ func TestIsReadOnlyRPC_GuardRails(t *testing.T) {
 		{"create policy (real write)", "POST", "/policies", false},
 		{"update policy (real write)", "PUT", "/policies/security-baseline", false},
 		{"empty id between policies and /test", "POST", "/policies//test", false},
-		{"nested path masquerading as test", "POST", "/policies/foo/bar/test", false},
+		// Nested paths (id contains a literal "/") are now treated as RPC
+		// candidates — the upstream policy-manager router uses Gin's
+		// single-segment :id and returns 404 for malformed IDs, so we
+		// don't need the proxy to pre-reject them. This widening was
+		// required when CRD-derived IDs originally used "crd/<ns>/<name>"
+		// format; the IDs have since been changed to "crd:<ns>:<name>" so
+		// real callers never trigger this branch, but the proxy stays
+		// permissive to keep upstream as the single source of routing truth.
+		{"nested path falls through to upstream 404", "POST", "/policies/foo/bar/test", true},
 		{"prefix match but different suffix", "POST", "/policies/foo/testify", false},
 		{"trailing slash", "POST", "/policies/foo/test/", false},
 		{"validate with extra segment", "POST", "/policies/validate/x", false},

@@ -10,7 +10,7 @@
   }
   let { verdict, error = null, loading = false }: Props = $props();
 
-  let isDeny = $derived(verdict?.Decision === 'DENY');
+  let isDeny = $derived(verdict?.decision === 'DENY');
 </script>
 
 <section data-testid="verdict-panel" class="rounded-lg border border-slate-200 bg-white p-4">
@@ -26,21 +26,21 @@
         data-testid="decision-badge"
         class="rounded px-3 py-1 text-sm font-bold {isDeny ? 'badge-deny' : 'badge-allow'}"
       >
-        {verdict.Decision}
+        {verdict.decision}
       </span>
-      {#if verdict.Reason}
-        <span class="text-xs text-slate-500">{verdict.Reason}</span>
+      {#if verdict.reason}
+        <span class="text-xs text-slate-500">{verdict.reason}</span>
       {/if}
     </header>
 
-    {#if verdict.Message}
-      <p class="mb-3 text-sm text-slate-700" data-testid="verdict-message">{verdict.Message}</p>
+    {#if verdict.message}
+      <p class="mb-3 text-sm text-slate-700" data-testid="verdict-message">{verdict.message}</p>
     {/if}
 
-    {#if verdict.Violations?.length}
+    {#if verdict.violations?.length}
       <h3 class="mb-1 text-xs font-semibold uppercase text-slate-500">Violations</h3>
       <ul class="mb-3 space-y-2" data-testid="violation-list">
-        {#each verdict.Violations as v (v.rule_id + '|' + v.path)}
+        {#each verdict.violations as v (v.rule_id + '|' + v.path)}
           <li class="rounded border border-red-100 bg-red-50 p-2">
             <div class="flex items-center gap-2 text-xs">
               <RuleBadge ruleId={v.rule_id} name={v.rule_name} />
@@ -59,15 +59,15 @@
       </ul>
     {/if}
 
-    {#if verdict.Patches?.length}
+    {#if verdict.patches?.length}
       <h3 class="mb-1 text-xs font-semibold uppercase text-slate-500">Patches</h3>
-      <pre class="mb-3 overflow-x-auto rounded bg-slate-50 p-2 text-xs">{prettyJson(verdict.Patches)}</pre>
+      <pre class="mb-3 overflow-x-auto rounded bg-slate-50 p-2 text-xs">{prettyJson(verdict.patches)}</pre>
     {/if}
 
-    {#if verdict.Metadata && Object.keys(verdict.Metadata).length > 0}
+    {#if verdict.metadata && Object.keys(verdict.metadata).length > 0}
       <details class="text-xs">
         <summary class="cursor-pointer text-slate-500">Metadata</summary>
-        <pre class="mt-1 overflow-x-auto rounded bg-slate-50 p-2">{prettyJson(verdict.Metadata)}</pre>
+        <pre class="mt-1 overflow-x-auto rounded bg-slate-50 p-2">{prettyJson(verdict.metadata)}</pre>
       </details>
     {/if}
   {/if}

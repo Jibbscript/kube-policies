@@ -1,37 +1,42 @@
 // TypeScript mirrors of the Go JSON shapes.
 
-export type Decision = 'ALLOW' | 'DENY';
+export type Decision = "ALLOW" | "DENY";
 
 export interface PolicyViolation {
   rule_id: string;
   rule_name?: string;
   message: string;
   path?: string;
-  severity?: 'low' | 'medium' | 'high' | 'critical';
+  severity?: "low" | "medium" | "high" | "critical";
   frameworks?: string[];
 }
 
 export interface JSONPatch {
-  op: 'add' | 'remove' | 'replace' | 'move' | 'copy' | 'test';
+  op: "add" | "remove" | "replace" | "move" | "copy" | "test";
   path: string;
   value?: unknown;
 }
 
+// Field names match the Go JSON tags on TestResponse / EvaluationResult
+// (internal/policymanager/test_handler.go and internal/policy/engine.go).
+// They were originally declared in PascalCase here, which silently broke
+// the VerdictPanel because every property access returned undefined; the
+// API has always emitted lowercase keys.
 export interface EvaluationResult {
-  Allowed: boolean;
-  Decision: Decision;
-  Reason?: string;
-  Message?: string;
-  Violations: PolicyViolation[];
-  Patches: JSONPatch[];
-  Metadata: Record<string, unknown>;
+  allowed: boolean;
+  decision: Decision;
+  reason?: string;
+  message?: string;
+  violations: PolicyViolation[];
+  patches?: JSONPatch[];
+  metadata?: Record<string, unknown>;
 }
 
 export interface Rule {
   id: string;
   name: string;
   description?: string;
-  severity?: 'low' | 'medium' | 'high' | 'critical';
+  severity?: "low" | "medium" | "high" | "critical";
   rego?: string;
   frameworks?: string[];
 }

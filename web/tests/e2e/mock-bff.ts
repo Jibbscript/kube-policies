@@ -1,4 +1,4 @@
-import { test as base, type Page, type Route } from '@playwright/test';
+import { test as base, type Page, type Route } from "@playwright/test";
 
 /**
  * Mock BFF for Playwright e2e tests.
@@ -10,35 +10,51 @@ import { test as base, type Page, type Route } from '@playwright/test';
  */
 
 const sampleDenyResult = {
-  Allowed: false,
-  Decision: 'DENY',
-  Reason: 'rule violation',
-  Message: 'privileged container not allowed',
-  Violations: [
+  allowed: false,
+  decision: "DENY",
+  reason: "rule violation",
+  message: "privileged container not allowed",
+  violations: [
     {
-      rule_id: 'no-privileged-containers',
-      rule_name: 'no-privileged-containers',
+      rule_id: "no-privileged-containers",
+      rule_name: "no-privileged-containers",
       message: 'container "app" runs with securityContext.privileged=true',
-      path: 'spec.containers[0].securityContext.privileged',
-      severity: 'critical',
-      frameworks: ['CIS-5.2.1', 'NSA-Hardening'],
+      path: "spec.containers[0].securityContext.privileged",
+      severity: "critical",
+      frameworks: ["CIS-5.2.1", "NSA-Hardening"],
     },
   ],
-  Patches: [],
-  Metadata: { policy: 'security-baseline' },
+  patches: [],
+  metadata: { policy: "security-baseline" },
 };
 
 const samplePolicies = [
   {
-    id: 'security-baseline',
-    name: 'Security Baseline',
-    description: 'Bundled baseline rules',
+    id: "security-baseline",
+    name: "Security Baseline",
+    description: "Bundled baseline rules",
     enabled: true,
     rules: [
-      { id: 'no-privileged-containers', name: 'no-privileged-containers', severity: 'critical' },
-      { id: 'no-host-path-volumes', name: 'no-host-path-volumes', severity: 'high' },
-      { id: 'no-latest-image-tag', name: 'no-latest-image-tag', severity: 'medium' },
-      { id: 'required-security-context', name: 'required-security-context', severity: 'high' },
+      {
+        id: "no-privileged-containers",
+        name: "no-privileged-containers",
+        severity: "critical",
+      },
+      {
+        id: "no-host-path-volumes",
+        name: "no-host-path-volumes",
+        severity: "high",
+      },
+      {
+        id: "no-latest-image-tag",
+        name: "no-latest-image-tag",
+        severity: "medium",
+      },
+      {
+        id: "required-security-context",
+        name: "required-security-context",
+        severity: "high",
+      },
     ],
   },
 ];
@@ -54,37 +70,52 @@ const sampleMetrics = {
   admission_webhook_degraded: false,
 };
 
-async function fulfillJson(route: Route, status: number, body: unknown): Promise<void> {
+async function fulfillJson(
+  route: Route,
+  status: number,
+  body: unknown,
+): Promise<void> {
   await route.fulfill({
     status,
-    contentType: 'application/json',
+    contentType: "application/json",
     body: JSON.stringify(body),
   });
 }
 
 export async function installDefaultMocks(page: Page): Promise<void> {
-  await page.route('**/api/v1/policies', (route) => {
-    if (route.request().method() === 'GET') return fulfillJson(route, 200, samplePolicies);
-    return route.fulfill({ status: 403, body: 'forbidden' });
+  await page.route("**/api/v1/policies", (route) => {
+    if (route.request().method() === "GET")
+      return fulfillJson(route, 200, samplePolicies);
+    return route.fulfill({ status: 403, body: "forbidden" });
   });
-  await page.route('**/api/v1/policies/security-baseline/test', (route) =>
+  await page.route("**/api/v1/policies/security-baseline/test", (route) =>
     fulfillJson(route, 200, sampleDenyResult),
   );
-  await page.route('**/api/v1/exceptions', (route) => fulfillJson(route, 200, []));
-  await page.route('**/api/metrics/summary', (route) => fulfillJson(route, 200, sampleMetrics));
-  await page.route('**/api/decisions/recent**', (route) =>
+  await page.route("**/api/v1/exceptions", (route) =>
+    fulfillJson(route, 200, []),
+  );
+  await page.route("**/api/metrics/summary", (route) =>
+    fulfillJson(route, 200, sampleMetrics),
+  );
+  await page.route("**/api/decisions/recent**", (route) =>
     fulfillJson(route, 200, { events: [] }),
   );
 }
 
 export async function installReadOnlyMocks(page: Page): Promise<void> {
-  await page.route('**/api/v1/**', (route) => {
+  await page.route("**/api/v1/**", (route) => {
     const method = route.request().method();
-    if (method === 'GET') return fulfillJson(route, 200, []);
-    return route.fulfill({ status: 403, contentType: 'application/json', body: '{"error":"read-only"}' });
+    if (method === "GET") return fulfillJson(route, 200, []);
+    return route.fulfill({
+      status: 403,
+      contentType: "application/json",
+      body: '{"error":"read-only"}',
+    });
   });
-  await page.route('**/api/metrics/summary', (route) => fulfillJson(route, 200, sampleMetrics));
-  await page.route('**/api/decisions/recent**', (route) =>
+  await page.route("**/api/metrics/summary", (route) =>
+    fulfillJson(route, 200, sampleMetrics),
+  );
+  await page.route("**/api/decisions/recent**", (route) =>
     fulfillJson(route, 200, { events: [] }),
   );
 }
@@ -99,4 +130,4 @@ export const test = base.extend<{ mockBff: void }>({
   ],
 });
 
-export { expect } from '@playwright/test';
+export { expect } from "@playwright/test";

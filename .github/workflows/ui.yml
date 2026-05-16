@@ -61,6 +61,10 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-pnpm-
 
+      - name: Install web dependencies
+        working-directory: web
+        run: pnpm install --frozen-lockfile
+
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
