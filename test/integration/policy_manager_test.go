@@ -127,8 +127,9 @@ func (suite *PolicyManagerIntegrationTestSuite) SetupSuite() {
 	go func() {
 		defer suite.controllerWG.Done()
 		_ = policymanager.StartControllers(suite.ctx, cfg, zap.NewNop(), policymanager.ControllerOptions{
-			PolicySink:    mgr,
-			ExceptionSink: mgr,
+			PolicySink:            mgr,
+			ExceptionSink:         mgr,
+			DisableLeaderElection: true,
 		})
 	}()
 
