@@ -32,6 +32,9 @@ type Collector struct {
 
 	// Webhook decision publisher metrics
 	webhookDecisionPublishDropped prometheus.Counter
+
+	// Exception suppression metrics
+	exceptionSuppressions *prometheus.CounterVec
 }
 
 // NewCollector creates a new metrics collector
@@ -154,6 +157,21 @@ func NewCollector() *Collector {
 				Help:      "Total number of webhook decision publish events dropped due to a full buffer",
 			},
 		),
+
+		// Labels are deliberately {policy_id, rule_id} ONLY. exception_id was
+		// considered and rejected: operator-rotated exceptions would grow the
+		// label cardinality unbounded over a cluster's lifetime (a known
+		// Prometheus outage class). Per-exception attribution is in the
+		// structured audit log instead. See plan §5.9.a / OQ-4.
+		exceptionSuppressions: promauto.NewCounterVec(
+			prometheus.CounterOpts{
+				Namespace: "kube_policies",
+				Subsystem: "policy",
+				Name:      "exception_suppressions_total",
+				Help:      "Total number of policy violations suppressed by a matching PolicyException",
+			},
+			[]string{"policy_id", "rule_id"},
+		),
 	}
 }
 
@@ -217,6 +235,13 @@ func (c *Collector) IncWebhookDecisionPublishDropped() {
 	c.webhookDecisionPublishDropped.Inc()
 }
 
+// IncExceptionSuppression increments the exception suppression counter once
+// per (policyID, ruleID) suppression. Caller iterates EvaluationResult.SuppressedBy
+// and invokes this for each ExceptionRef.
+func (c *Collector) IncExceptionSuppression(policyID, ruleID string) {
+	c.exceptionSuppressions.WithLabelValues(policyID, ruleID).Inc()
+}
+
 // GetMetrics returns all metrics for testing or inspection
 func (c *Collector) GetMetrics() map[string]prometheus.Collector {
 	return map[string]prometheus.Collector{
@@ -232,5 +257,6 @@ func (c *Collector) GetMetrics() map[string]prometheus.Collector {
 		"compliance_violations":            c.complianceViolations,
 		"compliance_reports":               c.complianceReports,
 		"webhook_decision_publish_dropped": c.webhookDecisionPublishDropped,
+		"exception_suppressions":           c.exceptionSuppressions,
 	}
 }

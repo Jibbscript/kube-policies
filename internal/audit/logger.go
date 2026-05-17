@@ -67,6 +67,13 @@ type Event struct {
 	Object           *runtime.RawExtension     `json:"object,omitempty"`
 	OldObject        *runtime.RawExtension     `json:"old_object,omitempty"`
 	Metadata         map[string]interface{}    `json:"metadata,omitempty"`
+	// SuppressedBy carries the full per-violation attribution (ID, Name, PolicyID,
+	// RuleID, Justification) for any violations the engine suppressed via a
+	// matching PolicyException. The Prometheus `exception_suppressions_total`
+	// counter intentionally drops exception_id from labels to bound cardinality
+	// (plan §5.9.a / OQ-4); operators correlating a metric spike with a specific
+	// exception query this audit field, not the metric.
+	SuppressedBy []policy.ExceptionRef `json:"suppressed_by,omitempty"`
 }
 
 // Context represents the context for audit logging
@@ -87,6 +94,10 @@ type Context struct {
 	OldObject        *runtime.RawExtension
 	Timestamp        time.Time
 	Metadata         map[string]interface{}
+	// SuppressedBy carries the ExceptionRefs attached to the EvaluationResult
+	// for any violations waived by a matching PolicyException. Populated by
+	// the admission controller from policy.EvaluationResult.SuppressedBy.
+	SuppressedBy []policy.ExceptionRef
 }
 
 // NewLogger creates a new audit logger.
@@ -175,6 +186,7 @@ func (l *Logger) LogDecision(ctx *Context) {
 		Object:           ctx.Object,
 		OldObject:        ctx.OldObject,
 		Metadata:         ctx.Metadata,
+		SuppressedBy:     ctx.SuppressedBy,
 	}
 
 	l.enqueue(event)

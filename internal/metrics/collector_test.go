@@ -1,11 +1,41 @@
 package metrics
 
 import (
+	"sort"
 	"testing"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
+	dto "github.com/prometheus/client_model/go"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
+
+// collectCounterValue returns the float value of a single CounterVec child
+// series and the sorted list of label names on the rendered Metric. It uses
+// the dto.Metric proto so we don't depend on `prometheus/testutil` (which
+// pulls `kylelemons/godebug` as a transitive dep, requiring a `go mod tidy`
+// outside this PR's lane).
+func collectCounterValue(t *testing.T, c prometheus.Collector) (float64, []string) {
+	t.Helper()
+	ch := make(chan prometheus.Metric, 1)
+	c.Collect(ch)
+	close(ch)
+
+	m, ok := <-ch
+	require.True(t, ok, "expected one Metric sample from the collector")
+
+	var dtm dto.Metric
+	require.NoError(t, m.Write(&dtm))
+	require.NotNil(t, dtm.Counter, "expected a Counter sample")
+
+	names := make([]string, 0, len(dtm.Label))
+	for _, lp := range dtm.Label {
+		names = append(names, lp.GetName())
+	}
+	sort.Strings(names)
+	return dtm.Counter.GetValue(), names
+}
 
 var testCollector *Collector
 
@@ -95,6 +125,50 @@ func TestMetricsCollector_IncComplianceReports(t *testing.T) {
 	// Test compliance report metrics
 	testCollector.IncComplianceReports("cis", "success")
 	testCollector.IncComplianceReports("nist", "error")
+}
+
+// TestCollector_IncExceptionSuppression_Increments asserts that the
+// `kube_policies_policy_exception_suppressions_total` counter is incremented
+// exactly once per IncExceptionSuppression call with the matching label values.
+// Closes the C6 acceptance criterion gap surfaced in team-verify (FIX-1).
+func TestCollector_IncExceptionSuppression_Increments(t *testing.T) {
+	// Use label values unique to this test so the shared testCollector counter
+	// child starts at zero regardless of test ordering with the label-set test below.
+	const policyID = "policy-fix1-inc"
+	const ruleID = "rule-fix1-inc"
+
+	testCollector.IncExceptionSuppression(policyID, ruleID)
+
+	vec, ok := testCollector.GetMetrics()["exception_suppressions"].(*prometheus.CounterVec)
+	require.True(t, ok, "exception_suppressions must be a *prometheus.CounterVec")
+
+	val, _ := collectCounterValue(t, vec.WithLabelValues(policyID, ruleID))
+	assert.InDelta(t, 1.0, val, 1e-9)
+
+	// Idempotency / second-increment sanity check.
+	testCollector.IncExceptionSuppression(policyID, ruleID)
+	val, _ = collectCounterValue(t, vec.WithLabelValues(policyID, ruleID))
+	assert.InDelta(t, 2.0, val, 1e-9)
+}
+
+// TestCollector_ExceptionSuppression_LabelSetIsBounded confirms the metric's
+// label set is exactly `{policy_id, rule_id}` — no exception_id, no other
+// high-cardinality labels. Anchors the OQ-4 / plan §5.9.a cardinality
+// decision: a future change that adds (e.g.) `exception_id` to labels would
+// fail this test loudly. Per-exception attribution belongs in the structured
+// audit log, not the metric.
+func TestCollector_ExceptionSuppression_LabelSetIsBounded(t *testing.T) {
+	const policyID = "policy-fix1-bounds"
+	const ruleID = "rule-fix1-bounds"
+
+	testCollector.IncExceptionSuppression(policyID, ruleID)
+
+	vec, ok := testCollector.GetMetrics()["exception_suppressions"].(*prometheus.CounterVec)
+	require.True(t, ok)
+
+	_, names := collectCounterValue(t, vec.WithLabelValues(policyID, ruleID))
+	assert.Equal(t, []string{"policy_id", "rule_id"}, names,
+		"label set must be EXACTLY {policy_id, rule_id} — no exception_id, no other high-cardinality labels (plan §5.9.a / OQ-4)")
 }
 
 func TestMetricsCollector_GetMetrics(t *testing.T) {

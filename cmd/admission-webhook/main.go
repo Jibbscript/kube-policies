@@ -92,10 +92,33 @@ func main() {
 	log.Info("disable-default-policies flag", zap.Bool("disable_default_policies", *disableDefaults))
 	cfg.Policy.DisableDefaults = *disableDefaults
 
-	// Initialize policy engine
-	policyEngine, err := policy.NewEngine(&cfg.Policy, log)
-	if err != nil {
-		log.Fatal("Failed to initialize policy engine", zap.Error(err))
+	// Initialize policy engine.
+	//
+	// Conditional construction (plan §5.5, engine-exception-consumption):
+	// under --disable-controllers the engine is built via NewEngine with no
+	// registry — the nil-branch in Evaluate is the live production code path,
+	// preserving Principle 5 (flag flip changes no observable allow/deny).
+	// With controllers enabled, a single *exceptionSink is constructed and
+	// passed as BOTH:
+	//   - the engine's ExceptionRegistry (read side) via NewEngineWithExceptions
+	//   - the reconciler's ExceptionSink (write side) via ControllerOptions below
+	var (
+		policyEngine *policy.Engine
+		excSink      *exceptionSink // non-nil only when controllers are enabled
+	)
+	if *disableControllers {
+		policyEngine, err = policy.NewEngine(&cfg.Policy, log)
+		if err != nil {
+			log.Fatal("Failed to initialize policy engine", zap.Error(err))
+		}
+		log.Info("exception sink not wired (--disable-controllers set; bundled-only enforcement)")
+	} else {
+		excSink = newExceptionSink(log.Named("exception-sink"))
+		policyEngine, err = policy.NewEngineWithExceptions(&cfg.Policy, log, excSink)
+		if err != nil {
+			log.Fatal("Failed to initialize policy engine", zap.Error(err))
+		}
+		log.Info("exception sink wired into engine (CRD reconciler enabled)")
 	}
 
 	// Initialize decision publisher (fire-and-forget forwarding to policy-manager).
@@ -182,9 +205,11 @@ func main() {
 			// Status-patch races between replicas are benign (every
 			// replica writes the same Phase/Conditions for the same spec).
 			LeaderlessReconcilers: true,
-			// ExceptionSink intentionally nil: the engine has no exception
-			// enforcement path; wiring it would imply a behavior change that
-			// is out of scope for the webhook extension.
+			// ExceptionSink wired via co-located reconciler — see plan §3.1 W2.
+			// Same *exceptionSink instance is the engine's ExceptionRegistry
+			// (read side); constructed above and passed to
+			// policy.NewEngineWithExceptions. One struct, two named interfaces.
+			ExceptionSink: excSink,
 		}
 		go func() {
 			log.Info("starting CRD controllers")

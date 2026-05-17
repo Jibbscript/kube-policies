@@ -1,16 +1,19 @@
 <!-- Parent: ../AGENTS.md -->
-<!-- Generated: 2026-05-15 | Updated: 2026-05-15 -->
+<!-- Generated: 2026-05-15 | Updated: 2026-05-17 -->
 
 # policymanager
 
 ## Purpose
-Implements the policy-manager service: in-memory storage for policies, bundles, and exceptions; REST handlers for the `/api/v1/*` API; background goroutines for policy synchronization (ticker placeholder) and hourly exception-expiry monitoring.
+Implements the policy-manager service: in-memory storage for policies, bundles, and exceptions; REST handlers for the `/api/v1/*` API; background goroutines for policy synchronization (ticker placeholder) and hourly exception-expiry monitoring. Also publishes the `ControllerOptions` plumbing (PolicyReconciler, PolicyExceptionReconciler, `PolicySink`, `ExceptionSink`) consumed by both the policy-manager binary and the admission-webhook binary.
 
 ## Key Files
 
 | File | Description |
 |------|-------------|
 | `manager.go` | `Manager` struct, supporting types (`PolicyBundle`, `Exception`, `ExceptionScope`, `ComplianceReport`/`Summary`/`Violation`), all Gin HTTP handlers, validation, and background loops |
+| `controller.go` | `ControllerOptions`, `StartControllers`, `PolicySink` + `ExceptionSink` interfaces, `PolicyReconciler` + `PolicyExceptionReconciler` (leader-elected by default; `LeaderlessReconcilers: true` for the webhook host). |
+| `crd_sync.go` | `ExceptionFromCRD` — the canonical converter from `policiesv1.PolicyException` to the internal `Exception` value. Reused by both the policy-manager's reconciler and the admission-webhook's `exceptionSink`. |
+| `decisions_handler.go` / `_test.go` | `/api/v1/decisions/internal` ingestion. Lenient JSON decode (no `DisallowUnknownFields()`); `suppressed_by` round-trips intact, asserted by `TestIngestInternal_SuppressedByRoundTrip`. |
 
 ## For AI Agents
 
@@ -39,6 +42,15 @@ Implements the policy-manager service: in-memory storage for policies, bundles, 
 - `github.com/gin-gonic/gin`
 - `github.com/google/uuid`
 - `go.uber.org/zap`
+
+## ExceptionSink (write side) and the dual-interface pattern
+
+`ExceptionSink` (`controller.go:39-53`) is the write-side counterpart of `PolicySink`. The `PolicyExceptionReconciler` calls `UpsertExceptionFromCRD` / `RemoveExceptionByID` whenever a `PolicyException` CR changes; the sink stores the exception however the caller chooses.
+
+- The **policy-manager** binary passes its own `Manager` as the sink — exceptions feed the manager's in-memory store and the `/api/v1/exceptions` REST surface.
+- The **admission-webhook** binary passes a leaderless `*exceptionSink` (at `cmd/admission-webhook/exception_sink.go`) that also satisfies `policy.ExceptionRegistry` — the engine reads the same store via `Suppresses(ctx, MatchKey)` on the hot path. The "Sink" name reflects only the write-side contract; the dual-interface comment on `controller.go:39-49` points to the webhook implementation as the canonical example. When extending the interface, **do not import `internal/policy`** here — the read-side contract lives in that package on purpose so neither side depends on the other.
+- `ControllerOptions.ExceptionSink` is **optional**. Passing `nil` skips wiring the `PolicyExceptionReconciler` entirely; no informer is started for `policyexceptions`. The webhook only passes a non-nil sink when controllers are enabled (see `cmd/admission-webhook/AGENTS.md` for the conditional construction).
+- Reconcile order: `PolicyExceptionReconciler.Reconcile` (`controller.go:301-330`) validates `Spec.PolicyID` is non-empty before calling the sink — this validation gate is the first line of defense against malformed CRs from pre-mortem §4.4 (reconciler-panic scenario). Controller-runtime's built-in `recover()` guard is the second line; do not wrap reconcile in a hand-rolled recover.
 
 ## Leader election
 

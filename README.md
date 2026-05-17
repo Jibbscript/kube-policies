@@ -170,20 +170,56 @@ spec:
 
 ### Exception Management
 
+A `PolicyException` CR grants a targeted carve-out from a Policy. The webhook
+consults its in-cluster exception index on every admission request; matching
+exceptions suppress otherwise-denied verdicts. Suppressions are observable via
+the Prometheus counter `kube_policies_policy_exception_suppressions_total{policy_id, rule_id}`,
+the structured audit log (`suppressed_by` field), and an `info`-level
+admission log line.
+
 ```yaml
 apiVersion: policies.kube-policies.io/v1
 kind: PolicyException
 metadata:
   name: emergency-deployment
+  namespace: emergency-ns       # exception is namespaced; create it in the
+                                # same namespace as the workload or in
+                                # kube-policies-system
 spec:
-  policy: security-baseline
-  rules: ["no-privileged-containers"]
-  duration: "24h"
+  policy_id: security-baseline           # required: id of the Policy to waive
+  rule_id: no-privileged-containers      # optional: empty = applies to all
+                                         # rules of the parent policy
   justification: "Emergency security patch deployment"
-  approval:
-    required: true
-    approvers: ["security-team"]
+  approver: security-team
+  expires_at: "2030-01-01T00:00:00Z"     # RFC3339, e.g. far-future or
+                                         # `<incident-end>+24h`; omit for no expiry
+  scope:
+    # All four dimensions act as strict allow-lists; an unset dimension is
+    # unconstrained but does not widen the match. Omitting `scope` entirely
+    # produces a wildcard match for the named policy/rule.
+    namespaces: ["emergency-ns"]
+    resources:  ["pods"]
+    # users / groups also supported.
 ```
+
+**Eventual-consistency note.** Exception propagation runs through the
+controller-runtime watch in each webhook replica; there is a brief window
+(typically < 1 s on healthy clusters, longer under load) between
+`kubectl apply` and the webhook honoring the exception. Operators applying an
+emergency carve-out should either re-apply the affected workload after a short
+pause, or wait for `status.phase=Active` on the `PolicyException` CR before
+proceeding. The CRD intentionally does NOT support a synchronous "wait for
+suppression" mode — blocking admission until the index converges would create
+a worse failure mode (admission stalls on reconciler outages).
+
+**Scope semantics (security-sensitive).** An exception whose `scope` is
+entirely absent (no `namespaces`, `resources`, `users`, or `groups` set)
+matches **every** request for the named policy/rule. An explicitly-empty
+list inside an otherwise-populated `scope` (e.g. `namespaces: []`) is treated
+as "this dimension is unconstrained" — NOT "no namespaces match." Operators
+who genuinely want "no resources match" must omit the CR entirely rather
+than create one with empty allow-lists. See `cmd/admission-webhook/AGENTS.md`
+for the full matcher predicate documentation.
 
 ## Development
 
