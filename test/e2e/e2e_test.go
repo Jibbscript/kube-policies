@@ -591,6 +591,75 @@ var _ = ginkgo.Describe("Kube-Policies E2E Tests", func() {
 			f.DeletePolicy(policy.GetName(), policy.GetNamespace())
 		})
 	})
+
+	ginkgo.Context("Leader Election", func() {
+		// This Context targets a live cluster where the operator is already
+		// deployed. It reads the coordination.k8s.io/v1 Lease that the
+		// admission-webhook controller manager creates and asserts:
+		//   1. The Lease exists and spec.holderIdentity is set (someone holds it).
+		//   2. The holder identity maps to exactly one admission-webhook pod.
+		//   3. No other admission-webhook pod's name appears in holderIdentity.
+		//
+		// The Lease CR is the authoritative source of truth — no log-string
+		// matching is used because controller-runtime's election log messages
+		// are not part of its public API.
+		ginkgo.It("exactly one admission-webhook pod holds the lease at a time", func() {
+			ginkgo.By("Reading the admission-webhook leader-election Lease from " + operatorNamespace)
+
+			lease, err := f.ClientSet.CoordinationV1().Leases(operatorNamespace).Get(
+				f.Context, "kube-policies-admission-webhook", metav1.GetOptions{})
+			gomega.Expect(err).NotTo(gomega.HaveOccurred(),
+				"Lease/kube-policies-admission-webhook must exist in namespace %s — "+
+					"ensure the deployment image includes the leader-election changes "+
+					"and the RBAC grants coordination.k8s.io/leases verbs", operatorNamespace)
+
+			gomega.Expect(lease.Spec.HolderIdentity).NotTo(gomega.BeNil(),
+				"Lease spec.holderIdentity must be non-nil")
+			holderIdentity := *lease.Spec.HolderIdentity
+			gomega.Expect(holderIdentity).NotTo(gomega.BeEmpty(),
+				"Lease spec.holderIdentity must be non-empty — no manager has acquired leadership")
+
+			ginkgo.By(fmt.Sprintf("Lease held by: %q", holderIdentity))
+
+			// controller-runtime encodes holderIdentity as "<pod-name>_<uuid>".
+			// Extract the pod-name prefix (everything before the first "_").
+			parts := strings.SplitN(holderIdentity, "_", 2)
+			holderPodName := parts[0]
+			ginkgo.By(fmt.Sprintf("Identified leader pod name: %q", holderPodName))
+
+			// List all pods in the operator namespace and find admission-webhook pods.
+			pods, err := f.ClientSet.CoreV1().Pods(operatorNamespace).List(
+				f.Context, metav1.ListOptions{})
+			gomega.Expect(err).NotTo(gomega.HaveOccurred())
+
+			var webhookPodNames []string
+			for i := range pods.Items {
+				if strings.Contains(pods.Items[i].Name, "admission-webhook") {
+					webhookPodNames = append(webhookPodNames, pods.Items[i].Name)
+				}
+			}
+			gomega.Expect(webhookPodNames).NotTo(gomega.BeEmpty(),
+				"no admission-webhook pods found in namespace %s", operatorNamespace)
+
+			// Assertion 1: the holder pod must be one of the admission-webhook pods.
+			gomega.Expect(webhookPodNames).To(gomega.ContainElement(holderPodName),
+				"holderIdentity %q (pod %q) does not match any admission-webhook pod %v",
+				holderIdentity, holderPodName, webhookPodNames)
+
+			// Assertion 2: no non-leader pod's name must appear in holderIdentity,
+			// ensuring exactly one pod holds the lease.
+			for _, podName := range webhookPodNames {
+				if podName == holderPodName {
+					continue
+				}
+				gomega.Expect(holderIdentity).NotTo(gomega.ContainSubstring(podName),
+					"holderIdentity %q references non-leader pod %q — "+
+						"more than one pod may hold the lease", holderIdentity, podName)
+			}
+
+			ginkgo.By(fmt.Sprintf("✓ Exactly one admission-webhook pod (%q) holds the lease", holderPodName))
+		})
+	})
 })
 
 func TestE2E(t *testing.T) {
