@@ -70,6 +70,19 @@ rules:
   - policyexceptions
   verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
 
+# Policy status subresources.
+# PolicyReconciler.publishPolicyStatus / PolicyExceptionReconciler.publishExceptionStatus
+# write phase + conditions via r.Status().Patch(), which targets the
+# /<plural>/<name>/status endpoint. The apiserver enforces RBAC on the
+# subresource separately from the parent — without this rule the patch is
+# rejected with "cannot patch resource \"policies/status\"" and the e2e
+# spec polling for phase=Active times out at 30s.
+- apiGroups: ["policies.kube-policies.io"]
+  resources:
+  - policies/status
+  - policyexceptions/status
+  verbs: ["get", "update", "patch"]
+
 # Admission registration
 - apiGroups: ["admissionregistration.k8s.io"]
   resources:

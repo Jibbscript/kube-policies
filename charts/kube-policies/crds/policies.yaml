@@ -16,6 +16,13 @@ spec:
   - name: v1
     served: true
     storage: true
+    # status subresource is required: PolicyReconciler.publishPolicyStatus
+    # writes via r.Status().Patch(), which targets /policies/{name}/status. Without
+    # this subresource the apiserver has no /status endpoint and the patch silently
+    # fails (DEBUG-only log in the reconciler) — leaving spec.status.phase blank
+    # and breaking any caller that waits for phase=Active.
+    subresources:
+      status: {}
     schema:
       openAPIV3Schema:
         description: Policy defines a security or compliance policy for Kubernetes resources
