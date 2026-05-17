@@ -11,14 +11,16 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
+	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	configv1alpha1 "sigs.k8s.io/controller-runtime/pkg/config"
+	"sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
-	policiesv1 "github.com/Jibbscript/kube-policies/internal/policymanager/apis/policies/v1"
 	"github.com/Jibbscript/kube-policies/internal/policy"
+	policiesv1 "github.com/Jibbscript/kube-policies/internal/policymanager/apis/policies/v1"
 )
 
 // PolicySink is the contract a target registry implements so a
@@ -56,21 +58,36 @@ type ControllerOptions struct {
 	// exception code path yet.
 	ExceptionSink ExceptionSink
 
-	// LeaderElection enables controller-runtime's standard configmap-based
-	// leader election so multi-replica deployments converge on a single
-	// reconciler. Off by default because the bundled Helm chart ships
-	// replicas: 1.
-	LeaderElection bool
+	// DisableLeaderElection opts out of controller-runtime's Lease-based leader
+	// election (coordination.k8s.io/Lease, the default for controller-runtime
+	// ≥ v0.7). The zero value enables election so multi-replica deployments are
+	// safe by default. Set true only for single-process scenarios where
+	// contention is impossible (e.g. envtest unit suites).
+	DisableLeaderElection bool
 
-	// LeaderElectionNamespace is the namespace the lease ConfigMap is created
-	// in when LeaderElection is true. Required when LeaderElection=true.
+	// LeaderElectionNamespace is the namespace the Lease resource is created in
+	// when leader election is enabled (i.e. DisableLeaderElection=false).
+	// Required when leader election is enabled.
 	LeaderElectionNamespace string
 
 	// LeaderElectionID is the lease name. Defaults to
-	// "kube-policies-policy-manager" when empty. Set per-binary when running
-	// the controller in both processes (otherwise they would contend over
-	// the same lease).
+	// "kube-policies-policy-manager" when empty as a defensive fallback.
+	// Production callers MUST set this explicitly — two embedders sharing the
+	// default contend over the same lease.
 	LeaderElectionID string
+
+	// LeaderlessReconcilers makes the embedded Policy/PolicyException
+	// reconcilers run on every pod (NeedLeaderElection=false) while the
+	// manager itself still acquires the leader-election lease. Set this for
+	// embedders whose reconciler's job is to populate a per-pod local cache
+	// — the admission-webhook in particular MUST set this true, otherwise
+	// only the leader's local OPA engine receives Policy CRD updates and
+	// admission requests load-balanced to follower pods bypass policy
+	// enforcement. The status-patch races between replicas are benign:
+	// every replica writes the same Phase/Conditions for the same CRD spec.
+	// Leave false for policy-manager, whose reconciler owns the
+	// cluster-wide registry state and should run on the leader only.
+	LeaderlessReconcilers bool
 }
 
 // StartControllers builds and starts a controller-runtime Manager that
@@ -89,7 +106,7 @@ func StartControllers(ctx context.Context, cfg *rest.Config, log *zap.Logger, op
 		return fmt.Errorf("ControllerOptions.PolicySink is required")
 	}
 	scheme := runtime.NewScheme()
-	// Register the core k8s types so the client can address ConfigMaps for
+	// Register the core k8s types so the client can address Lease resources for
 	// leader election. Without this, leader election would panic on first run.
 	if err := clientgoscheme.AddToScheme(scheme); err != nil {
 		return fmt.Errorf("register core scheme: %w", err)
@@ -100,6 +117,11 @@ func StartControllers(ctx context.Context, cfg *rest.Config, log *zap.Logger, op
 
 	if opts.LeaderElectionID == "" {
 		opts.LeaderElectionID = "kube-policies-policy-manager"
+	}
+
+	effectiveLeaderElection := !opts.DisableLeaderElection
+	if effectiveLeaderElection && opts.LeaderElectionNamespace == "" {
+		return fmt.Errorf("LeaderElectionNamespace is required when leader election is enabled; call policymanager.ResolvePodNamespace from your binary or set DisableLeaderElection: true for test/single-process scenarios")
 	}
 
 	// SkipNameValidation = true disables controller-runtime's process-wide
@@ -123,10 +145,11 @@ func StartControllers(ctx context.Context, cfg *rest.Config, log *zap.Logger, op
 		Metrics: metricsserver.Options{BindAddress: "0"},
 		// Health probes are served by the calling binary, not this embedded
 		// controller manager.
-		HealthProbeBindAddress:  "0",
-		LeaderElection:          opts.LeaderElection,
-		LeaderElectionID:        opts.LeaderElectionID,
-		LeaderElectionNamespace: opts.LeaderElectionNamespace,
+		HealthProbeBindAddress:        "0",
+		LeaderElection:                effectiveLeaderElection,
+		LeaderElectionID:              opts.LeaderElectionID,
+		LeaderElectionNamespace:       opts.LeaderElectionNamespace,
+		LeaderElectionReleaseOnCancel: true,
 		Controller: configv1alpha1.Controller{
 			SkipNameValidation: &skipNameValidation,
 		},
@@ -141,7 +164,7 @@ func StartControllers(ctx context.Context, cfg *rest.Config, log *zap.Logger, op
 		Sink:   opts.PolicySink,
 		Log:    log.Named("policy-reconciler"),
 	}
-	if err := policyReconciler.SetupWithManager(mgr); err != nil {
+	if err := policyReconciler.SetupWithManager(mgr, opts.LeaderlessReconcilers); err != nil {
 		return fmt.Errorf("setup Policy reconciler: %w", err)
 	}
 
@@ -152,13 +175,14 @@ func StartControllers(ctx context.Context, cfg *rest.Config, log *zap.Logger, op
 			Sink:   opts.ExceptionSink,
 			Log:    log.Named("exception-reconciler"),
 		}
-		if err := exceptionReconciler.SetupWithManager(mgr); err != nil {
+		if err := exceptionReconciler.SetupWithManager(mgr, opts.LeaderlessReconcilers); err != nil {
 			return fmt.Errorf("setup PolicyException reconciler: %w", err)
 		}
 	}
 
 	log.Info("starting CRD controllers",
-		zap.Bool("leader_election", opts.LeaderElection),
+		zap.Bool("leader_election", effectiveLeaderElection),
+		zap.Bool("leaderless_reconcilers", opts.LeaderlessReconcilers),
 		zap.Bool("exception_reconciler_enabled", opts.ExceptionSink != nil),
 	)
 	if err := mgr.Start(ctx); err != nil {
@@ -227,10 +251,15 @@ func (r *PolicyReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 }
 
 // SetupWithManager wires the reconciler into the controller-runtime manager.
-func (r *PolicyReconciler) SetupWithManager(mgr ctrl.Manager) error {
+// When leaderless is true, the controller is registered with
+// NeedLeaderElection=false so it runs on every replica — required by
+// embedders whose Sink populates a per-pod local cache (e.g. the
+// admission-webhook's OPA engine).
+func (r *PolicyReconciler) SetupWithManager(mgr ctrl.Manager, leaderless bool) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&policiesv1.Policy{}).
 		Named("policy").
+		WithOptions(controller.Options{NeedLeaderElection: ptr.To(!leaderless)}).
 		Complete(r)
 }
 
@@ -293,10 +322,11 @@ func (r *PolicyExceptionReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 	return ctrl.Result{}, nil
 }
 
-func (r *PolicyExceptionReconciler) SetupWithManager(mgr ctrl.Manager) error {
+func (r *PolicyExceptionReconciler) SetupWithManager(mgr ctrl.Manager, leaderless bool) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&policiesv1.PolicyException{}).
 		Named("policyexception").
+		WithOptions(controller.Options{NeedLeaderElection: ptr.To(!leaderless)}).
 		Complete(r)
 }
 
@@ -337,4 +367,3 @@ func upsertCondition(conds *[]metav1.Condition, next metav1.Condition) {
 	}
 	*conds = append(*conds, next)
 }
-

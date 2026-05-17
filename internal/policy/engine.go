@@ -106,9 +106,13 @@ func NewEngine(config *config.PolicyConfig, logger *zap.Logger) (*Engine, error)
 		config:   config,
 	}
 
-	// Load default policies
-	if err := engine.loadDefaultPolicies(); err != nil {
-		return nil, fmt.Errorf("failed to load default policies: %w", err)
+	// Load default policies unless explicitly disabled
+	if config.DisableDefaults {
+		logger.Info("default policies disabled; skipping bundled policy load")
+	} else {
+		if err := engine.loadDefaultPolicies(); err != nil {
+			return nil, fmt.Errorf("failed to load default policies: %w", err)
+		}
 	}
 
 	return engine, nil

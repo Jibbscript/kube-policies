@@ -1,22 +1,19 @@
-{{- if .Values.rbac.create }}
 apiVersion: v1
 kind: ServiceAccount
 metadata:
-  name: {{ include "kube-policies.serviceAccountName" . }}
-  namespace: {{ .Release.Namespace }}
+  name: kube-policies-admission-webhook
+  namespace: kube-policies-system
   labels:
-    {{- include "kube-policies.labels" . | nindent 4 }}
-  {{- with .Values.rbac.serviceAccount.annotations }}
-  annotations:
-    {{- toYaml . | nindent 4 }}
-  {{- end }}
+    app: kube-policies-admission-webhook
+    component: admission-webhook
 ---
-apiVersion: {{ include "kube-policies.rbac.apiVersion" . }}
+apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: {{ include "kube-policies.fullname" . }}
+  name: kube-policies-admission-webhook
   labels:
-    {{- include "kube-policies.labels" . | nindent 4 }}
+    app: kube-policies-admission-webhook
+    component: admission-webhook
 rules:
 # Core Kubernetes resources
 - apiGroups: [""]
@@ -101,7 +98,7 @@ rules:
 
 # Leader election (coordination.k8s.io/Lease resource).
 # The Lease is namespaced; this ClusterRole grants the verbs globally
-# but the actual Lease is only created in {{ .Release.Namespace }}.
+# but the actual Lease is only created in kube-policies-system.
 - apiGroups: ["coordination.k8s.io"]
   resources:
   - leases
@@ -111,59 +108,18 @@ rules:
 - nonResourceURLs: ["/metrics"]
   verbs: ["get"]
 ---
-apiVersion: {{ include "kube-policies.rbac.apiVersion" . }}
+apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  name: {{ include "kube-policies.fullname" . }}
+  name: kube-policies-admission-webhook
   labels:
-    {{- include "kube-policies.labels" . | nindent 4 }}
+    app: kube-policies-admission-webhook
+    component: admission-webhook
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
-  name: {{ include "kube-policies.fullname" . }}
+  name: kube-policies-admission-webhook
 subjects:
 - kind: ServiceAccount
-  name: {{ include "kube-policies.serviceAccountName" . }}
-  namespace: {{ .Release.Namespace }}
----
-{{- if .Values.monitoring.enabled }}
-apiVersion: {{ include "kube-policies.rbac.apiVersion" . }}
-kind: ClusterRole
-metadata:
-  name: {{ include "kube-policies.fullname" . }}-monitoring
-  labels:
-    {{- include "kube-policies.labels" . | nindent 4 }}
-rules:
-# Prometheus monitoring
-- apiGroups: [""]
-  resources:
-  - nodes
-  - nodes/proxy
-  - services
-  - endpoints
-  - pods
-  verbs: ["get", "list", "watch"]
-- apiGroups: ["extensions"]
-  resources:
-  - ingresses
-  verbs: ["get", "list", "watch"]
-- nonResourceURLs: ["/metrics"]
-  verbs: ["get"]
----
-apiVersion: {{ include "kube-policies.rbac.apiVersion" . }}
-kind: ClusterRoleBinding
-metadata:
-  name: {{ include "kube-policies.fullname" . }}-monitoring
-  labels:
-    {{- include "kube-policies.labels" . | nindent 4 }}
-roleRef:
-  apiGroup: rbac.authorization.k8s.io
-  kind: ClusterRole
-  name: {{ include "kube-policies.fullname" . }}-monitoring
-subjects:
-- kind: ServiceAccount
-  name: {{ include "kube-policies.serviceAccountName" . }}
-  namespace: {{ .Release.Namespace }}
-{{- end }}
-{{- end }}
-
+  name: kube-policies-admission-webhook
+  namespace: kube-policies-system

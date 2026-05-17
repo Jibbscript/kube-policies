@@ -47,6 +47,7 @@ spec:
             - --cert-path=/etc/certs/tls.crt
             - --key-path=/etc/certs/tls.key
             - --config=/etc/config/config.yaml
+            - --disable-default-policies={{ .Values.admissionWebhook.disableDefaultPolicies }}
           ports:
             - name: webhook
               containerPort: 8443
@@ -57,6 +58,10 @@ spec:
           env:
             - name: LOG_LEVEL
               value: "info"
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
             - name: POLICY_MANAGER_URL
               value: "http://{{ include "kube-policies.fullname" . }}-policy-manager:8080"
             - name: POLICY_MANAGER_INTERNAL_URL

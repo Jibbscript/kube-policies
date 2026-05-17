@@ -140,8 +140,9 @@ func (suite *WebhookCRDIntegrationTestSuite) SetupSuite() {
 	go func() {
 		defer suite.wg.Done()
 		err := policymanager.StartControllers(suite.ctx, cfg, zap.NewNop(), policymanager.ControllerOptions{
-			LeaderElectionID: "kube-policies-webhook-crd-test",
-			PolicySink:       sink,
+			LeaderElectionID:      "kube-policies-webhook-crd-test",
+			PolicySink:            sink,
+			DisableLeaderElection: true,
 		})
 		if err != nil && err != context.Canceled {
 			suite.controllerErr = err

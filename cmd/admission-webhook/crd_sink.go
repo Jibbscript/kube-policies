@@ -3,9 +3,9 @@ package main
 import (
 	"go.uber.org/zap"
 
-	policiesv1 "github.com/Jibbscript/kube-policies/internal/policymanager/apis/policies/v1"
 	"github.com/Jibbscript/kube-policies/internal/policy"
 	"github.com/Jibbscript/kube-policies/internal/policymanager"
+	policiesv1 "github.com/Jibbscript/kube-policies/internal/policymanager/apis/policies/v1"
 )
 
 // engineSink is the admission-webhook's adapter that lets a Policy CRD

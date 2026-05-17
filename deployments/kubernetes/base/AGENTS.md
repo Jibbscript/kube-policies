@@ -24,4 +24,14 @@ Baseline Kubernetes manifests for the admission webhook. Intended for `kubectl a
 ### External
 - `kubectl` against a Kubernetes 1.20+ cluster
 
+## Installation
+
+`rbac.yaml` MUST be applied alongside `admission-webhook.yaml`. Install the entire base layer with:
+
+```sh
+kubectl apply -f deployments/kubernetes/base/
+```
+
+Apply ordering: `rbac.yaml` (ServiceAccount + ClusterRole + ClusterRoleBinding) before `admission-webhook.yaml` (Deployment references the ServiceAccount).
+
 <!-- MANUAL: -->
