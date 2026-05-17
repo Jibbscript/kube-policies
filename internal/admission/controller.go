@@ -127,11 +127,20 @@ func (c *Controller) ValidateHandler(ctx *gin.Context) {
 		}
 	}
 
+	// Record suppression metric BEFORE the audit log call so a panic in the
+	// audit path cannot drop counter increments. Per-exception attribution
+	// (ID/Name/Justification) stays in the audit log; the metric carries only
+	// bounded-cardinality labels (plan §5.9.a / OQ-4).
+	for _, ref := range decision.SuppressedBy {
+		c.metrics.IncExceptionSuppression(ref.PolicyID, ref.RuleID)
+	}
+
 	// Log audit event
 	auditCtx.Decision = decision.Decision
 	auditCtx.Reason = decision.Reason
 	auditCtx.Message = decision.Message
 	auditCtx.PolicyViolations = decision.Violations
+	auditCtx.SuppressedBy = decision.SuppressedBy
 	auditCtx.ProcessingTime = time.Since(startTime)
 	c.auditLogger.LogDecision(auditCtx)
 	if c.publisher != nil {
@@ -248,11 +257,18 @@ func (c *Controller) MutateHandler(ctx *gin.Context) {
 		}
 	}
 
+	// Record suppression metric BEFORE the audit log call (same rationale as
+	// ValidateHandler — see comment above).
+	for _, ref := range decision.SuppressedBy {
+		c.metrics.IncExceptionSuppression(ref.PolicyID, ref.RuleID)
+	}
+
 	// Log audit event
 	auditCtx.Decision = decision.Decision
 	auditCtx.Reason = decision.Reason
 	auditCtx.Message = decision.Message
 	auditCtx.PolicyViolations = decision.Violations
+	auditCtx.SuppressedBy = decision.SuppressedBy
 	auditCtx.Mutations = decision.Patches
 	auditCtx.ProcessingTime = time.Since(startTime)
 	c.auditLogger.LogDecision(auditCtx)

@@ -15,6 +15,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
+	policiesv1 "github.com/Jibbscript/kube-policies/internal/policymanager/apis/policies/v1"
 	"github.com/Jibbscript/kube-policies/test/e2e/framework"
 )
 
@@ -291,8 +292,17 @@ var _ = ginkgo.Describe("Kube-Policies E2E Tests", func() {
 	})
 
 	ginkgo.Context("Policy Exceptions", func() {
-		// QUARANTINED: engine has no PolicyException consumer (see Open Question #4 in plan v5).
-		ginkgo.PIt("should allow exceptions for specific resources", func() {
+		// Re-enabled by the engine-exception-consumption PR (plan Step 5.8). The
+		// webhook now consults a policy.ExceptionRegistry on every Evaluate;
+		// matching PolicyException CRs suppress otherwise-denied admissions.
+		// This spec exercises the end-to-end flow.
+		//
+		// Scope choice: the CRD's PolicyExceptionScope has no matchLabels field
+		// today (deferred follow-up — see OQ-3 in the plan). The exception is
+		// namespace-scoped via a sub-namespace `emergency-namespace`. Pods in
+		// that namespace bypass the privileged-container rule; pods in the
+		// framework's per-test namespace still get denied.
+		ginkgo.It("should allow exceptions for specific resources", func() {
 			ginkgo.By("Creating a security policy that denies privileged containers")
 
 			rules := []map[string]interface{}{
@@ -320,19 +330,29 @@ var _ = ginkgo.Describe("Kube-Policies E2E Tests", func() {
 			policy := f.CreateSecurityPolicy("privileged-policy-with-exception", rules)
 			f.WaitForPolicyActive(policy.GetName(), policy.GetNamespace(), 30*time.Second)
 
-			ginkgo.By("Creating a policy exception for emergency deployments")
+			ginkgo.By("Creating an emergency namespace for the exception scope")
+			emergencyNs := f.CreateNamespace(fmt.Sprintf("emergency-ns-%d", time.Now().UnixNano()))
+			defer f.DeleteNamespace(emergencyNs)
+
+			ginkgo.By("Creating a policy exception scoped to the emergency namespace")
+			// The engine identifies CRD-derived policies by the prefixed form
+			// `crd:<namespace>:<name>` (see internal/policymanager/crd_sync.go::
+			// CRDPolicyID). The exception's spec.policy_id MUST use this same
+			// form, otherwise the suppression pass cannot correlate the
+			// exception with the violation it is meant to waive.
+			policyID := fmt.Sprintf("crd:%s:%s", policy.GetNamespace(), policy.GetName())
 			exception := f.CreateTestPolicyException(
 				"emergency-exception",
-				policy.GetName(),
-				[]string{"no-privileged-containers"},
-				map[string]interface{}{
-					"matchLabels": map[string]interface{}{
-						"emergency": "true",
-					},
+				policyID,
+				"no-privileged-containers",
+				time.Hour,
+				policiesv1.PolicyExceptionScope{
+					Namespaces: []string{emergencyNs},
+					Resources:  []string{"pods"},
 				},
 			)
 
-			ginkgo.By("Attempting to create a privileged pod without exception label")
+			ginkgo.By("Attempting to create a privileged pod outside the emergency namespace")
 			f.ExpectPodCreationToFail(
 				&corev1.Pod{
 					ObjectMeta: metav1.ObjectMeta{
@@ -353,12 +373,12 @@ var _ = ginkgo.Describe("Kube-Policies E2E Tests", func() {
 				"Privileged containers are not allowed",
 			)
 
-			ginkgo.By("Creating a privileged pod with exception label")
+			ginkgo.By("Creating a privileged pod inside the emergency namespace")
 			pod := &corev1.Pod{
 				ObjectMeta: metav1.ObjectMeta{
 					Name: "privileged-with-exception",
 					Labels: map[string]string{
-						"emergency": "true",
+						"test": "e2e",
 					},
 				},
 				Spec: corev1.PodSpec{
@@ -374,7 +394,7 @@ var _ = ginkgo.Describe("Kube-Policies E2E Tests", func() {
 				},
 			}
 
-			createdPod := f.CreatePod(pod)
+			createdPod := f.CreatePodInNamespace(pod, emergencyNs)
 			ginkgo.By("Privileged pod with exception created successfully: " + createdPod.Name)
 
 			f.DeletePolicyException(exception.GetName())

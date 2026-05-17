@@ -19,6 +19,12 @@ type PublicEvent struct {
 	RuleID    string    `json:"rule_id,omitempty"`
 	PolicyID  string    `json:"policy_id,omitempty"`
 	Timestamp time.Time `json:"timestamp"`
+	// SuppressedBy lists the PolicyException attributions for any violations
+	// the engine waived during evaluation. Operators (and the dashboard SSE
+	// stream) need this to distinguish a clean ALLOW from a verdict that
+	// originally tripped one or more rules and was reversed by an exception.
+	// Omitted entirely when no suppression occurred.
+	SuppressedBy []policy.ExceptionRef `json:"suppressed_by,omitempty"`
 }
 
 // NewPublicEvent constructs a PublicEvent from an audit Context and an optional
@@ -29,11 +35,12 @@ type PublicEvent struct {
 // TODO(M2): support audit.stream.full — include UserInfo, Object, OldObject when flag is set.
 func NewPublicEvent(ctx *Context, firstViolation *policy.PolicyViolation) PublicEvent {
 	ev := PublicEvent{
-		Decision:  ctx.Decision,
-		Namespace: ctx.Namespace,
-		Kind:      ctx.Kind.Kind,
-		Name:      ctx.Name,
-		Timestamp: ctx.Timestamp,
+		Decision:     ctx.Decision,
+		Namespace:    ctx.Namespace,
+		Kind:         ctx.Kind.Kind,
+		Name:         ctx.Name,
+		Timestamp:    ctx.Timestamp,
+		SuppressedBy: ctx.SuppressedBy,
 	}
 	if firstViolation != nil {
 		ev.RuleID = firstViolation.RuleID

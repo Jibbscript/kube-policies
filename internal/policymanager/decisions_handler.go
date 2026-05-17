@@ -33,6 +33,12 @@ func (m *Manager) IngestInternal(c *gin.Context) {
 		return
 	}
 	var ev audit.PublicEvent
+	// LENIENT DECODE: json.NewDecoder is used WITHOUT DisallowUnknownFields()
+	// so the wire schema can be extended additively (new optional fields like
+	// `suppressed_by`) without breaking existing publishers. If a future change
+	// adds strict decoding here, every additive field on audit.PublicEvent
+	// must be added to the publisher's struct in the SAME PR or audit records
+	// will be silently dropped (plan §5.9.b / Critic MAJOR-N5).
 	if err := json.NewDecoder(c.Request.Body).Decode(&ev); err != nil {
 		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{
 			"error": "invalid event body",

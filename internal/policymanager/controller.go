@@ -40,6 +40,13 @@ type PolicySink interface {
 // PolicyException CRDs. Pass nil when the caller (currently the
 // admission-webhook engine) does not consume exceptions — the controller
 // manager simply skips wiring the exception reconciler.
+//
+// NAMING NOTE: "Sink" reflects the write-side contract (CRD upserts/removes
+// flow IN). An implementation MAY also satisfy `policy.ExceptionRegistry`
+// (the read-side contract consumed by the admission engine) — the
+// admission-webhook's `cmd/admission-webhook/exception_sink.go` is the
+// canonical dual-interface example. The two interfaces live in separate
+// packages on purpose so neither side depends on the other.
 type ExceptionSink interface {
 	UpsertExceptionFromCRD(*policiesv1.PolicyException) *Exception
 	RemoveExceptionByID(string) bool

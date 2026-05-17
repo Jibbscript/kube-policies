@@ -2,6 +2,7 @@ package framework
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -21,6 +22,8 @@ import (
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
+
+	policiesv1 "github.com/Jibbscript/kube-policies/internal/policymanager/apis/policies/v1"
 )
 
 // Framework provides utilities for E2E testing
@@ -449,26 +452,105 @@ func (f *Framework) CreateSecurityPolicy(name string, rules []map[string]interfa
 	return f.CreatePolicy(policy)
 }
 
-// CreateTestPolicyException creates a standard policy exception
-func (f *Framework) CreateTestPolicyException(name, policyName string, rules []string, selector map[string]interface{}) *unstructured.Unstructured {
+// CreateNamespace creates a namespace and returns its name. Used by specs that
+// need an additional namespace beyond the framework's per-test default (e.g.
+// namespace-scoped PolicyException coverage). The namespace is labeled
+// `test=e2e` so out-of-band cleanup tooling can find it. AlreadyExists is
+// tolerated so callers can use deterministic names without worrying about
+// rerun collisions.
+func (f *Framework) CreateNamespace(name string) string {
+	ns := &corev1.Namespace{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: name,
+			Labels: map[string]string{
+				"test":           "e2e",
+				"test-framework": "kube-policies-e2e",
+			},
+		},
+	}
+	_, err := f.ClientSet.CoreV1().Namespaces().Create(f.Context, ns, metav1.CreateOptions{})
+	if err != nil && !apierrors.IsAlreadyExists(err) {
+		gomega.Expect(err).NotTo(gomega.HaveOccurred())
+	}
+	return name
+}
+
+// DeleteNamespace deletes a namespace. NotFound is tolerated so it is safe to
+// call from a defer block after the namespace may have been removed by other
+// cleanup.
+func (f *Framework) DeleteNamespace(name string) {
+	err := f.ClientSet.CoreV1().Namespaces().Delete(f.Context, name, metav1.DeleteOptions{})
+	if err != nil && !apierrors.IsNotFound(err) {
+		ginkgo.By(fmt.Sprintf("DeleteNamespace: failed to delete %s: %v", name, err))
+	}
+}
+
+// CreatePodInNamespace creates a pod in the supplied namespace. Use for specs
+// that need pods outside the framework's per-test namespace, e.g. when
+// asserting namespace-scoped PolicyException behavior across two namespaces.
+func (f *Framework) CreatePodInNamespace(pod *corev1.Pod, namespace string) *corev1.Pod {
+	pod.Namespace = namespace
+	createdPod, err := f.ClientSet.CoreV1().Pods(namespace).Create(f.Context, pod, metav1.CreateOptions{})
+	gomega.Expect(err).NotTo(gomega.HaveOccurred())
+	return createdPod
+}
+
+// CreateTestPolicyException creates a standard policy exception aligned with
+// the real PolicyExceptionSpec at internal/policymanager/apis/policies/v1/
+// types.go:121-137. Replaces a previous helper that sent non-existent fields
+// (rules/duration/selector) which were silently dropped by the controller's
+// strict typed unmarshal.
+//
+// Parameters:
+//   - name:         CR metadata.name.
+//   - policyID:     spec.policy_id (required by the reconciler validation gate).
+//   - ruleID:       spec.rule_id (optional; empty string = matches any rule of
+//     the parent policy).
+//   - expiresAfter: duration relative to time.Now(); zero value = no expiry.
+//     Stored as spec.expires_at via metav1.NewTime(time.Now().Add(expiresAfter))
+//     and serialized as RFC3339 for the unstructured payload.
+//   - scope:        PolicyExceptionScope as a typed struct so callers cannot
+//     fat-finger unknown fields. Pass the zero value for a blanket scope (the
+//     matcher treats "all four dimensions empty" as a wildcard match).
+func (f *Framework) CreateTestPolicyException(
+	name, policyID, ruleID string,
+	expiresAfter time.Duration,
+	scope policiesv1.PolicyExceptionScope,
+) *unstructured.Unstructured {
+	spec := map[string]interface{}{
+		"policy_id":     policyID,
+		"description":   fmt.Sprintf("E2E test exception: %s", name),
+		"justification": "E2E testing exception",
+	}
+	if ruleID != "" {
+		spec["rule_id"] = ruleID
+	}
+	if expiresAfter != 0 {
+		spec["expires_at"] = metav1.NewTime(time.Now().Add(expiresAfter)).Format(time.RFC3339)
+	}
+	// Marshal scope through json so its tags (snake_case namespaces/resources/
+	// users/groups) are honored — keeps the unstructured payload aligned with
+	// the CRD schema. Empty scope (zero-value struct) produces an empty map,
+	// which we omit so the resulting CR has no `spec.scope` key at all.
+	if scopeBytes, err := json.Marshal(scope); err == nil {
+		var scopeMap map[string]interface{}
+		if json.Unmarshal(scopeBytes, &scopeMap) == nil && len(scopeMap) > 0 {
+			spec["scope"] = scopeMap
+		}
+	}
+
 	exception := &unstructured.Unstructured{
 		Object: map[string]interface{}{
 			"apiVersion": "policies.kube-policies.io/v1",
 			"kind":       "PolicyException",
 			"metadata": map[string]interface{}{
-				"name": name,
+				"name":      name,
+				"namespace": f.Namespace,
 				"labels": map[string]interface{}{
 					"test": "e2e",
 				},
 			},
-			"spec": map[string]interface{}{
-				"description":   fmt.Sprintf("E2E test exception: %s", name),
-				"policy_id":     policyName,
-				"rules":         rules,
-				"duration":      "1h",
-				"justification": "E2E testing exception",
-				"selector":      selector,
-			},
+			"spec": spec,
 		},
 	}
 

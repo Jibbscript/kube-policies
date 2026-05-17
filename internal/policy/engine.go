@@ -25,12 +25,13 @@ type Evaluator interface {
 
 // Engine represents the policy evaluation engine
 type Engine struct {
-	store           storage.Store
-	policies        map[string]*Policy
-	preparedQueries sync.Map // map[policyID+"/"+ruleID]rego.PreparedEvalQuery
-	mutex           sync.RWMutex
-	logger          *zap.Logger
-	config          *config.PolicyConfig
+	store             storage.Store
+	policies          map[string]*Policy
+	preparedQueries   sync.Map // map[policyID+"/"+ruleID]rego.PreparedEvalQuery
+	mutex             sync.RWMutex
+	logger            *zap.Logger
+	config            *config.PolicyConfig
+	exceptionRegistry ExceptionRegistry // nil disables the suppression pass
 }
 
 // Policy represents a security policy
@@ -67,13 +68,14 @@ type EvaluationRequest struct {
 
 // EvaluationResult represents the result of policy evaluation
 type EvaluationResult struct {
-	Allowed    bool                   `json:"allowed"`
-	Decision   string                 `json:"decision"`
-	Reason     string                 `json:"reason"`
-	Message    string                 `json:"message"`
-	Violations []PolicyViolation      `json:"violations"`
-	Patches    []JSONPatch            `json:"patches,omitempty"`
-	Metadata   map[string]interface{} `json:"metadata"`
+	Allowed      bool                   `json:"allowed"`
+	Decision     string                 `json:"decision"`
+	Reason       string                 `json:"reason"`
+	Message      string                 `json:"message"`
+	Violations   []PolicyViolation      `json:"violations"`
+	Patches      []JSONPatch            `json:"patches,omitempty"`
+	Metadata     map[string]interface{} `json:"metadata"`
+	SuppressedBy []ExceptionRef         `json:"suppressed_by,omitempty"`
 }
 
 // PolicyViolation represents a policy violation
@@ -115,6 +117,25 @@ func NewEngine(config *config.PolicyConfig, logger *zap.Logger) (*Engine, error)
 		}
 	}
 
+	return engine, nil
+}
+
+// NewEngineWithExceptions creates a new policy engine wired to an
+// ExceptionRegistry. The registry MUST be non-nil; pass through NewEngine
+// (which leaves the field nil) for the disabled-suppression code path.
+//
+// The disabled-mode path (no registry) is the live production code path
+// under --disable-controllers and during boot before the cache warms;
+// it keeps the original deny/allow behavior unchanged (Principle 5).
+func NewEngineWithExceptions(config *config.PolicyConfig, logger *zap.Logger, registry ExceptionRegistry) (*Engine, error) {
+	if registry == nil {
+		panic("policy.NewEngineWithExceptions: registry must not be nil; use NewEngine for the disabled-suppression path")
+	}
+	engine, err := NewEngine(config, logger)
+	if err != nil {
+		return nil, err
+	}
+	engine.exceptionRegistry = registry
 	return engine, nil
 }
 
@@ -175,16 +196,100 @@ func (e *Engine) Evaluate(ctx context.Context, req *EvaluationRequest) (*Evaluat
 		}
 	}
 
-	// Set final message and reason
-	if !result.Allowed {
+	// Exception suppression pass. Only runs when the binary wired a registry;
+	// nil is the live production code path under --disable-controllers and
+	// during cache warmup (Principle 5). See plan §3.1 W2 and Step 5.5.
+	if e.exceptionRegistry != nil && !result.Allowed {
+		surviving := make([]PolicyViolation, 0, len(result.Violations))
+		sawRegistryError := false
+		for _, v := range result.Violations {
+			key := MatchKey{
+				PolicyID:  v.PolicyID,
+				RuleID:    v.RuleID,
+				Namespace: req.AdmissionRequest.Namespace,
+				Resource:  strings.ToLower(req.AdmissionRequest.Resource.Resource),
+				User:      req.AdmissionRequest.UserInfo.Username,
+				Groups:    req.AdmissionRequest.UserInfo.Groups,
+			}
+			suppressed, refs, err := e.exceptionRegistry.Suppresses(ctx, key)
+			if err != nil {
+				// Fail-CLOSED on registry error: original deny stands.
+				// See pre-mortem §4.2.
+				sawRegistryError = true
+				e.logger.Warn("exception registry error; preserving deny",
+					zap.String("policy_id", v.PolicyID),
+					zap.String("rule_id", v.RuleID),
+					zap.Error(err),
+				)
+				surviving = append(surviving, v)
+				continue
+			}
+			if suppressed {
+				result.SuppressedBy = append(result.SuppressedBy, refs...)
+				// Structured audit log on suppression (Principle 3).
+				e.logger.Info("policy violation suppressed by exception",
+					zap.String("policy_id", v.PolicyID),
+					zap.String("rule_id", v.RuleID),
+					zap.String("namespace", key.Namespace),
+					zap.String("resource", key.Resource),
+					zap.String("user", key.User),
+					zap.Any("exception_refs", refs),
+				)
+				continue
+			}
+			surviving = append(surviving, v)
+		}
+
+		// Replace Violations with the surviving (un-suppressed) slice.
+		// Using a fresh slice (NOT result.Violations[:0]) avoids aliasing the
+		// original backing array so any caller-retained reference is preserved.
+		result.Violations = surviving
+
+		if len(result.Violations) == 0 && !sawRegistryError {
+			// Every violation suppressed and no error path was taken; flip the verdict.
+			result.Allowed = true
+			result.Decision = "ALLOW"
+		}
+	}
+
+	// Set final reason/message. Three cases:
+	//   (1) Deny preserved: existing behavior.
+	//   (2) Allow with no suppressions (today's happy path): existing behavior.
+	//   (3) Allow because every violation was suppressed: explicit message so
+	//       downstream consumers reading only Message are not misled into
+	//       thinking the resource was compliant when it actually triggered N
+	//       violations that an operator-authored exception waived.
+	switch {
+	case !result.Allowed:
 		result.Reason = "PolicyViolation"
 		result.Message = e.buildViolationMessage(result.Violations)
-	} else {
+	case len(result.SuppressedBy) > 0:
+		result.Reason = "PolicyViolationSuppressedByException"
+		result.Message = fmt.Sprintf(
+			"%d policy violation(s) suppressed by %d exception(s); see suppressed_by for details",
+			len(result.SuppressedBy), distinctExceptionCount(result.SuppressedBy),
+		)
+	default:
 		result.Reason = "PolicyCompliant"
 		result.Message = "Request complies with all policies"
 	}
 
 	return result, nil
+}
+
+// distinctExceptionCount returns the number of unique ExceptionRef.ID values
+// in refs. Used to render an honest "N suppressed by M exception(s)" message
+// when multiple violations were waived by the same operator-authored
+// exception.
+func distinctExceptionCount(refs []ExceptionRef) int {
+	if len(refs) == 0 {
+		return 0
+	}
+	seen := make(map[string]struct{}, len(refs))
+	for _, r := range refs {
+		seen[r.ID] = struct{}{}
+	}
+	return len(seen)
 }
 
 // evaluatePolicy evaluates a single policy

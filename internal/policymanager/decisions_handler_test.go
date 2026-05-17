@@ -16,6 +16,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/Jibbscript/kube-policies/internal/audit"
+	"github.com/Jibbscript/kube-policies/internal/policy"
 )
 
 // init() for gin.TestMode is already declared in test_handler_test.go.
@@ -122,6 +123,38 @@ func TestIngestInternal_ZeroTimestampBackfilled(t *testing.T) {
 	assert.False(t, ts.IsZero(), "timestamp should be backfilled")
 	assert.True(t, !ts.Before(before.Add(-time.Second)) && !ts.After(after.Add(time.Second)),
 		"backfilled timestamp %v not in expected range [%v, %v]", ts, before, after)
+}
+
+// TestIngestInternal_SuppressedByRoundTrip verifies the additive `suppressed_by`
+// field on PublicEvent round-trips through the lenient decoder and lands in the
+// recent-decisions ring intact. Anchors the lenient-decode comment in
+// decisions_handler.go (plan §5.9.b) — future strict-decode changes break this
+// test loudly instead of silently dropping audit records.
+func TestIngestInternal_SuppressedByRoundTrip(t *testing.T) {
+	m := newTestManagerTokenized(t, "tok")
+	ev := audit.PublicEvent{
+		Decision: "ALLOW",
+		Kind:     "Pod",
+		SuppressedBy: []policy.ExceptionRef{
+			{ID: "exc-1", Name: "team-a-allow-privileged", PolicyID: "security-baseline", RuleID: "no-privileged-containers", Justification: "incident #42"},
+			{ID: "exc-2", Name: "team-a-allow-hostpath", PolicyID: "security-baseline", RuleID: "no-host-path-volumes"},
+		},
+	}
+	body, err := json.Marshal(ev)
+	require.NoError(t, err)
+
+	w := doIngestRequest(t, m, "tok", body)
+	require.Equal(t, http.StatusNoContent, w.Code)
+
+	recent := m.recentRing.Recent(1)
+	require.Len(t, recent, 1)
+	require.Len(t, recent[0].SuppressedBy, 2)
+	assert.Equal(t, "exc-1", recent[0].SuppressedBy[0].ID)
+	assert.Equal(t, "team-a-allow-privileged", recent[0].SuppressedBy[0].Name)
+	assert.Equal(t, "security-baseline", recent[0].SuppressedBy[0].PolicyID)
+	assert.Equal(t, "no-privileged-containers", recent[0].SuppressedBy[0].RuleID)
+	assert.Equal(t, "incident #42", recent[0].SuppressedBy[0].Justification)
+	assert.Equal(t, "exc-2", recent[0].SuppressedBy[1].ID)
 }
 
 // --- RecentDecisions tests ---
