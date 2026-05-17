@@ -1,0 +1,112 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: kube-policies-admission-webhook
+  namespace: kube-policies-system
+  labels:
+    app: kube-policies-admission-webhook
+    component: admission-webhook
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: kube-policies-admission-webhook
+  labels:
+    app: kube-policies-admission-webhook
+    component: admission-webhook
+rules:
+# Core Kubernetes resources
+- apiGroups: [""]
+  resources:
+  - pods
+  - services
+  - endpoints
+  - persistentvolumeclaims
+  - configmaps
+  - secrets
+  - serviceaccounts
+  - namespaces
+  - nodes
+  verbs: ["get", "list", "watch"]
+
+# Apps resources
+- apiGroups: ["apps"]
+  resources:
+  - deployments
+  - replicasets
+  - daemonsets
+  - statefulsets
+  verbs: ["get", "list", "watch"]
+
+# Extensions resources
+- apiGroups: ["extensions"]
+  resources:
+  - deployments
+  - replicasets
+  - daemonsets
+  - ingresses
+  verbs: ["get", "list", "watch"]
+
+# Networking resources
+- apiGroups: ["networking.k8s.io"]
+  resources:
+  - networkpolicies
+  - ingresses
+  verbs: ["get", "list", "watch"]
+
+# RBAC resources
+- apiGroups: ["rbac.authorization.k8s.io"]
+  resources:
+  - roles
+  - rolebindings
+  - clusterroles
+  - clusterrolebindings
+  verbs: ["get", "list", "watch"]
+
+# Policy resources
+- apiGroups: ["policies.kube-policies.io"]
+  resources:
+  - policies
+  - policyexceptions
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+
+# Admission registration
+- apiGroups: ["admissionregistration.k8s.io"]
+  resources:
+  - validatingadmissionwebhooks
+  - mutatingadmissionwebhooks
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+
+# Events
+- apiGroups: [""]
+  resources:
+  - events
+  verbs: ["create", "patch"]
+
+# Leader election (coordination.k8s.io/Lease resource).
+# The Lease is namespaced; this ClusterRole grants the verbs globally
+# but the actual Lease is only created in kube-policies-system.
+- apiGroups: ["coordination.k8s.io"]
+  resources:
+  - leases
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+
+# Metrics
+- nonResourceURLs: ["/metrics"]
+  verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: kube-policies-admission-webhook
+  labels:
+    app: kube-policies-admission-webhook
+    component: admission-webhook
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: kube-policies-admission-webhook
+subjects:
+- kind: ServiceAccount
+  name: kube-policies-admission-webhook
+  namespace: kube-policies-system
