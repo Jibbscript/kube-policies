@@ -86,6 +86,14 @@ rules:
   - events
   verbs: ["create", "patch"]
 
+# Leader election (coordination.k8s.io/Lease resource).
+# The Lease is namespaced; this ClusterRole grants the verbs globally
+# but the actual Lease is only created in {{ .Release.Namespace }}.
+- apiGroups: ["coordination.k8s.io"]
+  resources:
+  - leases
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+
 # Metrics
 - nonResourceURLs: ["/metrics"]
   verbs: ["get"]

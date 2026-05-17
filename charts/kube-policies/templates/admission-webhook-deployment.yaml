@@ -57,6 +57,10 @@ spec:
           env:
             - name: LOG_LEVEL
               value: "info"
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
             - name: POLICY_MANAGER_URL
               value: "http://{{ include "kube-policies.fullname" . }}-policy-manager:8080"
             - name: POLICY_MANAGER_INTERNAL_URL
