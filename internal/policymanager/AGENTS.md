@@ -40,4 +40,15 @@ Implements the policy-manager service: in-memory storage for policies, bundles, 
 - `github.com/google/uuid`
 - `go.uber.org/zap`
 
+## Leader election
+
+`ControllerOptions.DisableLeaderElection` uses an **inverted boolean**: the zero value (`false`) means leader election is **ON**. This makes multi-replica deployments safe by default — a caller that forgets to set the field gets election, not a racing pair of reconcilers.
+
+- Set `DisableLeaderElection: true` only in single-process scenarios where contention is impossible (e.g. envtest unit suites, `--disable-controllers` code paths).
+- When election is enabled, `LeaderElectionNamespace` is required. Obtain it via `ResolvePodNamespace("/var/run/secrets/kubernetes.io/serviceaccount/namespace")` at the binary's composition root; the call should live inside the `if !*disableControllers { ... }` block so `--disable-controllers` short-circuits cleanly.
+- `LeaderElectionReleaseOnCancel: true` is always set by `StartControllers`. Combined with the binary's SIGTERM → context-cancel flow, this limits the rolling-deploy reconcile gap to ~2 s instead of the default ~15 s lease duration.
+- A single-replica deployment still acquires the lease on startup, which adds up to ~10 s of initial delay before the first reconcile. The HTTP API server starts independently and continues to answer requests during this window.
+- The Lease resource lives in the namespace resolved by `ResolvePodNamespace`. Both `cmd/admission-webhook` and `cmd/policy-manager` use distinct `LeaderElectionID` values so they never contend over the same lease.
+- RBAC: the ServiceAccount must have `coordination.k8s.io/leases` (get, list, watch, create, update, patch, delete). See `charts/kube-policies/templates/rbac.yaml` and `deployments/kubernetes/base/rbac.yaml`.
+
 <!-- MANUAL: -->

@@ -17,8 +17,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
-	policiesv1 "github.com/Jibbscript/kube-policies/internal/policymanager/apis/policies/v1"
 	"github.com/Jibbscript/kube-policies/internal/policy"
+	policiesv1 "github.com/Jibbscript/kube-policies/internal/policymanager/apis/policies/v1"
 )
 
 // PolicySink is the contract a target registry implements so a
@@ -56,20 +56,22 @@ type ControllerOptions struct {
 	// exception code path yet.
 	ExceptionSink ExceptionSink
 
-	// LeaderElection enables controller-runtime's standard configmap-based
-	// leader election so multi-replica deployments converge on a single
-	// reconciler. Off by default because the bundled Helm chart ships
-	// replicas: 1.
-	LeaderElection bool
+	// DisableLeaderElection opts out of controller-runtime's Lease-based leader
+	// election (coordination.k8s.io/Lease, the default for controller-runtime
+	// ≥ v0.7). The zero value enables election so multi-replica deployments are
+	// safe by default. Set true only for single-process scenarios where
+	// contention is impossible (e.g. envtest unit suites).
+	DisableLeaderElection bool
 
-	// LeaderElectionNamespace is the namespace the lease ConfigMap is created
-	// in when LeaderElection is true. Required when LeaderElection=true.
+	// LeaderElectionNamespace is the namespace the Lease resource is created in
+	// when leader election is enabled (i.e. DisableLeaderElection=false).
+	// Required when leader election is enabled.
 	LeaderElectionNamespace string
 
 	// LeaderElectionID is the lease name. Defaults to
-	// "kube-policies-policy-manager" when empty. Set per-binary when running
-	// the controller in both processes (otherwise they would contend over
-	// the same lease).
+	// "kube-policies-policy-manager" when empty as a defensive fallback.
+	// Production callers MUST set this explicitly — two embedders sharing the
+	// default contend over the same lease.
 	LeaderElectionID string
 }
 
@@ -89,7 +91,7 @@ func StartControllers(ctx context.Context, cfg *rest.Config, log *zap.Logger, op
 		return fmt.Errorf("ControllerOptions.PolicySink is required")
 	}
 	scheme := runtime.NewScheme()
-	// Register the core k8s types so the client can address ConfigMaps for
+	// Register the core k8s types so the client can address Lease resources for
 	// leader election. Without this, leader election would panic on first run.
 	if err := clientgoscheme.AddToScheme(scheme); err != nil {
 		return fmt.Errorf("register core scheme: %w", err)
@@ -100,6 +102,11 @@ func StartControllers(ctx context.Context, cfg *rest.Config, log *zap.Logger, op
 
 	if opts.LeaderElectionID == "" {
 		opts.LeaderElectionID = "kube-policies-policy-manager"
+	}
+
+	effectiveLeaderElection := !opts.DisableLeaderElection
+	if effectiveLeaderElection && opts.LeaderElectionNamespace == "" {
+		return fmt.Errorf("LeaderElectionNamespace is required when leader election is enabled; call policymanager.ResolvePodNamespace from your binary or set DisableLeaderElection: true for test/single-process scenarios")
 	}
 
 	// SkipNameValidation = true disables controller-runtime's process-wide
@@ -123,10 +130,11 @@ func StartControllers(ctx context.Context, cfg *rest.Config, log *zap.Logger, op
 		Metrics: metricsserver.Options{BindAddress: "0"},
 		// Health probes are served by the calling binary, not this embedded
 		// controller manager.
-		HealthProbeBindAddress:  "0",
-		LeaderElection:          opts.LeaderElection,
-		LeaderElectionID:        opts.LeaderElectionID,
-		LeaderElectionNamespace: opts.LeaderElectionNamespace,
+		HealthProbeBindAddress:        "0",
+		LeaderElection:                effectiveLeaderElection,
+		LeaderElectionID:              opts.LeaderElectionID,
+		LeaderElectionNamespace:       opts.LeaderElectionNamespace,
+		LeaderElectionReleaseOnCancel: true,
 		Controller: configv1alpha1.Controller{
 			SkipNameValidation: &skipNameValidation,
 		},
@@ -158,7 +166,7 @@ func StartControllers(ctx context.Context, cfg *rest.Config, log *zap.Logger, op
 	}
 
 	log.Info("starting CRD controllers",
-		zap.Bool("leader_election", opts.LeaderElection),
+		zap.Bool("leader_election", effectiveLeaderElection),
 		zap.Bool("exception_reconciler_enabled", opts.ExceptionSink != nil),
 	)
 	if err := mgr.Start(ctx); err != nil {
@@ -337,4 +345,3 @@ func upsertCondition(conds *[]metav1.Condition, next metav1.Condition) {
 	}
 	*conds = append(*conds, next)
 }
-

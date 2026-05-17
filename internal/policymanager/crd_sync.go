@@ -6,8 +6,8 @@ import (
 
 	"go.uber.org/zap"
 
-	policiesv1 "github.com/Jibbscript/kube-policies/internal/policymanager/apis/policies/v1"
 	"github.com/Jibbscript/kube-policies/internal/policy"
+	policiesv1 "github.com/Jibbscript/kube-policies/internal/policymanager/apis/policies/v1"
 )
 
 // CRDPolicyIDPrefix is the leading token of every CRD-derived Policy /
