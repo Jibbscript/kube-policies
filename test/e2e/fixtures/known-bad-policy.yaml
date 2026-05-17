@@ -1,0 +1,28 @@
+apiVersion: policies.kube-policies.io/v1
+kind: Policy
+metadata:
+  name: smoke-test-policy
+  namespace: e2e-smoke
+  labels:
+    test: e2e
+spec:
+  description: "CRD-fires smoke test"
+  enabled: true
+  enforcement: true
+  match:
+    - apiGroups: [""]
+      apiVersions: ["v1"]
+      resources: ["pods"]
+  rules:
+    - name: deny-smoke
+      rego: |
+        package kube_policies
+        import rego.v1
+        default evaluate := {"allowed": true}
+        evaluate := {
+            "allowed": false,
+            "message": "smoke-test-policy-denied-12345",
+            "path": "spec",
+        } if {
+            true
+        }

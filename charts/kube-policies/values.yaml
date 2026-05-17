@@ -84,6 +84,11 @@ admissionWebhook:
     cert: ""
     key: ""
 
+  # Set to true to skip loading bundled default policies at startup.
+  # Useful in e2e / integration test environments where test-authored
+  # policies are loaded explicitly and default policies would interfere.
+  disableDefaultPolicies: false
+
 # Policy Manager Configuration
 policyManager:
   enabled: true

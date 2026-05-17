@@ -11,9 +11,11 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
+	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	configv1alpha1 "sigs.k8s.io/controller-runtime/pkg/config"
+	"sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
@@ -73,6 +75,19 @@ type ControllerOptions struct {
 	// Production callers MUST set this explicitly — two embedders sharing the
 	// default contend over the same lease.
 	LeaderElectionID string
+
+	// LeaderlessReconcilers makes the embedded Policy/PolicyException
+	// reconcilers run on every pod (NeedLeaderElection=false) while the
+	// manager itself still acquires the leader-election lease. Set this for
+	// embedders whose reconciler's job is to populate a per-pod local cache
+	// — the admission-webhook in particular MUST set this true, otherwise
+	// only the leader's local OPA engine receives Policy CRD updates and
+	// admission requests load-balanced to follower pods bypass policy
+	// enforcement. The status-patch races between replicas are benign:
+	// every replica writes the same Phase/Conditions for the same CRD spec.
+	// Leave false for policy-manager, whose reconciler owns the
+	// cluster-wide registry state and should run on the leader only.
+	LeaderlessReconcilers bool
 }
 
 // StartControllers builds and starts a controller-runtime Manager that
@@ -149,7 +164,7 @@ func StartControllers(ctx context.Context, cfg *rest.Config, log *zap.Logger, op
 		Sink:   opts.PolicySink,
 		Log:    log.Named("policy-reconciler"),
 	}
-	if err := policyReconciler.SetupWithManager(mgr); err != nil {
+	if err := policyReconciler.SetupWithManager(mgr, opts.LeaderlessReconcilers); err != nil {
 		return fmt.Errorf("setup Policy reconciler: %w", err)
 	}
 
@@ -160,13 +175,14 @@ func StartControllers(ctx context.Context, cfg *rest.Config, log *zap.Logger, op
 			Sink:   opts.ExceptionSink,
 			Log:    log.Named("exception-reconciler"),
 		}
-		if err := exceptionReconciler.SetupWithManager(mgr); err != nil {
+		if err := exceptionReconciler.SetupWithManager(mgr, opts.LeaderlessReconcilers); err != nil {
 			return fmt.Errorf("setup PolicyException reconciler: %w", err)
 		}
 	}
 
 	log.Info("starting CRD controllers",
 		zap.Bool("leader_election", effectiveLeaderElection),
+		zap.Bool("leaderless_reconcilers", opts.LeaderlessReconcilers),
 		zap.Bool("exception_reconciler_enabled", opts.ExceptionSink != nil),
 	)
 	if err := mgr.Start(ctx); err != nil {
@@ -235,10 +251,15 @@ func (r *PolicyReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 }
 
 // SetupWithManager wires the reconciler into the controller-runtime manager.
-func (r *PolicyReconciler) SetupWithManager(mgr ctrl.Manager) error {
+// When leaderless is true, the controller is registered with
+// NeedLeaderElection=false so it runs on every replica — required by
+// embedders whose Sink populates a per-pod local cache (e.g. the
+// admission-webhook's OPA engine).
+func (r *PolicyReconciler) SetupWithManager(mgr ctrl.Manager, leaderless bool) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&policiesv1.Policy{}).
 		Named("policy").
+		WithOptions(controller.Options{NeedLeaderElection: ptr.To(!leaderless)}).
 		Complete(r)
 }
 
@@ -301,10 +322,11 @@ func (r *PolicyExceptionReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 	return ctrl.Result{}, nil
 }
 
-func (r *PolicyExceptionReconciler) SetupWithManager(mgr ctrl.Manager) error {
+func (r *PolicyExceptionReconciler) SetupWithManager(mgr ctrl.Manager, leaderless bool) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&policiesv1.PolicyException{}).
 		Named("policyexception").
+		WithOptions(controller.Options{NeedLeaderElection: ptr.To(!leaderless)}).
 		Complete(r)
 }
 

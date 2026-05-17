@@ -5,12 +5,14 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/onsi/ginkgo/v2"
 	"github.com/onsi/gomega"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -92,6 +94,10 @@ func (f *Framework) AfterEach() {
 			ginkgo.By(fmt.Sprintf("Deleted test namespace: %s", f.Namespace))
 		}
 	}
+
+	// Remove any remaining test artifacts (Policies and PolicyExceptions in
+	// kube-policies-system are not reaped by namespace deletion above).
+	f.CleanupTestArtifacts()
 }
 
 // getKubeConfig returns the Kubernetes configuration
@@ -224,6 +230,64 @@ func (f *Framework) WaitForPolicyActive(policyName, policyNamespace string, time
 		return phase == "Active", nil
 	})
 	gomega.Expect(err).NotTo(gomega.HaveOccurred())
+}
+
+// WaitForReplicaSetFailedCreateEvent polls for a FailedCreate event on the ReplicaSet
+// owned by deploymentName in namespace, whose message contains expectedSubstring.
+// Returns (message, nil) when the event is found, or ("", error) if timeout expires.
+// Does not use gomega internally so callers control assertion style.
+func (f *Framework) WaitForReplicaSetFailedCreateEvent(
+	namespace, deploymentName, expectedSubstring string, timeout time.Duration,
+) (string, error) {
+	var foundMessage string
+	err := wait.PollImmediate(2*time.Second, timeout, func() (bool, error) {
+		// Find the ReplicaSet owned by this Deployment.
+		rsList, err := f.ClientSet.AppsV1().ReplicaSets(namespace).List(f.Context, metav1.ListOptions{})
+		if err != nil {
+			return false, err
+		}
+		var rsName string
+		for _, rs := range rsList.Items {
+			for _, ref := range rs.OwnerReferences {
+				if ref.Kind == "Deployment" && ref.Name == deploymentName {
+					rsName = rs.Name
+					break
+				}
+			}
+			if rsName != "" {
+				break
+			}
+		}
+		if rsName == "" {
+			return false, nil // RS not yet created; keep polling
+		}
+
+		// List FailedCreate events for this ReplicaSet.
+		events, err := f.ClientSet.CoreV1().Events(namespace).List(f.Context, metav1.ListOptions{
+			FieldSelector: fmt.Sprintf(
+				"involvedObject.kind=ReplicaSet,involvedObject.name=%s,reason=FailedCreate",
+				rsName,
+			),
+		})
+		if err != nil {
+			return false, err
+		}
+		for _, ev := range events.Items {
+			if strings.Contains(ev.Message, expectedSubstring) {
+				foundMessage = ev.Message
+				return true, nil
+			}
+		}
+		return false, nil // Event not yet seen; keep polling
+	})
+	if err != nil {
+		return "", fmt.Errorf(
+			"WaitForReplicaSetFailedCreateEvent: timed out waiting for FailedCreate event "+
+				"on ReplicaSet of Deployment %q containing %q: %w",
+			deploymentName, expectedSubstring, err,
+		)
+	}
+	return foundMessage, nil
 }
 
 // ExpectPodCreationToFail expects pod creation to fail due to policy violation
@@ -399,7 +463,7 @@ func (f *Framework) CreateTestPolicyException(name, policyName string, rules []s
 			},
 			"spec": map[string]interface{}{
 				"description":   fmt.Sprintf("E2E test exception: %s", name),
-				"policy":        policyName,
+				"policy_id":     policyName,
 				"rules":         rules,
 				"duration":      "1h",
 				"justification": "E2E testing exception",
@@ -439,5 +503,65 @@ func (f *Framework) LogClusterInfo() {
 	ginkgo.By("Cluster Information:")
 	for key, value := range info {
 		ginkgo.By(fmt.Sprintf("  %s: %s", key, value))
+	}
+}
+
+// CleanupTestArtifacts deletes all resources labeled test=e2e from the test namespace
+// and from kube-policies-system. NotFound errors are tolerated. Failures are logged
+// but do not fail the spec. Call from AfterEach after namespace deletion so that
+// Policies and PolicyExceptions that live outside the test namespace are also reaped.
+func (f *Framework) CleanupTestArtifacts() {
+	const systemNS = "kube-policies-system"
+	const labelSelector = "test=e2e"
+
+	policyGVR := schema.GroupVersionResource{
+		Group:    "policies.kube-policies.io",
+		Version:  "v1",
+		Resource: "policies",
+	}
+	exceptionGVR := schema.GroupVersionResource{
+		Group:    "policies.kube-policies.io",
+		Version:  "v1",
+		Resource: "policyexceptions",
+	}
+
+	deleteOpts := metav1.DeleteOptions{}
+	listOpts := metav1.ListOptions{LabelSelector: labelSelector}
+
+	if f.Namespace != "" {
+		// Pods in test namespace
+		if err := f.ClientSet.CoreV1().Pods(f.Namespace).DeleteCollection(
+			f.Context, deleteOpts, listOpts,
+		); err != nil && !apierrors.IsNotFound(err) {
+			ginkgo.By(fmt.Sprintf("CleanupTestArtifacts: failed to delete pods in %s: %v", f.Namespace, err))
+		}
+
+		// Deployments in test namespace
+		if err := f.ClientSet.AppsV1().Deployments(f.Namespace).DeleteCollection(
+			f.Context, deleteOpts, listOpts,
+		); err != nil && !apierrors.IsNotFound(err) {
+			ginkgo.By(fmt.Sprintf("CleanupTestArtifacts: failed to delete deployments in %s: %v", f.Namespace, err))
+		}
+
+		// PolicyExceptions in test namespace
+		if err := f.DynamicClient.Resource(exceptionGVR).Namespace(f.Namespace).DeleteCollection(
+			f.Context, deleteOpts, listOpts,
+		); err != nil && !apierrors.IsNotFound(err) {
+			ginkgo.By(fmt.Sprintf("CleanupTestArtifacts: failed to delete policyexceptions in %s: %v", f.Namespace, err))
+		}
+	}
+
+	// Policies in kube-policies-system (live outside the per-test namespace)
+	if err := f.DynamicClient.Resource(policyGVR).Namespace(systemNS).DeleteCollection(
+		f.Context, deleteOpts, listOpts,
+	); err != nil && !apierrors.IsNotFound(err) {
+		ginkgo.By(fmt.Sprintf("CleanupTestArtifacts: failed to delete policies in %s: %v", systemNS, err))
+	}
+
+	// PolicyExceptions in kube-policies-system
+	if err := f.DynamicClient.Resource(exceptionGVR).Namespace(systemNS).DeleteCollection(
+		f.Context, deleteOpts, listOpts,
+	); err != nil && !apierrors.IsNotFound(err) {
+		ginkgo.By(fmt.Sprintf("CleanupTestArtifacts: failed to delete policyexceptions in %s: %v", systemNS, err))
 	}
 }

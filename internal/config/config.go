@@ -28,7 +28,8 @@ type ServerConfig struct {
 
 // PolicyConfig represents policy engine configuration
 type PolicyConfig struct {
-	FailureMode string `mapstructure:"failure_mode"` // "fail-open" or "fail-closed"
+	FailureMode     string `mapstructure:"failure_mode"`    // "fail-open" or "fail-closed"
+	DisableDefaults bool   `mapstructure:"disable_defaults"` // skip loading bundled default policies
 }
 
 // AuditConfig represents audit logging configuration

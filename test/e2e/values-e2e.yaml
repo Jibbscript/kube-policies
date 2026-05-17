@@ -1,0 +1,5 @@
+admissionWebhook:
+  disableDefaultPolicies: true
+  replicaCount: 2
+operator:
+  replicaCount: 2

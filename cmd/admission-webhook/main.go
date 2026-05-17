@@ -44,6 +44,10 @@ var (
 	// webhook (no RBAC for the policies.kube-policies.io group) flip this on.
 	disableControllers = flag.Bool("disable-controllers", false, "Disable CRD reconcilers; enforce bundled-default policies only.")
 
+	// disableDefaults skips loading the bundled default policies entirely.
+	// Useful for testing with a clean engine or deploying with only user-defined policies.
+	disableDefaults = flag.Bool("disable-default-policies", false, "Skip loading bundled default policies")
+
 	version = "dev"
 	commit  = "unknown"
 	date    = "unknown"
@@ -83,6 +87,10 @@ func main() {
 	if err != nil {
 		log.Fatal("Failed to initialize audit logger", zap.Error(err))
 	}
+
+	// Apply flag overrides to policy config before engine construction
+	log.Info("disable-default-policies flag", zap.Bool("disable_default_policies", *disableDefaults))
+	cfg.Policy.DisableDefaults = *disableDefaults
 
 	// Initialize policy engine
 	policyEngine, err := policy.NewEngine(&cfg.Policy, log)
@@ -160,7 +168,20 @@ func main() {
 			LeaderElectionID:        "kube-policies-admission-webhook",
 			LeaderElectionNamespace: ns,
 			PolicySink:              sink,
-			// DisableLeaderElection: zero value (false) → election ENABLED.
+			// DisableLeaderElection: zero value (false) → election ENABLED at
+			// the manager level. The Lease is still acquired so multi-replica
+			// topology is observable externally (the e2e "exactly one
+			// admission-webhook pod holds the lease" assertion). The
+			// reconcilers themselves are flagged leaderless below.
+			//
+			// LeaderlessReconcilers=true is REQUIRED here: the PolicySink
+			// feeds the local in-memory OPA engine. With LE-gated
+			// reconcilers, only the leader's engine would receive Policy
+			// CRD updates, and any admission request load-balanced to a
+			// follower pod would bypass policy enforcement entirely.
+			// Status-patch races between replicas are benign (every
+			// replica writes the same Phase/Conditions for the same spec).
+			LeaderlessReconcilers: true,
 			// ExceptionSink intentionally nil: the engine has no exception
 			// enforcement path; wiring it would imply a behavior change that
 			// is out of scope for the webhook extension.
