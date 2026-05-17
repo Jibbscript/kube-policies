@@ -146,12 +146,21 @@ func main() {
 			)
 		}
 		sink := newEngineSink(policyEngine, log.Named("engine-sink"))
+		ns, err := policymanager.ResolvePodNamespace("/var/run/secrets/kubernetes.io/serviceaccount/namespace")
+		if err != nil {
+			log.Fatal("could not resolve pod namespace for leader election",
+				zap.Error(err),
+				zap.String("hint", "set POD_NAMESPACE env or run inside a Pod with a service-account token, or pass --disable-controllers to bypass the controller manager entirely"),
+			)
+		}
 		opts := policymanager.ControllerOptions{
 			// Distinct lease ID — when both policy-manager and webhook run
 			// controllers in the same namespace, they must not contend over
 			// the same leader-election lease.
-			LeaderElectionID: "kube-policies-admission-webhook",
-			PolicySink:       sink,
+			LeaderElectionID:        "kube-policies-admission-webhook",
+			LeaderElectionNamespace: ns,
+			PolicySink:              sink,
+			// DisableLeaderElection: zero value (false) → election ENABLED.
 			// ExceptionSink intentionally nil: the engine has no exception
 			// enforcement path; wiring it would imply a behavior change that
 			// is out of scope for the webhook extension.

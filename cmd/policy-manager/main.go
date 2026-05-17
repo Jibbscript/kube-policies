@@ -135,13 +135,23 @@ func main() {
 				zap.String("hint", "set --kubeconfig=PATH, run inside a Pod with a service-account token, or pass --disable-controllers if you intentionally want API-only mode"),
 			)
 		}
+		ns, err := policymanager.ResolvePodNamespace("/var/run/secrets/kubernetes.io/serviceaccount/namespace")
+		if err != nil {
+			log.Fatal("could not resolve pod namespace for leader election",
+				zap.Error(err),
+				zap.String("hint", "set POD_NAMESPACE env or run inside a Pod with a service-account token, or pass --disable-controllers if you intentionally want API-only mode"),
+			)
+		}
 		go func() {
 			log.Info("starting CRD controllers")
 			// The policy-manager consumes both kinds: Policies feed the
 			// HTTP/list registry, Exceptions feed /api/v1/exceptions.
 			opts := policymanager.ControllerOptions{
-				PolicySink:    policyManager,
-				ExceptionSink: policyManager,
+				LeaderElectionID:        "kube-policies-policy-manager",
+				LeaderElectionNamespace: ns,
+				PolicySink:              policyManager,
+				ExceptionSink:           policyManager,
+				// DisableLeaderElection: zero value (false) → election ENABLED.
 			}
 			if err := policymanager.StartControllers(ctx, restCfg, log, opts); err != nil && !errors.Is(err, context.Canceled) {
 				log.Error("CRD controller manager exited with error", zap.Error(err))
@@ -174,4 +184,3 @@ func main() {
 
 	log.Info("Servers stopped")
 }
-
