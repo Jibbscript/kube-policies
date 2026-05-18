@@ -236,41 +236,57 @@ func (h *streamHub) sendOne(ch chan PublicEvent, ev PublicEvent) {
 	}
 }
 
-// streamHandler manages a single upstream SSE subscription and fans out to N
-// concurrent browser SSE clients. The upstream connection is started lazily on
-// the first browser connection via sync.Once.
-type streamHandler struct {
+// StreamSubscriber owns the single upstream SSE subscription to the
+// policy-manager and fans events out to (a) any connected browser SSE
+// clients via the hub and (b) the dashboard's recent-decisions ring.
+//
+// The subscriber goroutine is started eagerly via Start() at process boot
+// rather than lazily on the first browser SSE connection. The previous
+// sync.Once-lazy path left the ring empty in deployments where the SPA
+// polls GET /api/decisions/recent but never opens an SSE connection — the
+// upstream stream was the ring's only data source, so the ring stayed empty
+// forever. (.omc/plans/dashboard-500-fix.md root-cause section.)
+type StreamSubscriber struct {
 	cfg  *Config
 	log  *zap.Logger
 	hub  *streamHub
+	ring *Ring
 	ctx  context.Context
-	once sync.Once
 }
 
-// NewStreamHandler returns a gin.HandlerFunc that proxies the upstream
-// policy-manager SSE stream (cfg.PolicyManagerStreamURL) to all connected
-// browser clients.
+// NewStreamSubscriber constructs a subscriber that, once Start() is called,
+// maintains a single upstream SSE connection to cfg.PolicyManagerStreamURL
+// and applies every received event to both the browser fan-out hub and the
+// shared ring.
 //
 // ctx is the process lifecycle context; cancel it to stop the upstream
-// subscriber goroutine on shutdown. The goroutine is started lazily on the
-// first browser connection.
-func NewStreamHandler(ctx context.Context, cfg *Config, log *zap.Logger) gin.HandlerFunc {
-	h := &streamHandler{
-		cfg: cfg,
-		log: log,
-		hub: newStreamHub(256, log),
-		ctx: ctx,
+// goroutine on shutdown.
+func NewStreamSubscriber(ctx context.Context, cfg *Config, ring *Ring, log *zap.Logger) *StreamSubscriber {
+	return &StreamSubscriber{
+		cfg:  cfg,
+		log:  log,
+		hub:  newStreamHub(256, log),
+		ring: ring,
+		ctx:  ctx,
 	}
-	return h.serve
 }
 
-func (h *streamHandler) serve(c *gin.Context) {
-	// Lazily start the upstream subscriber on the first browser connection.
-	h.once.Do(func() {
-		go h.runUpstream()
-	})
+// Start kicks off the upstream subscriber goroutine. Call exactly once per
+// StreamSubscriber instance — each call spawns its own runUpstream goroutine,
+// so repeated calls dial the upstream policy-manager multiple times.
+func (s *StreamSubscriber) Start() {
+	go s.runUpstream()
+}
 
-	ch, unsub := h.hub.subscribe()
+// Handler returns a gin.HandlerFunc that subscribes the calling browser to
+// the fan-out hub. Each call to the returned handler corresponds to one
+// browser SSE connection.
+func (s *StreamSubscriber) Handler() gin.HandlerFunc {
+	return s.serve
+}
+
+func (s *StreamSubscriber) serve(c *gin.Context) {
+	ch, unsub := s.hub.subscribe()
 	defer unsub()
 
 	c.Writer.Header().Set("Content-Type", "text/event-stream")
@@ -308,9 +324,10 @@ func (h *streamHandler) serve(c *gin.Context) {
 	}
 }
 
-// runUpstream continuously subscribes to the upstream SSE stream and publishes
-// parsed events to the hub. It reconnects with exponential backoff on error.
-func (h *streamHandler) runUpstream() {
+// runUpstream continuously subscribes to the upstream SSE stream and applies
+// each parsed event to the hub and the ring. It reconnects with exponential
+// backoff on error.
+func (s *StreamSubscriber) runUpstream() {
 	const (
 		initialBackoff = 500 * time.Millisecond
 		maxBackoff     = 30 * time.Second
@@ -318,33 +335,32 @@ func (h *streamHandler) runUpstream() {
 	backoff := initialBackoff
 
 	for {
-		if h.ctx.Err() != nil {
+		if s.ctx.Err() != nil {
 			return
 		}
 
-		connected, err := h.fetchAndStream()
+		connected, err := s.fetchAndStream()
 
-		if h.ctx.Err() != nil {
+		if s.ctx.Err() != nil {
 			return
 		}
 
 		if connected {
-			// Successful connection that closed; reset backoff for next reconnect.
 			backoff = initialBackoff
 			if err != nil {
-				h.log.Warn("upstream SSE stream closed with error", zap.Error(err),
+				s.log.Warn("upstream SSE stream closed with error", zap.Error(err),
 					zap.Duration("retry_in", backoff))
 			} else {
-				h.log.Info("upstream SSE stream closed cleanly",
+				s.log.Info("upstream SSE stream closed cleanly",
 					zap.Duration("retry_in", backoff))
 			}
 		} else {
-			h.log.Warn("upstream SSE connection failed", zap.Error(err),
+			s.log.Warn("upstream SSE connection failed", zap.Error(err),
 				zap.Duration("retry_in", backoff))
 		}
 
 		select {
-		case <-h.ctx.Done():
+		case <-s.ctx.Done():
 			return
 		case <-time.After(backoff):
 		}
@@ -355,12 +371,13 @@ func (h *streamHandler) runUpstream() {
 	}
 }
 
-// fetchAndStream dials the upstream SSE endpoint and reads events into the hub.
-// Returns (true, err) when we received HTTP 200 (even if the subsequent read
-// later failed).  Returns (false, err) on dial or non-200 errors.
-func (h *streamHandler) fetchAndStream() (connected bool, err error) {
-	req, err := http.NewRequestWithContext(h.ctx, http.MethodGet,
-		h.cfg.PolicyManagerStreamURL, nil)
+// fetchAndStream dials the upstream SSE endpoint and applies events to the
+// hub and the ring. Returns (true, err) when we received HTTP 200 (even if
+// the subsequent read later failed). Returns (false, err) on dial or non-200
+// errors.
+func (s *StreamSubscriber) fetchAndStream() (connected bool, err error) {
+	req, err := http.NewRequestWithContext(s.ctx, http.MethodGet,
+		s.cfg.PolicyManagerStreamURL, nil)
 	if err != nil {
 		return false, fmt.Errorf("build request: %w", err)
 	}
@@ -376,8 +393,8 @@ func (h *streamHandler) fetchAndStream() (connected bool, err error) {
 		return false, fmt.Errorf("upstream status %d", resp.StatusCode)
 	}
 
-	h.log.Info("connected to upstream SSE",
-		zap.String("url", h.cfg.PolicyManagerStreamURL))
+	s.log.Info("connected to upstream SSE",
+		zap.String("url", s.cfg.PolicyManagerStreamURL))
 
 	scanner := bufio.NewScanner(resp.Body)
 	for scanner.Scan() {
@@ -389,13 +406,16 @@ func (h *streamHandler) fetchAndStream() (connected bool, err error) {
 		payload := strings.TrimPrefix(line, prefix)
 		var ev PublicEvent
 		if jsonErr := json.Unmarshal([]byte(payload), &ev); jsonErr != nil {
-			h.log.Warn("upstream SSE: invalid JSON payload",
+			s.log.Warn("upstream SSE: invalid JSON payload",
 				zap.String("payload", payload),
 				zap.Error(jsonErr),
 			)
 			continue
 		}
-		h.hub.publish(ev)
+		s.hub.publish(ev)
+		if s.ring != nil {
+			s.ring.Add(ev)
+		}
 	}
 	return true, scanner.Err()
 }

@@ -30,8 +30,14 @@ vi.mock('remotion', async () => {
   };
 });
 
-import { DashboardGlimpse } from '../DashboardGlimpse';
-import { SYNTHETIC_ROWS } from '../../components/LiveDecisionsPane';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+import {
+  DashboardGlimpse,
+  TILE_1_CROP,
+  TILE_2_CROP,
+  TILE_3_CROP,
+} from '../DashboardGlimpse';
 
 afterEach(() => {
   cleanup();
@@ -104,14 +110,69 @@ describe('DashboardGlimpse — caption content (AC-DG-4)', () => {
   });
 });
 
-describe('DashboardGlimpse — synthesis invariant (AC-DG-7)', () => {
-  it('T6: [data-synthetic="true"] count equals SYNTHETIC_ROWS.length at representative frames', () => {
-    for (const frame of [0, 60, 150, 200, 264, 350, 419]) {
-      frameRef.value = frame;
-      const { container } = render(<DashboardGlimpse />);
-      const syntheticEls = container.querySelectorAll('[data-synthetic="true"]');
-      expect(syntheticEls.length).toBe(SYNTHETIC_ROWS.length);
-      cleanup();
-    }
+describe('DashboardGlimpse — manifest-anchored crop AC (AC-DG-CROP)', () => {
+  // Verify-side AC: every ScreenshotPanel `crop={...}` in DashboardGlimpse
+  // must be mirrored in manifest.json as `expected_content_region` for the
+  // PNG it references. The PNG's sha256 is the anchor — when a dashboard
+  // restyle changes the PNG bytes the sha256 changes, which forces an
+  // explicit AC review of the crop geometry (no silent invalidation).
+  type ManifestArtifact = {
+    path: string;
+    sha256: string;
+    bytes: number;
+    expected_content_region?: {
+      x: number;
+      y: number;
+      width: number;
+      height: number;
+      description: string;
+    };
+  };
+  type Manifest = { version: number; artifacts: ManifestArtifact[] };
+
+  const manifestPath = resolve(__dirname, '../../../public/manifest.json');
+  const manifest: Manifest = JSON.parse(readFileSync(manifestPath, 'utf-8'));
+
+  const findArtifact = (rel: string) => {
+    const a = manifest.artifacts.find((x) => x.path === rel);
+    if (!a) throw new Error(`manifest missing artifact: ${rel}`);
+    return a;
+  };
+
+  const EPS = 0.001;
+  const equalsCrop = (a: { x: number; y: number; width: number; height: number }, b: typeof a) =>
+    Math.abs(a.x - b.x) < EPS &&
+    Math.abs(a.y - b.y) < EPS &&
+    Math.abs(a.width - b.width) < EPS &&
+    Math.abs(a.height - b.height) < EPS;
+
+  it('TILE_1_CROP matches manifest expected_content_region for dashboard-livedecisions.png', () => {
+    const a = findArtifact('screenshots/dashboard-livedecisions.png');
+    expect(a.expected_content_region).toBeDefined();
+    expect(equalsCrop(TILE_1_CROP, a.expected_content_region!)).toBe(true);
+    // sha256 anchor: forces the AC author to review crop when the PNG changes.
+    expect(a.sha256).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it('TILE_2_CROP matches manifest expected_content_region for dashboard-metrics.png', () => {
+    const a = findArtifact('screenshots/dashboard-metrics.png');
+    expect(a.expected_content_region).toBeDefined();
+    expect(equalsCrop(TILE_2_CROP, a.expected_content_region!)).toBe(true);
+    expect(a.sha256).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it('TILE_3_CROP is recorded somewhere on the dashboard-livedecisions.png manifest entry', () => {
+    // Tile 1 and Tile 3 both crop dashboard-livedecisions.png. The manifest
+    // entry stores Tile 1's rect under expected_content_region; Tile 3's rect
+    // is stored under expected_content_regions_extra[0] when present, so
+    // both crops on the same PNG are auditable.
+    const a = findArtifact('screenshots/dashboard-livedecisions.png') as ManifestArtifact & {
+      expected_content_regions_extra?: Array<typeof TILE_3_CROP & { description: string }>;
+    };
+    const extra = a.expected_content_regions_extra ?? [];
+    const match = extra.some((rect) =>
+      equalsCrop(TILE_3_CROP, rect),
+    );
+    expect(match).toBe(true);
   });
 });

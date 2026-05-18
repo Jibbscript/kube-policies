@@ -312,98 +312,64 @@ capture_audit_log_for_suppression() {
 # SPA. Requires `npx playwright install chromium` to have been run once on
 # this host.
 _capture_dashboard_shots_cleanup() {
-  [ -n "${_CDS_PROXY_PID:-}" ] && kill -TERM "${_CDS_PROXY_PID}" 2>/dev/null || true
-  [ -n "${_CDS_PREVIEW_PID:-}" ] && kill -TERM "${_CDS_PREVIEW_PID}" 2>/dev/null || true
-  [ -n "${_CDS_PM_PID:-}"   ] && kill -TERM "${_CDS_PM_PID}"   2>/dev/null || true
+  [ -n "${_CDS_DASHBOARD_PID:-}" ] && kill -TERM "${_CDS_DASHBOARD_PID}" 2>/dev/null || true
   sleep 1
-  pkill -TERM -f "vite preview" 2>/dev/null || true
-  pkill -TERM -f "kubectl port-forward.*kube-policies-policy-manager" 2>/dev/null || true
-  pkill -TERM -f "dev_proxy.py" 2>/dev/null || true
-  unset _CDS_PROXY_PID _CDS_PREVIEW_PID _CDS_PM_PID
+  pkill -TERM -f "kubectl port-forward.*kube-policies-dashboard" 2>/dev/null || true
+  unset _CDS_DASHBOARD_PID
 }
 
 capture_dashboard_shots() {
-  # Strategy:
-  #   The dashboard SPA mounts via Svelte 5's mount() API. Under `vite dev`,
-  #   HMR triggers an SSR-check that mis-fires and throws
-  #   `lifecycle_function_unavailable: mount(...) is not available on the
-  #   server` — the page never renders. Under `vite preview` (static-serve
-  #   of the prebuilt bundle) that path is not hit and the SPA renders.
-  #
-  #   `vite preview` has no built-in proxy, so we run a tiny Python reverse
-  #   proxy in front of it that routes /api/* → policy-manager port-forward
-  #   and everything else → vite preview. Playwright hits the proxy.
+  # Strategy (post dashboard-500-fix):
+  #   The dashboard pod (kube-policies-dashboard) already does everything the
+  #   capture pipeline needs:
+  #     - serves the embedded SPA via web_embed.go on :8090
+  #     - owns the BFF endpoints /api/decisions/* and /api/metrics/* locally
+  #     - reverse-proxies /api/v1/* to the policy-manager service
+  #   So we port-forward that one pod and point Playwright at it. The previous
+  #   topology (vite preview + dev_proxy.py routing /api → policy-manager only)
+  #   was broken in two ways: it bypassed the dashboard's BFF endpoints
+  #   entirely, and it left the dashboard's local ring empty because the
+  #   eager SSE subscriber lives inside the dashboard process and never ran
+  #   under that topology. See .omc/plans/dashboard-500-fix.md for the
+  #   complete root cause and the eager-subscribe fix shipped alongside this.
   #
   # Topology:
-  #   :8091  ← kubectl port-forward → policy-manager API
-  #   :4173  ← vite preview          → web/dist (built SPA)
-  #   :8081  ← dev_proxy.py          → /api/* → :8091, else → :4173
+  #   :8081  ← kubectl port-forward → svc/kube-policies-dashboard:8090
   trap _capture_dashboard_shots_cleanup RETURN
   local i
 
-  # NOTE on the build step: we deliberately do NOT run `npm run build` here.
-  # The current web/ build emits a Svelte-5 mount() lifecycle error on first
-  # render in any browser context (probably an upstream dependency churn —
-  # tracked separately, not blocking the demo). The committed web/dist from
-  # the last known-good build serves cleanly via vite preview. If web/dist
-  # is missing, the user should rebuild manually after fixing the upstream.
-  if [ ! -d "${PROJECT_ROOT}/web/dist" ]; then
-    echo "ERROR: web/dist not present; run 'cd web && npm run build' first" >&2
-    return 1
-  fi
-
-  # 1. port-forward policy-manager API → localhost:8091.
-  echo "[capture] port-forward policy-manager 8091 → svc/kube-policies-policy-manager:8080"
-  kubectl port-forward -n kube-policies-system svc/kube-policies-policy-manager 8091:8080 \
-    >/tmp/capture-pm-pf.log 2>&1 &
-  _CDS_PM_PID=$!
+  echo "[capture] port-forward dashboard 8081 → svc/kube-policies-dashboard:8090"
+  kubectl port-forward -n kube-policies-system svc/kube-policies-dashboard 8081:8090 \
+    >/tmp/capture-dashboard-pf.log 2>&1 &
+  _CDS_DASHBOARD_PID=$!
   for i in $(seq 1 60); do
-    if (echo > "/dev/tcp/127.0.0.1/8091") >/dev/null 2>&1; then break; fi
+    if (echo > "/dev/tcp/127.0.0.1/8081") >/dev/null 2>&1; then break; fi
     sleep 0.2
   done
-
-  # 3. start vite preview on :4173 (static-serves web/dist with the working bundle).
-  echo "[capture] starting vite preview for web/dist on :4173"
-  (
-    cd "${PROJECT_ROOT}/web"
-    npx vite preview --port 4173 --host 127.0.0.1 \
-      >/tmp/capture-preview.log 2>&1
-  ) &
-  _CDS_PREVIEW_PID=$!
-  for i in $(seq 1 60); do
-    if curl -fsS -m 2 -o /dev/null http://127.0.0.1:4173/ 2>/dev/null; then break; fi
-    sleep 0.5
-  done
-  if ! curl -fsS -m 2 -o /dev/null http://127.0.0.1:4173/ 2>/dev/null; then
-    echo "ERROR: vite preview did not become ready at :4173" >&2
-    tail -20 /tmp/capture-preview.log >&2 || true
+  if ! curl -fsS -m 2 -o /dev/null http://127.0.0.1:8081/healthz 2>/dev/null; then
+    echo "ERROR: dashboard port-forward did not become ready at :8081" >&2
+    tail -20 /tmp/capture-dashboard-pf.log >&2 || true
     return 1
   fi
 
-  # 4. start dev_proxy.py on :8081 (routes /api → :8091, else → :4173).
-  echo "[capture] starting dev_proxy.py on :8081"
-  python3 "${SCRIPT_DIR}/dev_proxy.py" --port 8081 --spa http://127.0.0.1:4173 \
-    --api http://127.0.0.1:8091 > /tmp/capture-proxy.log 2>&1 &
-  _CDS_PROXY_PID=$!
-  for i in $(seq 1 30); do
-    if curl -fsS -m 2 -o /dev/null http://127.0.0.1:8081/ 2>/dev/null; then break; fi
-    sleep 0.2
-  done
-  if ! curl -fsS -m 2 -o /dev/null http://127.0.0.1:8081/ 2>/dev/null; then
-    echo "ERROR: dev_proxy did not become ready at :8081" >&2
-    tail -20 /tmp/capture-proxy.log >&2 || true
-    return 1
-  fi
-
-  # 5. SPA-aware wait — give the dashboard a few seconds for first /api fetches
-  # so screenshots show populated tiles (not the empty initial render).
+  # SPA-aware wait — give the dashboard a few seconds for first /api fetches
+  # so screenshots show populated tiles (not the empty initial render). The
+  # dashboard's eager SSE subscriber (cmd/dashboard/decisions.go) populates
+  # the ring as cluster admission events flow.
   sleep 4
 
-  # 6. run Playwright against the proxy (which serves both SPA + /api/*).
+  # @playwright/test is a devDependency of demo/remotion (not demo/capture).
+  # Run the spec from demo/capture so Playwright's testDir defaults pick it
+  # up, but resolve the binary and node_modules from demo/remotion (NODE_PATH
+  # is required because the spec's `import { test, expect } from
+  # "@playwright/test"` resolves at spec-load time inside a subprocess that
+  # doesn't inherit Playwright's own require chain).
   (
     cd "${PROJECT_ROOT}/demo/capture"
+    NODE_PATH="${PROJECT_ROOT}/demo/remotion/node_modules" \
     DASHBOARD_URL="http://localhost:8081" \
-      npx playwright test --reporter=line --grep-invert grafana
+      "${PROJECT_ROOT}/demo/remotion/node_modules/.bin/playwright" test \
+        ./dashboard.spec.ts --reporter=line --grep-invert grafana
   )
 }
 
@@ -426,12 +392,34 @@ capture_grafana_shots() {
 # file, emits public/manifest.json. Schema (matches W2's contract):
 #   { "version": 1,
 #     "generated_at": "<ISO-8601 UTC>",
-#     "artifacts": [ { "path": "...", "sha256": "...", "bytes": <int> }, ... ] }
+#     "artifacts": [ { "path": "...", "sha256": "...", "bytes": <int>,
+#                      "expected_content_region": {...},
+#                      "expected_content_regions_extra": [...] }, ... ] }
+#
+# Crop annotations (`expected_content_region` /
+# `expected_content_regions_extra`) are preserved from the prior manifest:
+# they are scene-authored geometry, not capture-time data, and must survive a
+# re-capture even though the artifact's sha256 changes. The AC-DG-CROP test
+# (demo/remotion/src/scenes/__tests__/DashboardGlimpse.test.tsx) re-asserts
+# that the crop still matches the scene's TILE_*_CROP exports, so a restyle
+# that invalidates the rect surfaces as a test failure rather than silent
+# drift.
 write_manifest() {
   local pub="${PROJECT_ROOT}/demo/remotion/public"
   local manifest="${pub}/manifest.json"
   local generated_at
   generated_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+  # Capture prior annotations keyed by path so we can merge them onto the
+  # freshly computed sha256s. Missing manifest or missing keys are tolerated.
+  local prior_annotations="{}"
+  if [ -f "${manifest}" ]; then
+    prior_annotations=$(jq '
+      [.artifacts[]?
+       | {key:.path, value:(. | with_entries(select(.key=="expected_content_region" or .key=="expected_content_regions_extra")))}
+      ] | from_entries
+    ' "${manifest}" 2>/dev/null || echo "{}")
+  fi
 
   local entries="[]"
   local f rel sha bytes
@@ -443,8 +431,13 @@ write_manifest() {
       sha="$(shasum -a 256 "${f}" | awk '{print $1}')"
     fi
     bytes="$(wc -c < "${f}" | tr -d ' ')"
-    entries=$(jq --arg p "${rel}" --arg s "${sha}" --argjson b "${bytes}" \
-                 '. + [{path:$p, sha256:$s, bytes:$b}]' <<<"${entries}")
+    entries=$(jq \
+        --arg p "${rel}" \
+        --arg s "${sha}" \
+        --argjson b "${bytes}" \
+        --argjson prior "${prior_annotations}" \
+        '. + [({path:$p, sha256:$s, bytes:$b}) + ($prior[$p] // {})]' \
+        <<<"${entries}")
   done < <(find "${pub}/screenshots" "${pub}/terminals" "${pub}/audit" \
               -type f 2>/dev/null | sort)
 

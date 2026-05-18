@@ -337,6 +337,58 @@ kube_policies_audit_buffer_size 7
 	}
 }
 
+// TestMetricsHandler_NoEmptyBodyWhenHistogramOverflows guards against the
+// regression where a histogram whose 95th percentile fell in the `le="+Inf"`
+// overflow bucket produced EvalP95Ms=+Inf, which json.Marshal cannot
+// serialize. gin's renderer silently aborted the response in that case —
+// the client saw HTTP 200 + Content-Type: application/json + Content-Length: 0
+// with no body and no panic in the dashboard logs. dashboard-500-fix root
+// cause #2.
+func TestMetricsHandler_NoEmptyBodyWhenHistogramOverflows(t *testing.T) {
+	// 11 observations, with the +Inf overflow bucket holding the 11th
+	// (target = 0.95*11 = 10.45 falls in the +Inf bucket because only 10
+	// observations cross at le=0.512).
+	pm := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/plain; version=0.0.4")
+		_, _ = io.WriteString(w, "# HELP kube_policies_policy_loaded_total Loaded.\n# TYPE kube_policies_policy_loaded_total gauge\nkube_policies_policy_loaded_total 1\n")
+	}))
+	defer pm.Close()
+	aw := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/plain; version=0.0.4")
+		_, _ = io.WriteString(w, `# HELP kube_policies_admission_evaluation_duration_seconds Eval duration.
+# TYPE kube_policies_admission_evaluation_duration_seconds histogram
+kube_policies_admission_evaluation_duration_seconds_bucket{operation="validate",le="0.001"} 0
+kube_policies_admission_evaluation_duration_seconds_bucket{operation="validate",le="0.512"} 10
+kube_policies_admission_evaluation_duration_seconds_bucket{operation="validate",le="+Inf"} 11
+kube_policies_admission_evaluation_duration_seconds_sum{operation="validate"} 7.11
+kube_policies_admission_evaluation_duration_seconds_count{operation="validate"} 11
+`)
+	}))
+	defer aw.Close()
+
+	cfg := &Config{
+		PolicyManagerMetricsURL:    pm.URL,
+		AdmissionWebhookMetricsURL: aw.URL,
+	}
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	r.GET("/api/metrics/summary", NewMetricsHandler(cfg, zap.NewNop()))
+
+	req := httptest.NewRequest(http.MethodGet, "/api/metrics/summary", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	if w.Body.Len() == 0 {
+		t.Fatal("body is empty — +Inf in the JSON aborted the render silently")
+	}
+	body := w.Body.String()
+	if strings.Contains(body, "+Inf") || strings.Contains(body, "Infinity") || strings.Contains(body, "NaN") {
+		t.Errorf("body contains non-finite p95; got %s", body)
+	}
+}
+
 // TestMetricsHandler_ReportsDegradedOnScrapeFailure verifies acceptance #8:
 // an unreachable upstream sets the per-source degraded flag and returns 200,
 // never a 5xx.
@@ -390,12 +442,81 @@ func TestProxy_VerbGate_AllowsWritesWhenEnabled_ButUpstreamDown(t *testing.T) {
 	}
 }
 
-// newStreamTestRouter returns a gin engine with the SSE stream route wired up.
-func newStreamTestRouter(ctx context.Context, cfg *Config) *gin.Engine {
+// newStreamTestRouter returns a gin engine with the SSE stream + recent
+// routes wired up against an eagerly-started StreamSubscriber. The ring is
+// returned so tests that observe ring state share the same instance.
+func newStreamTestRouter(ctx context.Context, cfg *Config) (*gin.Engine, *Ring) {
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
-	r.GET("/api/decisions/stream", NewStreamHandler(ctx, cfg, zap.NewNop()))
-	return r
+	ring := NewRing(16)
+	sub := NewStreamSubscriber(ctx, cfg, ring, zap.NewNop())
+	sub.Start()
+	r.GET("/api/decisions/stream", sub.Handler())
+	r.GET("/api/decisions/recent", NewRecentHandler(ring, zap.NewNop()))
+	return r, ring
+}
+
+// TestStreamSubscriber_PopulatesRingFromUpstream verifies that events flowing
+// through the eager upstream SSE subscription land in the shared ring and are
+// observable via GET /api/decisions/recent, without any browser ever opening
+// /api/decisions/stream. This is the eager-subscribe contract that prevents
+// the dashboard's ring from staying empty in the SPA's polling-only world.
+func TestStreamSubscriber_PopulatesRingFromUpstream(t *testing.T) {
+	sendEvent := make(chan struct{})
+
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+		}
+		<-sendEvent
+		fmt.Fprint(w, "data: {\"decision\":\"DENY\",\"kind\":\"Pod\",\"name\":\"upstream-pod\",\"rule_id\":\"r1\",\"policy_id\":\"p1\",\"timestamp\":\"2026-01-01T00:00:00Z\"}\n\n")
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+		}
+		<-r.Context().Done()
+	}))
+	defer upstream.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	cfg := &Config{PolicyManagerStreamURL: upstream.URL}
+	router, ring := newStreamTestRouter(ctx, cfg)
+
+	// Wait for the eager subscriber to dial upstream.
+	for i := 0; i < 50; i++ {
+		time.Sleep(10 * time.Millisecond)
+		if ring.Len() == 0 { // upstream connected but no events yet
+			continue
+		}
+	}
+	close(sendEvent)
+
+	// Poll the ring until the event lands (event arrives via a goroutine).
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) && ring.Len() == 0 {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if ring.Len() == 0 {
+		t.Fatal("ring did not receive the upstream event within 2s")
+	}
+
+	// Verify /api/decisions/recent reflects the event.
+	req := httptest.NewRequest(http.MethodGet, "/api/decisions/recent?limit=5", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("recent status = %d, want 200", w.Code)
+	}
+	body := w.Body.String()
+	if !strings.Contains(body, `"name":"upstream-pod"`) {
+		t.Errorf("recent body must include the upstream event's name; got %s", body)
+	}
+	if strings.Contains(body, `"degraded":true`) {
+		t.Errorf("ring populated from upstream; degraded must be false; got %s", body)
+	}
 }
 
 // TestStreamHandler_FansOutFromUpstream verifies that two browser clients both
@@ -429,7 +550,8 @@ func TestStreamHandler_FansOutFromUpstream(t *testing.T) {
 	defer cancel()
 
 	cfg := &Config{PolicyManagerStreamURL: upstream.URL}
-	srv := httptest.NewServer(newStreamTestRouter(ctx, cfg))
+	router, _ := newStreamTestRouter(ctx, cfg)
+	srv := httptest.NewServer(router)
 	defer srv.Close()
 
 	const numClients = 2
@@ -487,8 +609,9 @@ func TestStreamHandler_FansOutFromUpstream(t *testing.T) {
 	}
 }
 
-// TestStreamHandler_OneUpstreamConnection verifies that 5 concurrent browser
-// clients share a single upstream GET (sync.Once semantics).
+// TestStreamHandler_OneUpstreamConnection verifies that the eager subscriber
+// holds exactly one upstream GET, and that concurrent browser clients share
+// that single upstream — they fan out via the hub, never re-dialing upstream.
 func TestStreamHandler_OneUpstreamConnection(t *testing.T) {
 	var getCount atomic.Int32
 
@@ -507,8 +630,12 @@ func TestStreamHandler_OneUpstreamConnection(t *testing.T) {
 	defer cancel()
 
 	cfg := &Config{PolicyManagerStreamURL: upstream.URL}
-	srv := httptest.NewServer(newStreamTestRouter(ctx, cfg))
+	router, _ := newStreamTestRouter(ctx, cfg)
+	srv := httptest.NewServer(router)
 	defer srv.Close()
+
+	// Give Start() time to dial upstream.
+	time.Sleep(50 * time.Millisecond)
 
 	clientCtx, clientCancel := context.WithCancel(context.Background())
 	defer clientCancel()
@@ -530,7 +657,7 @@ func TestStreamHandler_OneUpstreamConnection(t *testing.T) {
 		}()
 	}
 
-	// Let all clients connect and the upstream goroutine start.
+	// Let all clients connect.
 	time.Sleep(100 * time.Millisecond)
 
 	if n := getCount.Load(); n != 1 {
@@ -561,7 +688,8 @@ func TestStreamHandler_BrowserDisconnect(t *testing.T) {
 	// cancel is called explicitly below; not deferred so we control timing.
 
 	cfg := &Config{PolicyManagerStreamURL: upstream.URL}
-	srv := httptest.NewServer(newStreamTestRouter(ctx, cfg))
+	router, _ := newStreamTestRouter(ctx, cfg)
+	srv := httptest.NewServer(router)
 	defer srv.Close()
 
 	before := runtime.NumGoroutine()

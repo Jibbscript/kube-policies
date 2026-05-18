@@ -111,9 +111,17 @@ func newAPIServer(ctx context.Context, cfg *Config, log *zap.Logger) (*http.Serv
 
 	ring := NewRing(100)
 
+	// Eagerly subscribe to the upstream policy-manager SSE stream so the ring
+	// fills as cluster admission events flow, regardless of whether any
+	// browser ever opens an SSE connection. The SPA polls
+	// /api/decisions/recent today, so the upstream stream is the ring's only
+	// data source under normal operation.
+	subscriber := NewStreamSubscriber(ctx, cfg, ring, log)
+	subscriber.Start()
+
 	router.GET("/api/metrics/summary", NewMetricsHandler(cfg, log))
 	router.GET("/api/decisions/recent", NewRecentHandler(ring, log))
-	router.GET("/api/decisions/stream", NewStreamHandler(ctx, cfg, log))
+	router.GET("/api/decisions/stream", subscriber.Handler())
 	router.POST("/api/decisions/internal", NewIngestHandler(cfg, ring, log))
 
 	proxy, err := NewProxyHandler(cfg, log)

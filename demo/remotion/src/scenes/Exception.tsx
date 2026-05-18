@@ -11,7 +11,7 @@ import { Caption } from '../components/Caption';
  * Three panes:
  *   top-left    : TerminalReplay  (terminals/scene-4-exception.txt)
  *   bottom-left : AuditPane       (audit/scene-4-audit.json)
- *   right       : ScreenshotPanel (screenshots/dashboard-metrics-suppressions.png)
+ *   right       : ScreenshotPanel (screenshots/dashboard-metrics.png)
  */
 export const Exception: React.FC = () => {
   return (
@@ -67,7 +67,7 @@ export const Exception: React.FC = () => {
         </div>
         <div style={{ flex: 1 }}>
           <ScreenshotPanel
-            src={staticFile('screenshots/dashboard-metrics-suppressions.png')}
+            src={staticFile('screenshots/dashboard-metrics.png')}
             alt="Metrics dashboard: policy_exception_suppressions_total ticking"
           />
         </div>

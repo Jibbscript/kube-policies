@@ -34,7 +34,13 @@
         "properties": {
           "path": { "type": "string" },
           "expected_width": { "type": "integer", "minimum": 1 },
-          "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+          "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+          "expected_content_region": { "$ref": "#/definitions/contentRegion" },
+          "expected_content_regions_extra": {
+            "type": "array",
+            "items": { "$ref": "#/definitions/contentRegion" },
+            "description": "Additional crop regions for PNGs that are referenced by more than one ScreenshotPanel in the scene (e.g. Tile 1 + Tile 3 both crop dashboard-livedecisions.png)."
+          }
         }
       }
     },
@@ -75,6 +81,21 @@
           "fixed_value": { "type": "string" },
           "applied_at_url": { "type": "string", "format": "uri" }
         }
+      }
+    }
+  },
+  "definitions": {
+    "contentRegion": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["x", "y", "width", "height", "description"],
+      "description": "Normalized 0..1 rectangle identifying the region of the PNG that a scene's ScreenshotPanel.crop is anchored to. Tied to the parent artifact's sha256 — when the sha256 changes, every consumer must reconfirm the rect is still meaningful (US-6 of dashboard-500-fix).",
+      "properties": {
+        "x": { "type": "number", "minimum": 0, "maximum": 1 },
+        "y": { "type": "number", "minimum": 0, "maximum": 1 },
+        "width": { "type": "number", "exclusiveMinimum": 0, "maximum": 1 },
+        "height": { "type": "number", "exclusiveMinimum": 0, "maximum": 1 },
+        "description": { "type": "string" }
       }
     }
   }

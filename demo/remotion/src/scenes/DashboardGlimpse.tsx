@@ -9,61 +9,37 @@ import {
 import { theme } from '../theme';
 import { ScreenshotPanel } from '../components/ScreenshotPanel';
 import { Caption } from '../components/Caption';
-import { LiveDecisionsPane, SYNTHETIC_ROWS, type LiveDecisionRow } from '../components/LiveDecisionsPane';
 
 /**
  * DashboardGlimpse scene (frames 0–420 relative, 14 s @ 30 fps).
  *
- * Hybrid tile layout:
- *   Tile 1 (0–150):   LiveDecisionsPane ALL view (1 real row + 3 synthetic)
- *   Tile 2 (132–282): Metrics PNG card-header band, crop+zoom
- *   Tile 3 (264–420): LiveDecisionsPane DENY-filtered view (4 synthetic)
+ * Tile layout (all three tiles are ScreenshotPanel — no DOM synthesis since
+ * the dashboard `/api/decisions/*` capture-time bug was root-caused and
+ * fixed; see `.omc/plans/dashboard-500-fix.md`):
+ *   Tile 1 (0–150):   `dashboard-livedecisions.png`, ALL view crop
+ *   Tile 2 (132–282): `dashboard-metrics.png`, card-header band crop
+ *   Tile 3 (264–420): `dashboard-livedecisions.png` zoomed in on the DENY-rule
+ *                     rows (which dominate the captured rows) — gives a
+ *                     visual "filter to DENY" effect without re-capturing
  *
  * Scene brand colors: {ok, danger} only. theme.accent is NOT used here.
- * Ken-Burns 1.00→1.08 per tile via interpolate()+Easing.bezier.
+ * Ken-Burns 1.00→1.08 per tile via ScreenshotPanel's zoom prop +
+ * interpolate()+Easing.bezier on the wrapper opacity.
+ *
+ * The (x, y, width, height) on each ScreenshotPanel.crop is mirrored in
+ * `demo/remotion/public/manifest.json` as the per-PNG
+ * `expected_content_region` annotation — verify-frames.test.ts asserts
+ * the two stay in lock-step, so a dashboard restyle that changes the PNG
+ * sha256 forces an explicit AC review of the crop geometry.
  */
 const easing = Easing.bezier(0.16, 1, 0.3, 1);
 const FADE = 18; // 600 ms @ 30 fps
 
-const REAL_ROW_A: LiveDecisionRow = {
-  id: '930c931b',
-  namespace: 'default',
-  name: 'emergency-pod',
-  verdict: 'ALLOW',
-  policy_id: 'security-baseline',
-  rule_id: 'no-host-path-volumes',
-  reason: 'suppressed by exception',
-  timestamp_ms_ago: 2000,
-  synthetic: false,
-};
-
-// Tile 1: 1 real row (A) + 3 synthetic rows (B, C, D = SYNTHETIC_ROWS[0..2])
-const TILE_1_ROWS: LiveDecisionRow[] = [
-  REAL_ROW_A,
-  SYNTHETIC_ROWS[0],
-  SYNTHETIC_ROWS[1],
-  SYNTHETIC_ROWS[2],
-];
-
-// Tile 3: 4 synthetic DENY rows (C, E, F, G = SYNTHETIC_ROWS[3..6])
-const TILE_3_ROWS: LiveDecisionRow[] = [
-  SYNTHETIC_ROWS[3],
-  SYNTHETIC_ROWS[4],
-  SYNTHETIC_ROWS[5],
-  SYNTHETIC_ROWS[6],
-];
-
-const TILE_1_CHIPS = [
-  { label: 'ALL', active: true },
-  { label: 'ALLOW', active: false },
-  { label: 'DENY', active: false },
-];
-
-const TILE_3_CHIPS = [
-  { label: 'ALL', active: false },
-  { label: 'ALLOW', active: false },
-  { label: 'DENY', active: true },
-];
+// Mirror of the manifest's expected_content_region for each tile.
+// Verify-side AC: see demo/remotion/src/scenes/__tests__/DashboardGlimpse.test.tsx.
+export const TILE_1_CROP = { x: 0.18, y: 0.06, width: 0.64, height: 0.42 } as const;
+export const TILE_2_CROP = { x: 0.0, y: 0.20, width: 1.0, height: 0.12 } as const;
+export const TILE_3_CROP = { x: 0.18, y: 0.18, width: 0.64, height: 0.30 } as const;
 
 export const DashboardGlimpse: React.FC = () => {
   const frame = useCurrentFrame();
@@ -87,18 +63,6 @@ export const DashboardGlimpse: React.FC = () => {
     { extrapolateLeft: 'clamp', extrapolateRight: 'clamp', easing },
   );
 
-  // Ken-Burns scale for DOM tiles (ScreenshotPanel tile 2 uses its own zoom prop)
-  const tile1Scale = interpolate(frame, [0, 150], [1.0, 1.08], {
-    extrapolateLeft: 'clamp',
-    extrapolateRight: 'clamp',
-    easing,
-  });
-  const tile3Scale = interpolate(frame, [264, 420], [1.0, 1.08], {
-    extrapolateLeft: 'clamp',
-    extrapolateRight: 'clamp',
-    easing,
-  });
-
   return (
     <AbsoluteFill style={{ backgroundColor: theme.bg }}>
       <div
@@ -115,16 +79,12 @@ export const DashboardGlimpse: React.FC = () => {
             data-testid="tile-1"
             style={{ position: 'absolute', inset: 0, opacity: tile1Opacity }}
           >
-            <div
-              style={{
-                width: '100%',
-                height: '100%',
-                transform: `scale(${tile1Scale})`,
-                transformOrigin: '50% 50%',
-              }}
-            >
-              <LiveDecisionsPane rows={TILE_1_ROWS} filterChips={TILE_1_CHIPS} />
-            </div>
+            <ScreenshotPanel
+              src={staticFile('screenshots/dashboard-livedecisions.png')}
+              crop={TILE_1_CROP}
+              zoom={{ from: 1.0, to: 1.08, fromFrame: 0, toFrame: 150 }}
+              alt="Live decisions — ALL view"
+            />
           </div>
 
           {/* Card-header band only; sparkline body is masked at capture (demo/capture/dashboard.spec.ts:58) and must not be amplified by zoom. */}
@@ -134,7 +94,7 @@ export const DashboardGlimpse: React.FC = () => {
           >
             <ScreenshotPanel
               src={staticFile('screenshots/dashboard-metrics.png')}
-              crop={{ x: 0.0, y: 0.20, width: 1.0, height: 0.12 }}
+              crop={TILE_2_CROP}
               zoom={{ from: 1.0, to: 1.08, fromFrame: 132, toFrame: 282 }}
               alt="Metrics card headers"
             />
@@ -144,16 +104,12 @@ export const DashboardGlimpse: React.FC = () => {
             data-testid="tile-3"
             style={{ position: 'absolute', inset: 0, opacity: tile3Opacity }}
           >
-            <div
-              style={{
-                width: '100%',
-                height: '100%',
-                transform: `scale(${tile3Scale})`,
-                transformOrigin: '50% 50%',
-              }}
-            >
-              <LiveDecisionsPane rows={TILE_3_ROWS} filterChips={TILE_3_CHIPS} />
-            </div>
+            <ScreenshotPanel
+              src={staticFile('screenshots/dashboard-livedecisions.png')}
+              crop={TILE_3_CROP}
+              zoom={{ from: 1.0, to: 1.08, fromFrame: 264, toFrame: 420 }}
+              alt="Live decisions — DENY rows in focus"
+            />
           </div>
         </div>
       </div>

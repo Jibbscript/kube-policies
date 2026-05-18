@@ -51,9 +51,12 @@ capture_terminals_scene3
 # and the audit event with suppressed_by must be observed before we read logs.
 apply_and_capture_suppression
 
-# Dashboard + Grafana
+# Dashboard SPA tiles (used by DashboardGlimpse scene per commit 71cd5b3).
+# Grafana capture was removed after the Option-E Hybrid rewrite replaced the
+# Grafana-overview panel with DashboardGlimpse — the chart's grafana subchart
+# is no longer enabled in values-demo.yaml and no rendered scene references
+# dashboard-grafana-overview.png.
 capture_dashboard_shots
-capture_grafana_shots
 
 write_manifest                  # writes demo/remotion/public/manifest.json
 cleanup_kind_cluster

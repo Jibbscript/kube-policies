@@ -1,31 +1,54 @@
 {
   "version": 1,
-  "generated_at": "2026-05-18T00:36:00Z",
+  "generated_at": "2026-05-18T08:28:19Z",
   "artifacts": [
     {
       "path": "audit/scene-4-audit.json",
-      "sha256": "7b7994fab60807412bd892054b0c8d4fd7a92ad202505c83bc0b1b2c2fb2b78c",
+      "sha256": "aadcd8906d153dba427250f3818ae2180cbd14059bee49303488e80646c6ba5e",
       "bytes": 3856
     },
     {
       "path": "screenshots/dashboard-exceptions.png",
-      "sha256": "dcd2680f49405f53e26a2256650c8155830934ab0c9ad03dcde628fd2bf5b1da",
-      "bytes": 38504
+      "sha256": "3ad68a2746c14e5a9439982732f25276f3baf023b7923656d2da5c3af9ec10e7",
+      "bytes": 34906
     },
     {
       "path": "screenshots/dashboard-livedecisions.png",
-      "sha256": "03a4ccc9a84618fe6cb6dd31754eb05dc5e9fda80dafc28638be1a386d966446",
-      "bytes": 47234
+      "sha256": "a1e2f97ef45460eda61bb07b4c49283014a38d6eb7c696738b44d373951d8cce",
+      "bytes": 35695,
+      "expected_content_region": {
+        "x": 0.18,
+        "y": 0.06,
+        "width": 0.64,
+        "height": 0.42,
+        "description": "Tile 1 — ALL-view table region (rows + header)"
+      },
+      "expected_content_regions_extra": [
+        {
+          "x": 0.18,
+          "y": 0.18,
+          "width": 0.64,
+          "height": 0.30,
+          "description": "Tile 3 — DENY-row focus region"
+        }
+      ]
     },
     {
       "path": "screenshots/dashboard-metrics.png",
-      "sha256": "431bb4b0a1a15793ec6704ecdf009eb3127fe48705b2cd6ad8e8d6a8c806c328",
-      "bytes": 41098
+      "sha256": "8e32110c20f78a989e3093d05d020abf872d15aec9759a121d58d621423c9db9",
+      "bytes": 42918,
+      "expected_content_region": {
+        "x": 0.0,
+        "y": 0.20,
+        "width": 1.0,
+        "height": 0.12,
+        "description": "Tile 2 — metric tile card-header band"
+      }
     },
     {
       "path": "screenshots/dashboard-overview.png",
-      "sha256": "affa295c88c39226f9b0143500353ff8c91ca6d9d8e9bd404d9d4bbdc39d3643",
-      "bytes": 67774
+      "sha256": "68f7f6d3a3d313e7ba7700ce85a462341e9bb0b58d4c4c284294afe494726d03",
+      "bytes": 62199
     },
     {
       "path": "terminals/scene-3-deny.txt",
@@ -34,8 +57,8 @@
     },
     {
       "path": "terminals/scene-4-exception.txt",
-      "sha256": "4e39a7adc88aeef267c6c59c372577eacc9edf96837e14ec105e9e6aeffae173",
-      "bytes": 97
+      "sha256": "c90c7e3301ae93403e0d0e5323d6d0b18d0850760d5aad42c3d3c3477fab61c0",
+      "bytes": 388
     }
   ]
 }
