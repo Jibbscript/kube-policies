@@ -6,7 +6,7 @@
   "description": "Kube-policies dashboard SPA (Svelte 5 + Vite 5 + Tailwind v4).",
   "scripts": {
     "dev": "vite",
-    "build": "vite build && node scripts/bundle-report.mjs",
+    "build": "vite build && node scripts/bundle-report.mjs && node scripts/check-build.mjs",
     "preview": "vite preview",
     "svelte-check": "svelte-check --tsconfig ./tsconfig.json",
     "lint": "eslint . --ext .ts,.svelte",
@@ -37,7 +37,7 @@
     "svelte-check": "^4.1.1",
     "tailwindcss": "^4.0.0",
     "typescript": "^5.7.2",
-    "vite": "^6.4.2",
+    "vite": "^5.4.21",
     "vitest": "^2.1.8"
   }
 }
