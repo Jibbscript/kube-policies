@@ -1,0 +1,31 @@
+## DashboardGlimpse Zoom+Detail Fix — 2026-05-18
+
+### Implementation Summary
+Executed Option E (Hybrid) from dashboard-glimpse-zoom-and-detail.md plan.
+
+### Files Changed
+- demo/remotion/src/components/ScreenshotPanel.tsx — added CropRect, ZoomSpec, crop+zoom props with cover math; shared imgStyle properties factored out of both branches
+- demo/remotion/src/components/LiveDecisionsPane.tsx — NEW; exports SYNTHETIC_ROWS (7 entries: 3 for Tile 1 + 4 for Tile 3); data-synthetic="true" on fabricated rows; theme.accent absent
+- demo/remotion/src/scenes/DashboardGlimpse.tsx — REWRITE; Tile 1/3 = LiveDecisionsPane DOM, Tile 2 = cropped Metrics PNG; AbsoluteFill caption overlay with 3 Sequence sub-captions; theme.accent not used
+- demo/remotion/src/components/__tests__/ScreenshotPanel.test.tsx — NEW; 5 tests with vi.hoisted frame mock
+- demo/remotion/src/components/__tests__/LiveDecisionsPane.test.tsx — NEW; 7 tests incl. AC-DG-7 unit invariant
+- demo/remotion/src/scenes/__tests__/DashboardGlimpse.test.tsx — NEW; 8 tests incl. AC-DG-7 scene invariant; Sequence mocked to avoid useVideoConfig() error
+- demo/remotion/AGENTS.md — appended §5 render-time synthesis hard constraint
+- .omc/plans/dashboard-500-fix.md — NEW stub for follow-up
+- .omc/plans/open-questions.md — appended iter-2 section
+- .omc/plans/kube-policies-demo-video.md — appended §4 storyboard note
+
+### Test Results
+37/37 tests pass (6 test files) after deslop cleanup.
+
+### Key Learnings
+1. Remotion's Sequence calls useVideoConfig() internally — must mock it in scene tests that don't have a <Composition> wrapper. Mock gates children on frameRef.value.
+2. jsdom normalizes hex colors to rgb() — test comparisons need to handle both forms (use colorMatches helper pattern).
+3. vi.hoisted is necessary (not just module-level let) when the mock factory must close over a mutable variable that Vitest hoists before module-level var declarations are processed.
+4. Tile opacity (not mount/unmount) means all tile DOM is always present — AC-DG-7 count is structurally 7 at every frame because both Tile 1 and Tile 3 LiveDecisionsPanes are always mounted.
+
+### Deslop Pass
+- Factored shared imgStyle properties (display, transformOrigin, transform) out of crop/no-crop branches in ScreenshotPanel
+- Merged double imports from LiveDecisionsPane into single inline type import in DashboardGlimpse
+- Removed 7 WHAT-only JSX comments from DashboardGlimpse and LiveDecisionsPane
+- Removed redundant React.CSSProperties type annotation from ScreenshotPanel imgStyle
