@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg"
+     width="800" height="200" viewBox="0 0 800 200"
+     preserveAspectRatio="xMidYMid meet">
+  <title>kube-policies wordmark</title>
+  <text x="400" y="120" text-anchor="middle"
+        font-family="Inter, system-ui, sans-serif"
+        font-weight="700" font-size="96"
+        fill="#000000">kube-policies</text>
+  <rect x="120" y="150" width="560" height="8" fill="#38BDF8"/>
+</svg>

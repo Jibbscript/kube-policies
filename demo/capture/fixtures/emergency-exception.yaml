@@ -1,0 +1,27 @@
+# emergency-exception.yaml — Scene 4 PolicyException CR.
+#
+# Authored against the current CRD schema in
+# internal/policymanager/apis/policies/v1/types.go (NOT the stale
+# examples/exceptions/emergency-deployment.yaml). JSON tags on
+# PolicyExceptionSpec are snake_case (policy_id, rule_id, expires_at), and
+# Scope fields are namespaces / resources / users / groups.
+#
+# Scope: covers Pods in the `default` namespace. The Scene 4 sequence applies
+# emergency-pod.yaml which then receives a suppressed_by verdict instead of
+# being rejected.
+apiVersion: policies.kube-policies.io/v1
+kind: PolicyException
+metadata:
+  name: emergency-deployment
+  namespace: default
+spec:
+  description: "Emergency exception for the demo video Scene 4"
+  policy_id: security-baseline
+  rule_id: no-host-path-volumes
+  justification: "Emergency demo"
+  approver: demo-team
+  scope:
+    namespaces:
+      - default
+    resources:
+      - pods

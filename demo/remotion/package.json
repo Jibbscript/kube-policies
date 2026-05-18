@@ -1,0 +1,36 @@
+{
+  "name": "kube-policies-demo-remotion",
+  "version": "1.0.0",
+  "description": "Remotion composition for the kube-policies 60s demo video",
+  "repository": {},
+  "license": "Apache-2.0",
+  "private": true,
+  "dependencies": {
+    "@remotion/cli": "^4.0.0",
+    "@remotion/google-fonts": "^4.0.0",
+    "react": "19.2.3",
+    "react-dom": "19.2.3",
+    "remotion": "^4.0.0"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.60.0",
+    "@remotion/eslint-config-flat": "^4.0.0",
+    "@testing-library/jest-dom": "^6.6.3",
+    "@testing-library/react": "^16.1.0",
+    "@types/react": "19.2.7",
+    "@types/react-dom": "19.2.0",
+    "@types/web": "0.0.166",
+    "eslint": "9.19.0",
+    "jsdom": "^25.0.1",
+    "prettier": "3.8.1",
+    "typescript": "5.9.3",
+    "vitest": "^2.1.8"
+  },
+  "scripts": {
+    "dev": "remotion studio",
+    "build": "remotion bundle",
+    "upgrade": "remotion upgrade",
+    "lint": "eslint src && tsc",
+    "test": "vitest run"
+  }
+}

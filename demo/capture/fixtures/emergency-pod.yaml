@@ -1,0 +1,32 @@
+# emergency-pod.yaml — Scene 4 admitted-via-suppression target.
+#
+# Identical structure to privileged-pod.yaml (hostPath volume violation) but
+# named "emergency-pod" so the matching PolicyException (emergency-exception.yaml,
+# rule_id=no-host-path-volumes, scoped to default namespace + pods) suppresses
+# the deny verdict. The admission-webhook emits an audit event with
+# {suppressed_by, name:"emergency-pod"} which
+# demo/capture/lib.sh::_wait_for_audit_event_with_suppressed_by polls for.
+#
+# NOTE: see privileged-pod.yaml header for why we trigger no-host-path-volumes
+# rather than no-privileged-containers — the bundled security-baseline policy's
+# required-security-context rule co-fires with privileged:true, producing an
+# aggregate verdict that doesn't match a single-rule exception.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: emergency-pod
+  namespace: default
+spec:
+  volumes:
+    - name: host-root
+      hostPath:
+        path: /tmp
+  containers:
+    - name: app
+      image: nginx:1.27.0
+      securityContext:
+        runAsNonRoot: true
+        allowPrivilegeEscalation: false
+      volumeMounts:
+        - name: host-root
+          mountPath: /host

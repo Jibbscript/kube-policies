@@ -1,0 +1,41 @@
+# values-demo.yaml — Helm values override for the demo-video capture cluster.
+#
+# CRITICAL keys per plan §5.3.6 + Iter-3 I3-1:
+#   - audit.backend.type=stdout: chart default is "file"; flip to stdout so
+#     `kubectl logs deploy/admission-webhook` produces the JSON audit events
+#     consumed by demo/capture/lib.sh::capture_audit_log_for_suppression().
+#   - audit.flushInterval=1s: chart default is "10s"; capture pipeline waits
+#     at most 10s for the suppressed_by event, so the buffer MUST flush fast.
+#
+# Everything else here matches the in-cluster defaults required to render the
+# Remotion video: one webhook replica (so logs aren't sharded across pods),
+# default policy bundle enabled, dashboard SPA + Grafana on.
+#
+# IMAGE NOTE: image registry/repository/tag for admissionWebhook +
+# policyManager + dashboard are set by scripts/test/lib.sh's hardcoded
+# /tmp/kind-values.yaml to point at the locally-built localhost:${REGISTRY_PORT}
+# registry with `:test` tag. We do NOT override them here, because:
+#   - admissionWebhook + policyManager use `registry/repository:tag` rendering
+#     and any override here must keep registry separate to avoid the
+#     `docker.io/localhost:5001/...` double-prefix bug.
+#   - Overriding policyManager.image.tag to "dev" (the old config) referenced
+#     an image that build_and_push_images doesn't actually push.
+
+admissionWebhook:
+  replicas: 1
+
+policies:
+  enableDefaults: true
+
+monitoring:
+  grafana:
+    enabled: true
+
+dashboard:
+  enabled: true
+
+audit:
+  enabled: true
+  backend:
+    type: stdout         # I3-1: chart default 'file' → flip to stdout
+  flushInterval: 1s      # I3-1: chart default '10s' → flush fast for capture

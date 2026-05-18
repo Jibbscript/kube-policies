@@ -1,0 +1,1 @@
+Error from server (PolicyViolation): error when creating "/Users/jbz/src/kube-policies/demo/capture/fixtures/privileged-pod.yaml": admission webhook "validate.kube-policies.io" denied the request: hostPath volumes are not allowed

@@ -1,0 +1,41 @@
+{
+  "version": 1,
+  "generated_at": "2026-05-18T00:36:00Z",
+  "artifacts": [
+    {
+      "path": "audit/scene-4-audit.json",
+      "sha256": "7b7994fab60807412bd892054b0c8d4fd7a92ad202505c83bc0b1b2c2fb2b78c",
+      "bytes": 3856
+    },
+    {
+      "path": "screenshots/dashboard-exceptions.png",
+      "sha256": "dcd2680f49405f53e26a2256650c8155830934ab0c9ad03dcde628fd2bf5b1da",
+      "bytes": 38504
+    },
+    {
+      "path": "screenshots/dashboard-livedecisions.png",
+      "sha256": "03a4ccc9a84618fe6cb6dd31754eb05dc5e9fda80dafc28638be1a386d966446",
+      "bytes": 47234
+    },
+    {
+      "path": "screenshots/dashboard-metrics.png",
+      "sha256": "431bb4b0a1a15793ec6704ecdf009eb3127fe48705b2cd6ad8e8d6a8c806c328",
+      "bytes": 41098
+    },
+    {
+      "path": "screenshots/dashboard-overview.png",
+      "sha256": "affa295c88c39226f9b0143500353ff8c91ca6d9d8e9bd404d9d4bbdc39d3643",
+      "bytes": 67774
+    },
+    {
+      "path": "terminals/scene-3-deny.txt",
+      "sha256": "71a33af2af436ecb67c9249b0b6613df1b957ac79a6e136241d1e5f8e2a94c63",
+      "bytes": 230
+    },
+    {
+      "path": "terminals/scene-4-exception.txt",
+      "sha256": "4e39a7adc88aeef267c6c59c372577eacc9edf96837e14ec105e9e6aeffae173",
+      "bytes": 97
+    }
+  ]
+}

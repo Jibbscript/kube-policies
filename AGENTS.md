@@ -32,6 +32,7 @@ Enterprise-grade Kubernetes policy enforcement system. Provides real-time admiss
 | `deployments/` | Raw Kubernetes manifests, CRDs, and monitoring stack (see `deployments/AGENTS.md`) |
 | `monitoring/` | Prometheus, Grafana dashboards, Alertmanager configs (see `monitoring/AGENTS.md`) |
 | `examples/` | Sample Policy and PolicyException manifests (see `examples/AGENTS.md`) |
+| `demo/` | 60-second Remotion demo video pipeline (capture + render + verify) for the README (see `demo/AGENTS.md`) |
 | `build/` | Dockerfiles for the two service images (see `build/AGENTS.md`) |
 | `configs/` | Environment-specific runtime configs (see `configs/AGENTS.md`) |
 | `scripts/` | Test orchestration shell scripts (see `scripts/AGENTS.md`) |

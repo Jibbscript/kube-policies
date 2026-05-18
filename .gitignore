@@ -79,3 +79,9 @@ web/test-results/
 
 # Stray `go build ./cmd/dashboard` output left in the repo root.
 /dashboard
+
+# demo pipeline outputs
+demo/remotion/node_modules/
+demo/remotion/out/
+demo/dist/
+demo/capture/.kind-state/
