@@ -2,3 +2,7 @@ policyexception.policies.kube-policies.io/emergency-deployment created
 pod/emergency-pod created
 policyexception.policies.kube-policies.io/emergency-deployment created
 pod/emergency-pod created
+policyexception.policies.kube-policies.io/emergency-deployment created
+pod/emergency-pod created
+policyexception.policies.kube-policies.io/emergency-deployment created
+pod/emergency-pod created

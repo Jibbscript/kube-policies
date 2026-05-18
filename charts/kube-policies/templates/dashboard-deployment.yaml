@@ -34,7 +34,7 @@ spec:
         fsGroup: 65532
       containers:
         - name: dashboard
-          image: "{{ .Values.dashboard.image.repository }}:{{ .Values.dashboard.image.tag | default .Chart.AppVersion }}"
+          image: "{{ include "kube-policies.image" (dict "registry" (.Values.global.imageRegistry | default .Values.dashboard.image.registry) "repository" .Values.dashboard.image.repository "tag" .Values.dashboard.image.tag "defaultTag" .Chart.AppVersion) }}"
           imagePullPolicy: {{ .Values.dashboard.image.pullPolicy | default "IfNotPresent" }}
           ports:
             - name: http

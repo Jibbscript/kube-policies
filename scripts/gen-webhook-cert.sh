@@ -75,11 +75,37 @@ openssl x509 -req -in "$LEAF_CSR" \
   -extfile "$EXT_CONF" >/dev/null 2>&1
 
 # Create or update the Secret idempotently.
+# Two compatibility constraints with the chart's helm-rendered Secret:
+#   1. Helm adoption: stamp app.kubernetes.io/managed-by + meta.helm.sh/*
+#      so `helm upgrade --install $RELEASE_NAME` adopts (rather than refuses
+#      to import) the pre-generated cert material.
+#   2. Type must match: the chart renders type=kubernetes.io/tls; Secret.type
+#      is immutable, so creating as the default Opaque here causes helm to
+#      error with "type: Invalid value: \"kubernetes.io/tls\": field is
+#      immutable". `kubectl create secret tls` covers tls.crt + tls.key but
+#      not ca.crt — assemble the manifest manually to ship all three keys.
 kubectl create namespace "$NAMESPACE" --dry-run=client -o yaml | kubectl apply -f - >/dev/null
-kubectl -n "$NAMESPACE" create secret generic "$SECRET_NAME" \
-  --from-file=tls.crt="$LEAF_CERT" \
-  --from-file=tls.key="$LEAF_KEY" \
-  --from-file=ca.crt="$CA_CERT" \
-  --dry-run=client -o yaml | kubectl apply -f - >/dev/null
+
+TLS_CRT_B64="$(base64 < "$LEAF_CERT" | tr -d '\n')"
+TLS_KEY_B64="$(base64 < "$LEAF_KEY"  | tr -d '\n')"
+CA_CRT_B64="$(base64 < "$CA_CERT"    | tr -d '\n')"
+
+kubectl apply -f - >/dev/null <<EOF
+apiVersion: v1
+kind: Secret
+type: kubernetes.io/tls
+metadata:
+  name: ${SECRET_NAME}
+  namespace: ${NAMESPACE}
+  labels:
+    app.kubernetes.io/managed-by: Helm
+  annotations:
+    meta.helm.sh/release-name: ${RELEASE_NAME}
+    meta.helm.sh/release-namespace: ${NAMESPACE}
+data:
+  tls.crt: ${TLS_CRT_B64}
+  tls.key: ${TLS_KEY_B64}
+  ca.crt: ${CA_CRT_B64}
+EOF
 
 echo "OK: TLS Secret $NAMESPACE/$SECRET_NAME (CN=${SERVICE_NAME}.${NAMESPACE}.svc, ca.crt + tls.crt + tls.key)"

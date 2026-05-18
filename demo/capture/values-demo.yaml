@@ -23,6 +23,14 @@
 
 admissionWebhook:
   replicas: 1
+  # scripts/test/lib.sh writes /tmp/kind-values.yaml with
+  # disableDefaultPolicies: true so the e2e suites' own test policies fire in
+  # isolation (see test/e2e/e2e_test.go's per-rule substring assertions).
+  # The demo capture flow has the opposite need: Scene 3's privileged-pod.yaml
+  # fixture relies on the bundled security-baseline/no-host-path-volumes rule
+  # emitting "hostPath volumes are not allowed". Re-enable bundled defaults
+  # here (values-demo.yaml is overlaid AFTER /tmp/kind-values.yaml).
+  disableDefaultPolicies: false
 
 policies:
   enableDefaults: true

@@ -43,7 +43,7 @@ export const Deny: React.FC = () => {
         </div>
         <div style={{ flex: 1 }}>
           <ScreenshotPanel
-            src={staticFile('screenshots/dashboard-livedecisions-deny.png')}
+            src={staticFile('screenshots/dashboard-livedecisions.png')}
             alt="LiveDecisions deny verdict"
           />
         </div>

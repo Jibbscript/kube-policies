@@ -1,3 +1,4 @@
+{{- include "kube-policies.validateValues" . -}}
 {{- if .Values.admissionWebhook.enabled }}
 apiVersion: apps/v1
 kind: Deployment
@@ -17,6 +18,16 @@ spec:
     metadata:
       annotations:
         checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        # Lookup-based annotation per A-NEW-1 fix. Queries the live API for the cert
+        # Secret bytes; deterministic per render. On first install the Secret doesn't
+        # exist yet, so default to the literal "initial-install". On subsequent
+        # upgrades, the lookup finds the Secret data and the annotation stabilizes
+        # to sha256(data). On out-of-band Secret delete + upgrade, lookup returns
+        # empty → annotation goes back to "initial-install" → differs from previous
+        # stable hash → pod rolling restart picks up the freshly-generated cert.
+        # One-time cost: an extra rolling restart immediately after first install
+        # (lookup empty → stable hash transition). Operationally acceptable.
+        checksum/webhook-certs: {{ (lookup "v1" "Secret" .Release.Namespace (printf "%s-admission-webhook-certs" (include "kube-policies.fullname" .))).data | toYaml | sha256sum | default "initial-install" }}
         {{- with .Values.admissionWebhook.podAnnotations }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
@@ -35,7 +46,7 @@ spec:
         - name: admission-webhook
           securityContext:
             {{- toYaml .Values.admissionWebhook.securityContext | nindent 12 }}
-          image: "{{ .Values.global.imageRegistry | default .Values.admissionWebhook.image.registry }}/{{ .Values.admissionWebhook.image.repository }}:{{ .Values.admissionWebhook.image.tag | default .Chart.AppVersion }}"
+          image: "{{ include "kube-policies.image" (dict "registry" (.Values.global.imageRegistry | default .Values.admissionWebhook.image.registry) "repository" .Values.admissionWebhook.image.repository "tag" .Values.admissionWebhook.image.tag "defaultTag" .Chart.AppVersion) }}"
           imagePullPolicy: {{ .Values.admissionWebhook.image.pullPolicy }}
           # Probes target the metrics server (port 9090) where /healthz and
           # /readyz are mounted. The webhook TLS port (8443) cannot serve a

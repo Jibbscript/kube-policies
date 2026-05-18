@@ -59,7 +59,46 @@ run_tests() {
 
     # Run integration tests
     log "Running integration tests..."
-    go test -v ./test/integration/... -race -coverprofile=coverage-integration.out
+    # envtest needs etcd/kube-apiserver binaries; mirror the test-integration target.
+    # Without KUBEBUILDER_ASSETS, envtest falls back to /usr/local/kubebuilder/bin and
+    # produces a confusing "fork/exec ... no such file or directory" mid-suite failure.
+    local setup_envtest_bin
+    setup_envtest_bin="$(command -v setup-envtest || true)"
+    if [ -z "${setup_envtest_bin}" ] && [ -x "$(go env GOPATH)/bin/setup-envtest" ]; then
+        setup_envtest_bin="$(go env GOPATH)/bin/setup-envtest"
+    fi
+    if [ -z "${setup_envtest_bin}" ]; then
+        error "setup-envtest not found; run 'make setup' first"
+        exit 1
+    fi
+
+    # admission_webhook_test.go probes localhost:8443 (webhookAddr const) and
+    # skips its suite if unreachable. The helm-deployed webhook is a NodePort
+    # inside kind; expose it on the host via kubectl port-forward for the
+    # duration of the integration suite. Without this, the suite is skipped
+    # and admission coverage falls out of test-kind. Mirrors the pattern
+    # already used for policy-manager 8080 below in test_scenarios().
+    log "Setting up port-forward for admission webhook (:8443)..."
+    kubectl port-forward -n kube-policies-system svc/kube-policies-admission-webhook 8443:8443 \
+        > /tmp/webhook-pf.log 2>&1 &
+    local WEBHOOK_PF_PID=$!
+    # Wait until the port-forward is actually answering TLS handshakes, not
+    # just listening — a bare TCP probe succeeds before kubectl is ready to
+    # proxy bytes, which would race the test's probeWebhook() check.
+    local i
+    for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
+        if curl -sk -o /dev/null -m 1 https://localhost:8443/livez 2>/dev/null; then
+            log "Webhook reachable on localhost:8443"
+            break
+        fi
+        sleep 1
+    done
+    # The webhook port-forward must be torn down even when go test fails
+    # under set -e. Append to the existing exit trap from main() rather than
+    # racing it with a RETURN trap.
+    KUBEBUILDER_ASSETS="$("${setup_envtest_bin}" use 1.28.0 --bin-dir /tmp/envtest-bins -p path)" \
+        go test -v ./test/integration/... -race -coverprofile=coverage-integration.out
+    kill ${WEBHOOK_PF_PID} 2>/dev/null || true
 
     # Run E2E tests
     log "Running E2E tests..."
@@ -78,7 +117,43 @@ test_scenarios() {
 
     # Test 1: Basic policy enforcement
     log "Test 1: Basic policy enforcement"
+    # Apply an explicit deny-privileged Policy CRD. The kind helm deploy runs
+    # with admissionWebhook.disableDefaultPolicies=true (see lib.sh) so the
+    # bundled rule set is not loaded; the scenario must supply its own policy
+    # to be meaningful, matching the e2e suite's create-policy-first pattern.
+    # The Policy CRD's strict OpenAPI schema rejects spec.enforcement and
+    # spec.match (the e2e suite's typed client gets warnings; kubectl apply
+    # gets a hard BadRequest). Only spec.description / spec.enabled / spec.rules
+    # are accepted by strict decoding — matching is implicit (all pods).
     kubectl apply -f - <<EOF
+apiVersion: policies.kube-policies.io/v1
+kind: Policy
+metadata:
+  name: scenario-deny-privileged
+  namespace: default
+spec:
+  description: "test-kind scenario: deny privileged containers"
+  enabled: true
+  rules:
+    - name: deny-privileged
+      rego: |
+        package kube_policies
+        import rego.v1
+        default evaluate := {"allowed": true}
+        evaluate := {
+            "allowed": false,
+            "message": "Privileged containers are not allowed",
+            "path": sprintf("spec.containers[%d].securityContext.privileged", [i]),
+        } if {
+            indexes := [j | some j; input.object.spec.containers[j].securityContext.privileged == true]
+            count(indexes) > 0
+            i := indexes[0]
+        }
+EOF
+    # Give the controller a moment to reconcile the policy onto the engine.
+    sleep 3
+
+    kubectl apply -f - <<EOF || true
 apiVersion: v1
 kind: Pod
 metadata:
@@ -95,10 +170,12 @@ EOF
     # This should fail
     if kubectl get pod test-privileged-pod -n default &>/dev/null; then
         error "Privileged pod was allowed - policy enforcement failed"
+        kubectl delete policy scenario-deny-privileged -n default --ignore-not-found=true
         exit 1
     else
         success "Privileged pod was correctly denied"
     fi
+    kubectl delete policy scenario-deny-privileged -n default --ignore-not-found=true
 
     # Test 2: Valid pod creation
     log "Test 2: Valid pod creation"
@@ -188,8 +265,13 @@ collect_diagnostics() {
 main() {
     log "Starting Kube-Policies testing on Kind cluster"
 
-    # Trap cleanup on exit
-    trap cleanup EXIT
+    # Trap cleanup on exit; preserve diagnostics on failure
+    trap 'rc=$?
+          if [ $rc -ne 0 ]; then
+              warn "test-kind failed (rc=$rc); preserving diagnostics before cleanup"
+              CLEANUP=false collect_diagnostics || true
+          fi
+          cleanup' EXIT
 
     check_prerequisites
     create_registry

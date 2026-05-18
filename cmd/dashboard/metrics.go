@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"math"
 	"net/http"
 	"sort"
 	"sync"
@@ -249,18 +250,36 @@ func histogramP95Seconds(mf *dto.MetricFamily) (float64, bool) {
 	for _, ub := range bounds {
 		cum := float64(buckets[ub])
 		if cum >= target {
-			// Linear interpolation between prevBound and ub.
+			// Quantile falls in the `le="+Inf"` overflow bucket: we don't
+			// have a finite upper bound, and linear interpolation would
+			// produce +Inf. json.Marshal cannot serialize +Inf and gin
+			// silently aborts the response — the client sees HTTP 200 with
+			// Content-Length: 0 and no logged panic. Report the highest
+			// finite bound observed (prevBound) instead, matching the
+			// behavior of Prometheus's histogram_quantile().
+			if math.IsInf(ub, 0) || math.IsNaN(ub) {
+				return prevBound, true
+			}
 			if cum == prevCount {
 				return ub, true
 			}
 			frac := (target - prevCount) / (cum - prevCount)
-			return prevBound + frac*(ub-prevBound), true
+			result := prevBound + frac*(ub-prevBound)
+			if math.IsInf(result, 0) || math.IsNaN(result) {
+				return prevBound, true
+			}
+			return result, true
 		}
 		prevBound = ub
 		prevCount = cum
 	}
-	// Above all buckets; return the largest upper bound.
-	return bounds[len(bounds)-1], true
+	// Above all buckets; return the highest finite upper bound to avoid
+	// emitting +Inf when the largest bound itself is the overflow bucket.
+	last := bounds[len(bounds)-1]
+	if math.IsInf(last, 0) || math.IsNaN(last) {
+		return prevBound, true
+	}
+	return last, true
 }
 
 // topViolatingRules returns the top-N rule_ids by summed counter value where

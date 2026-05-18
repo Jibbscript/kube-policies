@@ -77,3 +77,18 @@ correctness is W4's job (`demo/verify/`).
 * Do **not** modify `demo/capture/` (W3 owns).
 
 Cited parent: `../AGENTS.md`.
+
+5. **Render-time synthesized content must carry `data-synthetic="true"` and
+   the synthesizing component must export a `SYNTHETIC_ROWS` (or analogous
+   `SYNTHETIC_*`) const enumerating every fabricated row's `id`, `intent`,
+   and provenance basis. A Vitest invariant must assert that
+   `SYNTHETIC_ROWS.length === document.querySelectorAll('[data-synthetic="true"]').length`
+   for every component that renders synthetic content. Synthetic content
+   without this triad MUST NOT ship.**
+
+   Rationale: the capture pipeline already enforces a parallel contract for
+   capture-time DOM masks (`demo/AGENTS.md:43–58`); render-time synthesis needs
+   the symmetric guardrail or it becomes an untracked source of visual lies.
+   See `src/components/LiveDecisionsPane.tsx` (SYNTHETIC_ROWS export) and
+   `src/scenes/__tests__/DashboardGlimpse.test.tsx` (AC-DG-7 invariant) for
+   the reference implementation.
