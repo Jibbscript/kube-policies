@@ -518,6 +518,41 @@ demo-down: ## Tear down demo kind cluster + stop port-forward
 	fi
 	@kind delete cluster --name $(DEMO_CLUSTER) || true
 
+# === Demo video pipeline (60s Remotion render — plan §5.1) ===
+# Six targets, ordered alphabetically in `make help` so they cluster together.
+# Pipeline contract: capture writes assets into demo/remotion/public/ only;
+# render reads from public/ only. See demo/AGENTS.md.
+
+.PHONY: demo
+demo: ## Full demo pipeline: scaffold → capture → render → verify
+	$(MAKE) demo-scaffold
+	$(MAKE) demo-capture
+	$(MAKE) demo-render
+	$(MAKE) demo-verify
+
+.PHONY: demo-capture
+demo-capture: ## Capture cluster assets (kind + Playwright) into demo/remotion/public/
+	bash demo/capture/capture.sh
+
+.PHONY: demo-promote-golden
+demo-promote-golden: ## Promote current capture bundle to demo/capture/golden/ (pixel-diff baseline)
+	mkdir -p demo/capture/golden/screenshots demo/capture/golden/terminals demo/capture/golden/audit
+	cp -R demo/remotion/public/screenshots/. demo/capture/golden/screenshots/
+	cp -R demo/remotion/public/terminals/. demo/capture/golden/terminals/
+	cp -R demo/remotion/public/audit/. demo/capture/golden/audit/
+
+.PHONY: demo-render
+demo-render: ## Render demo/dist/kube-policies-demo.mp4 from captured assets (hermetic)
+	cd demo/remotion && LANG=C npx remotion render KubePoliciesDemo ../../demo/dist/kube-policies-demo.mp4 --codec=h264 --crf=20
+
+.PHONY: demo-scaffold
+demo-scaffold: ## Install Remotion deps in demo/remotion/ (idempotent)
+	cd demo/remotion && if [ -f package-lock.json ]; then npm ci --no-audit --no-fund; else npm install --no-audit --no-fund; fi
+
+.PHONY: demo-verify
+demo-verify: ## Run AC-1..AC-17 verification suite against the rendered demo
+	bash demo/verify/verify.sh
+
 # Default target
 .DEFAULT_GOAL := help
 

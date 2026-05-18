@@ -1,0 +1,81 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/Jibbscript/kube-policies/demo/remotion/manifest.schema.json",
+  "title": "KubePoliciesDemoCaptureManifest",
+  "description": "Capture-pipeline manifest contract. Every asset the Remotion composition references must appear here with provenance (sha256, anchor_commit) so verify.sh can prove the composition is rendering the asset it was authored against.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "anchor_commit",
+    "captured_at",
+    "screenshots",
+    "terminals",
+    "audit",
+    "masks_applied"
+  ],
+  "properties": {
+    "$schema": { "type": "string" },
+    "anchor_commit": {
+      "type": "string",
+      "description": "Short git SHA the capture was run against.",
+      "pattern": "^[0-9a-f]{7,40}$"
+    },
+    "captured_at": {
+      "type": ["string", "null"],
+      "description": "RFC3339 UTC timestamp the capture pipeline finished, or null for the unfilled stub.",
+      "format": "date-time"
+    },
+    "screenshots": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["path", "expected_width", "sha256"],
+        "properties": {
+          "path": { "type": "string" },
+          "expected_width": { "type": "integer", "minimum": 1 },
+          "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+        }
+      }
+    },
+    "terminals": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["path", "sha256"],
+        "properties": {
+          "path": { "type": "string" },
+          "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+        }
+      }
+    },
+    "audit": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["path", "sha256"],
+        "properties": {
+          "path": { "type": "string" },
+          "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+        }
+      }
+    },
+    "masks_applied": {
+      "type": "array",
+      "description": "Audit trail of capture-time DOM masks (Principle 4).",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["mask_name", "css_selector", "fixed_value", "applied_at_url"],
+        "properties": {
+          "mask_name": { "type": "string" },
+          "css_selector": { "type": "string" },
+          "fixed_value": { "type": "string" },
+          "applied_at_url": { "type": "string", "format": "uri" }
+        }
+      }
+    }
+  }
+}
