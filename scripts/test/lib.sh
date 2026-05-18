@@ -114,10 +114,12 @@ EOF
     # Create the cluster
     kind create cluster --name "${KIND_CLUSTER_NAME}" --config /tmp/kind-config.yaml
 
-    # Connect registry to cluster network
-    if ! docker network ls | grep -q "kind"; then
-        docker network create kind
-    fi
+    # Connect registry to cluster network.
+    # `kind create cluster` already creates the `kind` network; the create-if-missing
+    # block below is idempotent for the case where kind didn't auto-create it (e.g.
+    # single-node clusters on some kind versions). Suppress the "already exists"
+    # error to avoid aborting under `set -e`.
+    docker network create kind 2>/dev/null || true
     docker network connect "kind" "${REGISTRY_NAME}" 2>/dev/null || true
 
     # Configure per-node certs.d/hosts.toml for the modern containerd registry mirror
