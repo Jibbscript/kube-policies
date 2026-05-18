@@ -100,7 +100,7 @@ type ControllerOptions struct {
 // StartControllers builds and starts a controller-runtime Manager that
 // watches Policy CRDs (always) and PolicyException CRDs (when opts.ExceptionSink
 // is non-nil), pushing reconciled state into the supplied sinks. The function
-// blocks until ctx is cancelled or the controller manager exits with an error.
+// blocks until ctx is canceled or the controller manager exits with an error.
 //
 // cfg should normally be obtained via ctrl.GetConfigOrDie() so the calling
 // binary uses the in-cluster service-account credentials in production and

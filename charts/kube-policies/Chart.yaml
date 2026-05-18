@@ -4,9 +4,9 @@ description: Enterprise-grade Kubernetes policy enforcement system providing com
 type: application
 version: 1.0.0
 appVersion: "1.0.0"
-home: https://github.com/kube-policies/kube-policies
+home: https://github.com/Jibbscript/kube-policies
 sources:
-  - https://github.com/kube-policies/kube-policies
+  - https://github.com/Jibbscript/kube-policies
 maintainers:
   - name: Kube-Policies Team
     email: maintainers@kube-policies.io
@@ -31,4 +31,3 @@ dependencies:
     version: "6.44.0"
     repository: "https://grafana.github.io/helm-charts"
     condition: grafana.enabled
-

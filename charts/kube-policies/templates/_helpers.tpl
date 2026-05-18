@@ -104,27 +104,6 @@ Create the config map name
 {{- end }}
 
 {{/*
-Create the prometheus service monitor name
-*/}}
-{{- define "kube-policies.serviceMonitorName" -}}
-{{- printf "%s-service-monitor" (include "kube-policies.fullname" .) }}
-{{- end }}
-
-{{/*
-Create the prometheus rules name
-*/}}
-{{- define "kube-policies.prometheusRulesName" -}}
-{{- printf "%s-prometheus-rules" (include "kube-policies.fullname" .) }}
-{{- end }}
-
-{{/*
-Create the namespace for monitoring resources
-*/}}
-{{- define "kube-policies.monitoringNamespace" -}}
-{{- .Values.monitoring.serviceMonitor.namespace | default .Release.Namespace }}
-{{- end }}
-
-{{/*
 Return the appropriate apiVersion for RBAC resources
 */}}
 {{- define "kube-policies.rbac.apiVersion" -}}
@@ -232,4 +211,3 @@ Validate required values
   {{- /* The render-time fail in admission-webhook-tls.yaml is the actual guard. This is a friendlier pre-render check. */ -}}
 {{- end -}}
 {{- end -}}
-

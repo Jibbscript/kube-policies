@@ -89,8 +89,8 @@ rules:
 # Admission registration
 - apiGroups: ["admissionregistration.k8s.io"]
   resources:
-  - validatingadmissionwebhooks
-  - mutatingadmissionwebhooks
+  - validatingwebhookconfigurations
+  - mutatingwebhookconfigurations
   verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
 
 # Events
@@ -166,4 +166,3 @@ subjects:
   namespace: {{ .Release.Namespace }}
 {{- end }}
 {{- end }}
-

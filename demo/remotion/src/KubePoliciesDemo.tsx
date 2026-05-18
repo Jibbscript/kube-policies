@@ -23,7 +23,7 @@ import { theme } from './theme';
 export const KubePoliciesDemo: React.FC = () => {
   return (
     <AbsoluteFill style={{ backgroundColor: theme.bg }}>
-      <Sequence from={0} durationInFrames={120} name="Title">
+      <Sequence durationInFrames={120} name="Title">
         <Title />
       </Sequence>
       <Sequence from={120} durationInFrames={180} name="Pitch">

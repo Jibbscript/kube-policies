@@ -254,15 +254,15 @@
       },
       "targets": [
         {
-          "expr": "sum(rate(kube_policies_admission_webhook_requests_total[5m]))",
+          "expr": "sum(rate(kube_policies_admission_requests_total[5m]))",
           "interval": "",
           "legendFormat": "Total Requests",
           "refId": "A"
         },
         {
-          "expr": "sum(rate(kube_policies_admission_webhook_requests_total{status=\"success\"}[5m]))",
+          "expr": "sum(rate(kube_policies_admission_requests_total{status=\"allowed\"}[5m]))",
           "interval": "",
-          "legendFormat": "Successful Requests",
+          "legendFormat": "Allowed Requests",
           "refId": "B"
         }
       ],
@@ -341,19 +341,19 @@
       },
       "targets": [
         {
-          "expr": "histogram_quantile(0.99, sum(rate(kube_policies_admission_webhook_duration_seconds_bucket[5m])) by (le)) * 1000",
+          "expr": "histogram_quantile(0.99, sum(rate(kube_policies_admission_evaluation_duration_seconds_bucket[5m])) by (le)) * 1000",
           "interval": "",
           "legendFormat": "99th percentile",
           "refId": "A"
         },
         {
-          "expr": "histogram_quantile(0.95, sum(rate(kube_policies_admission_webhook_duration_seconds_bucket[5m])) by (le)) * 1000",
+          "expr": "histogram_quantile(0.95, sum(rate(kube_policies_admission_evaluation_duration_seconds_bucket[5m])) by (le)) * 1000",
           "interval": "",
           "legendFormat": "95th percentile",
           "refId": "B"
         },
         {
-          "expr": "histogram_quantile(0.50, sum(rate(kube_policies_admission_webhook_duration_seconds_bucket[5m])) by (le)) * 1000",
+          "expr": "histogram_quantile(0.50, sum(rate(kube_policies_admission_evaluation_duration_seconds_bucket[5m])) by (le)) * 1000",
           "interval": "",
           "legendFormat": "50th percentile",
           "refId": "C"
@@ -434,13 +434,13 @@
       },
       "targets": [
         {
-          "expr": "sum(rate(kube_policies_policy_cache_hits_total[5m]))",
+          "expr": "sum(rate(kube_policies_cache_hits_total{cache_type=\"policy\",result=\"hit\"}[5m]))",
           "interval": "",
           "legendFormat": "Cache Hits",
           "refId": "A"
         },
         {
-          "expr": "sum(rate(kube_policies_policy_cache_misses_total[5m]))",
+          "expr": "sum(rate(kube_policies_cache_hits_total{cache_type=\"policy\",result=\"miss\"}[5m]))",
           "interval": "",
           "legendFormat": "Cache Misses",
           "refId": "B"
@@ -502,7 +502,7 @@
       "pluginVersion": "8.0.0",
       "targets": [
         {
-          "expr": "100 * (sum(rate(kube_policies_policy_cache_hits_total[5m])) / (sum(rate(kube_policies_policy_cache_hits_total[5m])) + sum(rate(kube_policies_policy_cache_misses_total[5m]))))",
+          "expr": "100 * (sum(rate(kube_policies_cache_hits_total{cache_type=\"policy\",result=\"hit\"}[5m])) / (sum(rate(kube_policies_cache_hits_total{cache_type=\"policy\",result=\"hit\"}[5m])) + sum(rate(kube_policies_cache_hits_total{cache_type=\"policy\",result=\"miss\"}[5m]))))",
           "interval": "",
           "legendFormat": "Cache Hit Rate",
           "refId": "A"
@@ -555,4 +555,3 @@
   "uid": "kube-policies-performance",
   "version": 1
 }
-

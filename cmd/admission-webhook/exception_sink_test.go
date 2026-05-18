@@ -187,9 +187,9 @@ func TestExceptionSink_GroupMatch_Intersection(t *testing.T) {
 		groups []string
 		want   bool
 	}{
-		{[]string{"g3", "g2"}, true},  // intersection non-empty
-		{[]string{"g3"}, false},       // disjoint
-		{[]string{"g2"}, true},        // single-element exact match (closes CRITICAL-N2)
+		{[]string{"g3", "g2"}, true}, // intersection non-empty
+		{[]string{"g3"}, false},      // disjoint
+		{[]string{"g2"}, true},       // single-element exact match (closes CRITICAL-N2)
 	}
 	for _, c := range cases {
 		got, _, _ := s.Suppresses(context.Background(), policy.MatchKey{

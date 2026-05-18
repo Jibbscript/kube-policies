@@ -1,3 +1,7 @@
+{{- $auditBackendType := .Values.audit.backend.type | default "stdout" -}}
+{{- if not (or (eq $auditBackendType "file") (eq $auditBackendType "stdout")) -}}
+{{- fail (printf "audit.backend.type=%q is not supported by the runtime; use file or stdout" $auditBackendType) -}}
+{{- end -}}
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -7,24 +11,19 @@ metadata:
     {{- include "kube-policies.labels" . | nindent 4 }}
 data:
   config.yaml: |
-    policies:
-      enableDefaults: {{ .Values.policies.enableDefaults }}
+    policy:
+      failure_mode: "fail-closed"
+      disable_defaults: {{ not .Values.policies.enableDefaults }}
     audit:
       enabled: {{ .Values.audit.enabled }}
-      # AuditConfig.Backend is a plain string in internal/config. values.yaml
-      # uses a structured `backend:` block ({type, file, elasticsearch,
-      # webhook}); we project just the `.type` here so the loaded config
-      # matches Go's mapstructure expectations.
-      backend: {{ (.Values.audit.backend.type | default "stdout") | quote }}
+      backend: {{ $auditBackendType | quote }}
       buffer_size: {{ .Values.audit.bufferSize | default 1024 }}
       flush_interval: {{ .Values.audit.flushInterval | default "10s" | quote }}
-      {{- $backendType := .Values.audit.backend.type | default "stdout" -}}
-      {{- if eq $backendType "file" }}
+      retention: {{ .Values.audit.retention | default "90d" | quote }}
+      {{- if eq $auditBackendType "file" }}
       # Map the YAML directory `audit.backend.file.path` to a concrete
       # filename. The audit logger's createBackend reads
       # `config.filename` for the file backend.
       config:
         filename: {{ printf "%s/audit.log" (.Values.audit.backend.file.path | default "/var/log/kube-policies") | quote }}
       {{- end }}
-    exceptions:
-      enabled: {{ .Values.exceptions.enabled }}

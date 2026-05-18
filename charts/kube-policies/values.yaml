@@ -150,33 +150,6 @@ policyManager:
 policies:
   # Enable default security policies
   enableDefaults: true
-  
-  # Default policies to install
-  defaults:
-    - name: security-baseline
-      enabled: true
-    - name: resource-limits
-      enabled: true
-    - name: network-policies
-      enabled: false
-    - name: pod-security-standards
-      enabled: true
-  
-  # Custom policies
-  custom: []
-  # Example:
-  # - name: custom-policy
-  #   enabled: true
-  #   spec:
-  #     description: "Custom security policy"
-  #     rules:
-  #       - name: no-privileged-containers
-  #         severity: HIGH
-  #         rego: |
-  #           deny[msg] {
-  #             input.spec.securityContext.privileged
-  #             msg := "Privileged containers are not allowed"
-  #           }
 
 # RBAC Configuration
 rbac:
@@ -196,78 +169,17 @@ rbac:
 monitoring:
   # Enable monitoring stack
   enabled: true
-  
-  # Prometheus configuration
-  prometheus:
-    enabled: true
-    # Use external Prometheus (if false, deploys Prometheus)
-    external: false
-    # External Prometheus URL (if external is true)
-    url: ""
-    
-  # Grafana configuration
-  grafana:
-    enabled: true
-    # Use external Grafana (if false, deploys Grafana)
-    external: false
-    # External Grafana URL (if external is true)
-    url: ""
-    # Admin credentials
-    adminUser: admin
-    adminPassword: admin
-    
-  # ServiceMonitor for Prometheus Operator
-  serviceMonitor:
-    enabled: false
-    namespace: ""
-    labels: {}
-    interval: 30s
-    scrapeTimeout: 10s
-
-# Alerting Configuration
-alerting:
-  enabled: true
-  
-  # Alertmanager configuration
-  alertmanager:
-    enabled: true
-    # Use external Alertmanager
-    external: false
-    # External Alertmanager URL
-    url: ""
-  
-  # Alert rules
-  rules:
-    # High latency alert
-    highLatency:
-      enabled: true
-      threshold: "0.1"
-      duration: "2m"
-    
-    # High error rate alert
-    highErrorRate:
-      enabled: true
-      threshold: "0.05"
-      duration: "2m"
-    
-    # Service down alert
-    serviceDown:
-      enabled: true
-      duration: "1m"
-    
-    # High violation rate alert
-    highViolationRate:
-      enabled: true
-      threshold: "10"
-      duration: "5m"
 
 # Audit Configuration
 audit:
   enabled: true
+  bufferSize: 1000
+  flushInterval: "10s"
+  retention: "90d"
   
   # Audit backend configuration
   backend:
-    # Backend type: file, elasticsearch, webhook
+    # Backend type: file or stdout. The runtime rejects unsupported backends.
     type: file
     
     # File backend configuration.
@@ -276,92 +188,7 @@ audit:
     # /var/log/kube-policies). The audit logger appends `/audit.log`.
     file:
       path: "/var/log/kube-policies"
-      maxSize: "100Mi"
-      maxFiles: 10
     
-    # Elasticsearch backend configuration
-    elasticsearch:
-      url: ""
-      index: "kube-policies-audit"
-      username: ""
-      password: ""
-    
-    # Webhook backend configuration
-    webhook:
-      url: ""
-      headers: {}
-
-# Compliance Configuration
-compliance:
-  enabled: true
-  
-  # Compliance frameworks
-  frameworks:
-    cis:
-      enabled: true
-      version: "1.8.0"
-    nist:
-      enabled: false
-      version: "2.0"
-    pci:
-      enabled: false
-      version: "3.2"
-  
-  # Compliance reporting
-  reporting:
-    enabled: true
-    schedule: "0 2 * * *"  # Daily at 2 AM
-    retention: "90d"
-
-# Exception Management
-exceptions:
-  enabled: true
-  
-  # Exception approval workflow
-  approval:
-    enabled: true
-    # Approval timeout
-    timeout: "24h"
-    # Required approvers
-    approvers: []
-  
-  # Exception monitoring
-  monitoring:
-    enabled: true
-    # Alert on exception usage
-    alertOnUsage: true
-
-# Network Policies
-networkPolicies:
-  enabled: false
-  
-  # Ingress rules
-  ingress: []
-  
-  # Egress rules
-  egress: []
-
-# Pod Disruption Budget
-podDisruptionBudget:
-  enabled: true
-  minAvailable: 1
-
-# Horizontal Pod Autoscaler
-autoscaling:
-  enabled: false
-  minReplicas: 2
-  maxReplicas: 10
-  targetCPUUtilizationPercentage: 80
-  targetMemoryUtilizationPercentage: 80
-
-# Ingress Configuration
-ingress:
-  enabled: false
-  className: ""
-  annotations: {}
-  hosts: []
-  tls: []
-
 # Persistence Configuration
 persistence:
   enabled: true
@@ -476,4 +303,3 @@ dashboard:
 # If empty (default), the chart auto-generates a 48-char random token
 # at first install and preserves it across helm upgrades via lookup.
 internalToken: ""
-

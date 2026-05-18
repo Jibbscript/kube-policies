@@ -2,6 +2,7 @@
 // See that file's header for rationale.
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { render, cleanup } from '@testing-library/react';
+import { createElement, type ImgHTMLAttributes } from 'react';
 
 const { frameRef } = vi.hoisted(() => ({ frameRef: { value: 0 } }));
 vi.mock('remotion', async () => {
@@ -26,7 +27,7 @@ vi.mock('remotion', async () => {
       if (frame < from || frame >= end) return null;
       return <>{children}</>;
     },
-    Img: (props: React.ImgHTMLAttributes<HTMLImageElement>) => <img {...props} />,
+    Img: (props: ImgHTMLAttributes<HTMLImageElement>) => createElement('img', props),
   };
 });
 

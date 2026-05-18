@@ -84,3 +84,39 @@ func TestLogDecision_StdoutFlush(t *testing.T) {
 	assert.Equal(t, "PolicyDecision", event["event_type"])
 	assert.Equal(t, "ALLOW", event["decision"])
 }
+
+func TestCloseFlushesQueuedDecision(t *testing.T) {
+	cfg := &config.AuditConfig{
+		Enabled:       true,
+		Backend:       "stdout",
+		BufferSize:    10,
+		FlushInterval: "1h",
+	}
+
+	out := captureStdout(t, func() {
+		logger, err := NewLogger(cfg)
+		require.NoError(t, err)
+
+		logger.LogDecision(&Context{
+			RequestID: "req-close-flush-1",
+			UserInfo:  authenticationv1.UserInfo{Username: "alice"},
+			Namespace: "default",
+			Kind:      metav1.GroupVersionKind{Group: "", Version: "v1", Kind: "Pod"},
+			Name:      "p",
+			Operation: "CREATE",
+			Decision:  "DENY",
+			Reason:    "PolicyViolation",
+			Timestamp: time.Now(),
+		})
+
+		require.NoError(t, logger.Close())
+	})
+
+	line := strings.TrimSpace(strings.Split(out, "\n")[0])
+	require.NotEmpty(t, line, "Close must flush queued audit event without waiting for the ticker")
+
+	var event map[string]any
+	require.NoError(t, json.Unmarshal([]byte(line), &event))
+	assert.Equal(t, "req-close-flush-1", event["request_id"])
+	assert.Equal(t, "DENY", event["decision"])
+}

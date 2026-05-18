@@ -58,7 +58,7 @@ spec:
             - --cert-path=/etc/certs/tls.crt
             - --key-path=/etc/certs/tls.key
             - --config=/etc/config/config.yaml
-            - --disable-default-policies={{ .Values.admissionWebhook.disableDefaultPolicies }}
+            - --disable-default-policies={{ or .Values.admissionWebhook.disableDefaultPolicies (not .Values.policies.enableDefaults) }}
           ports:
             - name: webhook
               containerPort: 8443
@@ -148,4 +148,3 @@ spec:
         {{- toYaml . | nindent 8 }}
       {{- end }}
 {{- end }}
-

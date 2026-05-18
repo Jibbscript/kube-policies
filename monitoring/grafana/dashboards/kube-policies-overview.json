@@ -92,13 +92,13 @@
       },
       "targets": [
         {
-          "expr": "histogram_quantile(0.95, sum(rate(kube_policies_admission_webhook_duration_seconds_bucket[5m])) by (le))",
+          "expr": "histogram_quantile(0.95, sum(rate(kube_policies_admission_evaluation_duration_seconds_bucket[5m])) by (le))",
           "interval": "",
           "legendFormat": "95th percentile",
           "refId": "A"
         },
         {
-          "expr": "histogram_quantile(0.50, sum(rate(kube_policies_admission_webhook_duration_seconds_bucket[5m])) by (le))",
+          "expr": "histogram_quantile(0.50, sum(rate(kube_policies_admission_evaluation_duration_seconds_bucket[5m])) by (le))",
           "interval": "",
           "legendFormat": "50th percentile",
           "refId": "B"
@@ -160,7 +160,7 @@
       "pluginVersion": "8.0.0",
       "targets": [
         {
-          "expr": "sum(rate(kube_policies_admission_webhook_denied_total[5m]))",
+          "expr": "sum(rate(kube_policies_admission_requests_total{status=\"denied\"}[5m]))",
           "interval": "",
           "legendFormat": "Denied Requests/sec",
           "refId": "A"
@@ -213,9 +213,9 @@
       },
       "targets": [
         {
-          "expr": "sum by (policy_name) (rate(kube_policies_policy_evaluations_total[5m]))",
+          "expr": "sum by (policy_id) (rate(kube_policies_policy_evaluations_total[5m]))",
           "interval": "",
-          "legendFormat": "{{policy_name}}",
+          "legendFormat": "{{policy_id}}",
           "refId": "A"
         }
       ],
@@ -275,7 +275,7 @@
       "pluginVersion": "8.0.0",
       "targets": [
         {
-          "expr": "100 * (1 - (sum(rate(kube_policies_admission_webhook_errors_total[5m])) / sum(rate(kube_policies_admission_webhook_requests_total[5m]))))",
+          "expr": "100 * (1 - (sum(rate(kube_policies_admission_requests_total{status=\"error\"}[5m])) / sum(rate(kube_policies_admission_requests_total[5m]))))",
           "interval": "",
           "legendFormat": "Success Rate",
           "refId": "A"
@@ -375,29 +375,7 @@
     "kubernetes"
   ],
   "templating": {
-    "list": [
-      {
-        "current": {
-          "selected": false,
-          "text": "default",
-          "value": "default"
-        },
-        "description": null,
-        "error": null,
-        "hide": 0,
-        "includeAll": false,
-        "label": "Namespace",
-        "multi": false,
-        "name": "namespace",
-        "options": [],
-        "query": "label_values(kube_policies_admission_webhook_requests_total, namespace)",
-        "refresh": 1,
-        "regex": "",
-        "skipUrlSync": false,
-        "sort": 0,
-        "type": "query"
-      }
-    ]
+    "list": []
   },
   "time": {
     "from": "now-1h",
@@ -409,4 +387,3 @@
   "uid": "kube-policies-overview",
   "version": 1
 }
-

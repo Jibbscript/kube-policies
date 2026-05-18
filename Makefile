@@ -152,7 +152,7 @@ test: test-unit test-integration ## Run unit and integration tests
 .PHONY: test-unit
 test-unit: ## Run unit tests
 	@echo "$(BLUE)Running unit tests...$(NC)"
-	go test -v -race -coverprofile=coverage-unit.out -covermode=atomic ./internal/... ./pkg/...
+	go test -v -race -coverprofile=coverage-unit.out -covermode=atomic ./cmd/... ./internal/... ./pkg/...
 	@if [ "$(TEST_COVERAGE)" = "true" ]; then \
 		go tool cover -html=coverage-unit.out -o coverage-unit.html; \
 		echo "$(GREEN)Unit test coverage report: coverage-unit.html$(NC)"; \
@@ -212,7 +212,7 @@ test-all: ## Run comprehensive test suite
 .PHONY: test-performance
 test-performance: ## Run performance tests
 	@echo "$(BLUE)Running performance tests...$(NC)"
-	go test -bench=. -benchmem ./internal/... ./pkg/... > benchmark-results.txt
+	go test -bench=. -benchmem ./cmd/... ./internal/... ./pkg/... > benchmark-results.txt
 	@echo "$(GREEN)Performance test results: benchmark-results.txt$(NC)"
 
 # Quality targets
@@ -226,7 +226,7 @@ lint: ## Run linters
 fmt: ## Format code
 	@echo "$(BLUE)Formatting code...$(NC)"
 	go fmt ./...
-	goimports -w -local github.com/kube-policies .
+	goimports -w -local github.com/Jibbscript/kube-policies .
 	@echo "$(GREEN)Code formatted$(NC)"
 
 .PHONY: vet
@@ -555,4 +555,3 @@ demo-verify: ## Run AC-1..AC-17 verification suite against the rendered demo
 
 # Default target
 .DEFAULT_GOAL := help
-

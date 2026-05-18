@@ -18,10 +18,7 @@ scrape_configs:
   # Kube-Policies Admission Webhook
   - job_name: 'kube-policies-admission-webhook'
     static_configs:
-      - targets: ['kube-policies-admission-webhook:8443']
-    scheme: https
-    tls_config:
-      insecure_skip_verify: true
+      - targets: ['kube-policies-admission-webhook:9090']
     metrics_path: /metrics
     scrape_interval: 10s
     scrape_timeout: 5s
@@ -29,7 +26,7 @@ scrape_configs:
   # Kube-Policies Policy Manager
   - job_name: 'kube-policies-policy-manager'
     static_configs:
-      - targets: ['kube-policies-policy-manager:8080']
+      - targets: ['kube-policies-policy-manager:9091']
     metrics_path: /metrics
     scrape_interval: 15s
     scrape_timeout: 10s
@@ -161,4 +158,3 @@ scrape_configs:
     honor_labels: true
     scrape_interval: 30s
     scrape_timeout: 10s
-

@@ -58,6 +58,39 @@ func isReadOnlyRPC(method, proxyPath string) bool {
 	return false
 }
 
+type unwrapResponseWriter interface {
+	Unwrap() http.ResponseWriter
+}
+
+type proxyResponseWriter struct {
+	gin.ResponseWriter
+	closeNotifySource http.ResponseWriter
+}
+
+type closeNotifier interface {
+	CloseNotify() <-chan bool
+}
+
+var neverCloseNotify = make(chan bool)
+
+func (w proxyResponseWriter) CloseNotify() <-chan bool {
+	if notifier, ok := w.closeNotifySource.(closeNotifier); ok {
+		return notifier.CloseNotify()
+	}
+	return neverCloseNotify
+}
+
+func newProxyResponseWriter(w gin.ResponseWriter) http.ResponseWriter {
+	source := http.ResponseWriter(w)
+	if unwrapper, ok := w.(unwrapResponseWriter); ok {
+		source = unwrapper.Unwrap()
+	}
+	return proxyResponseWriter{
+		ResponseWriter:    w,
+		closeNotifySource: source,
+	}
+}
+
 // NewProxyHandler returns a Gin handler that reverse-proxies /api/v1/* to
 // cfg.PolicyManagerURL. When cfg.AllowWrites is false, write verbs are
 // rejected with 403 BEFORE the proxy runs — there is no upstream contact for
@@ -109,6 +142,6 @@ func NewProxyHandler(cfg *Config, log *zap.Logger) (gin.HandlerFunc, error) {
 		// Clear RawPath so Go re-encodes from Path; keep RawQuery as-is.
 		c.Request.URL.RawPath = ""
 
-		proxy.ServeHTTP(c.Writer, c.Request)
+		proxy.ServeHTTP(newProxyResponseWriter(c.Writer), c.Request)
 	}, nil
 }

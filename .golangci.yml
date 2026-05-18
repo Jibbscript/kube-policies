@@ -84,6 +84,7 @@ linters:
           - staticcheck
         text: 'SA1019: wait.PollImmediate'
     paths:
+      - demo/remotion/node_modules
       - third_party$
       - builtin$
       - examples$
@@ -105,6 +106,7 @@ formatters:
   exclusions:
     generated: lax
     paths:
+      - demo/remotion/node_modules
       - third_party$
       - builtin$
       - examples$

@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/spf13/viper"
 )
@@ -28,14 +29,14 @@ type ServerConfig struct {
 
 // PolicyConfig represents policy engine configuration
 type PolicyConfig struct {
-	FailureMode     string `mapstructure:"failure_mode"`    // "fail-open" or "fail-closed"
+	FailureMode     string `mapstructure:"failure_mode"`     // "fail-open" or "fail-closed"
 	DisableDefaults bool   `mapstructure:"disable_defaults"` // skip loading bundled default policies
 }
 
 // AuditConfig represents audit logging configuration
 type AuditConfig struct {
 	Enabled       bool              `mapstructure:"enabled"`
-	Backend       string            `mapstructure:"backend"` // "file", "elasticsearch", "webhook"
+	Backend       string            `mapstructure:"backend"` // "file" or "stdout"
 	Config        map[string]string `mapstructure:"config"`
 	BufferSize    int               `mapstructure:"buffer_size"`
 	FlushInterval string            `mapstructure:"flush_interval"`
@@ -111,15 +112,16 @@ type StorageConfig struct {
 
 // LoadConfig loads configuration from file and environment variables
 func LoadConfig(configPath string) (*Config, error) {
-	viper.SetConfigType("yaml")
+	v := viper.New()
+	v.SetConfigType("yaml")
 
 	// Set default values
-	setDefaults()
+	setDefaults(v)
 
 	// Load from file if provided
 	if configPath != "" {
-		viper.SetConfigFile(configPath)
-		if err := viper.ReadInConfig(); err != nil {
+		v.SetConfigFile(configPath)
+		if err := v.ReadInConfig(); err != nil {
 			if !os.IsNotExist(err) {
 				return nil, fmt.Errorf("failed to read config file: %w", err)
 			}
@@ -127,11 +129,12 @@ func LoadConfig(configPath string) (*Config, error) {
 	}
 
 	// Override with environment variables
-	viper.AutomaticEnv()
-	viper.SetEnvPrefix("KUBE_POLICIES")
+	v.SetEnvPrefix("KUBE_POLICIES")
+	v.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
+	v.AutomaticEnv()
 
 	var config Config
-	if err := viper.Unmarshal(&config); err != nil {
+	if err := v.Unmarshal(&config); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal config: %w", err)
 	}
 
@@ -144,40 +147,41 @@ func LoadConfig(configPath string) (*Config, error) {
 }
 
 // setDefaults sets default configuration values
-func setDefaults() {
+func setDefaults(v *viper.Viper) {
 	// Server defaults
-	viper.SetDefault("server.port", 8443)
-	viper.SetDefault("server.metrics_port", 9090)
-	viper.SetDefault("server.log_level", "info")
-	viper.SetDefault("server.tls_cert_path", "/etc/certs/tls.crt")
-	viper.SetDefault("server.tls_key_path", "/etc/certs/tls.key")
+	v.SetDefault("server.port", 8443)
+	v.SetDefault("server.metrics_port", 9090)
+	v.SetDefault("server.log_level", "info")
+	v.SetDefault("server.tls_cert_path", "/etc/certs/tls.crt")
+	v.SetDefault("server.tls_key_path", "/etc/certs/tls.key")
 
 	// Policy defaults
-	viper.SetDefault("policy.failure_mode", "fail-closed")
+	v.SetDefault("policy.failure_mode", "fail-closed")
+	v.SetDefault("policy.disable_defaults", false)
 
 	// Audit defaults
-	viper.SetDefault("audit.enabled", true)
-	viper.SetDefault("audit.backend", "file")
-	viper.SetDefault("audit.buffer_size", 1000)
-	viper.SetDefault("audit.flush_interval", "10s")
-	viper.SetDefault("audit.retention", "90d")
+	v.SetDefault("audit.enabled", true)
+	v.SetDefault("audit.backend", "file")
+	v.SetDefault("audit.buffer_size", 1000)
+	v.SetDefault("audit.flush_interval", "10s")
+	v.SetDefault("audit.retention", "90d")
 
 	// Metrics defaults
-	viper.SetDefault("metrics.enabled", true)
-	viper.SetDefault("metrics.namespace", "kube_policies")
-	viper.SetDefault("metrics.subsystem", "admission")
+	v.SetDefault("metrics.enabled", true)
+	v.SetDefault("metrics.namespace", "kube_policies")
+	v.SetDefault("metrics.subsystem", "admission")
 
 	// Security defaults
-	viper.SetDefault("security.tls.min_version", "1.3")
-	viper.SetDefault("security.tls.client_auth", "require")
-	viper.SetDefault("security.rbac.enabled", true)
-	viper.SetDefault("security.encryption.at_rest.enabled", true)
-	viper.SetDefault("security.encryption.at_rest.algorithm", "AES-256-GCM")
-	viper.SetDefault("security.encryption.in_transit.enabled", true)
-	viper.SetDefault("security.encryption.in_transit.mode", "strict")
+	v.SetDefault("security.tls.min_version", "1.3")
+	v.SetDefault("security.tls.client_auth", "require")
+	v.SetDefault("security.rbac.enabled", true)
+	v.SetDefault("security.encryption.at_rest.enabled", true)
+	v.SetDefault("security.encryption.at_rest.algorithm", "AES-256-GCM")
+	v.SetDefault("security.encryption.in_transit.enabled", true)
+	v.SetDefault("security.encryption.in_transit.mode", "strict")
 
 	// Storage defaults
-	viper.SetDefault("storage.type", "memory")
+	v.SetDefault("storage.type", "memory")
 }
 
 // validateConfig validates the configuration
@@ -211,17 +215,8 @@ func validateConfig(config *Config) error {
 		}
 	}
 
-	// Validate TLS configuration
-	validTLSVersions := []string{"1.2", "1.3"}
-	valid := false
-	for _, version := range validTLSVersions {
-		if config.Security.TLS.MinVersion == version {
-			valid = true
-			break
-		}
-	}
-	if !valid {
-		return fmt.Errorf("invalid TLS min version: %s", config.Security.TLS.MinVersion)
+	if config.Security.TLS.MinVersion != "1.3" {
+		return fmt.Errorf("invalid TLS min version: %s (supported: 1.3)", config.Security.TLS.MinVersion)
 	}
 
 	return nil

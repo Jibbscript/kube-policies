@@ -4,7 +4,7 @@
 # cmd
 
 ## Purpose
-Entry-point packages for the two binaries produced by this repo. Each subdirectory contains a `package main` with a `main.go` that wires configuration, logging, metrics, and the relevant service into long-running HTTP servers with graceful shutdown.
+Entry-point packages for the binaries produced by this repo. Each subdirectory contains a `package main` with a `main.go` that wires configuration, logging, metrics, and the relevant service into long-running HTTP servers with graceful shutdown.
 
 ## Subdirectories
 
@@ -12,6 +12,7 @@ Entry-point packages for the two binaries produced by this repo. Each subdirecto
 |-----------|---------|
 | `admission-webhook/` | TLS validating + mutating admission webhook server (see `admission-webhook/AGENTS.md`) |
 | `policy-manager/` | REST API server for policy/exception/compliance management (see `policy-manager/AGENTS.md`) |
+| `dashboard/` | Dashboard BFF and embedded SPA host (see `dashboard/AGENTS.md`) |
 
 ## For AI Agents
 
@@ -22,7 +23,7 @@ Entry-point packages for the two binaries produced by this repo. Each subdirecto
 - Metrics live on a separate port from the main server; do not collapse them.
 
 ### Testing Requirements
-- These packages are not directly unit-tested. End-to-end coverage comes from `test/e2e` and `test/integration`.
+- `cmd/dashboard` and `cmd/admission-webhook` have package-local unit tests and are included in `make test-unit`. Cluster behavior still comes from `test/e2e` and `test/integration`.
 
 ### Common Patterns
 - Use `gin.SetMode(gin.ReleaseMode)` and `gin.New()` (without default middleware) plus `gin.Recovery()`.

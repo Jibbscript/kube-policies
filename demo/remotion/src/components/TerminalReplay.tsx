@@ -32,7 +32,7 @@ interface Run {
 export const ansiToRuns = (input: string): Run[] => {
   const runs: Run[] = [];
   let buffer = '';
-  let color = theme.fg;
+  let color: string = theme.fg;
   const flush = () => {
     if (buffer.length === 0) return;
     runs.push({ text: buffer, color });
@@ -94,21 +94,21 @@ export const TerminalReplay: React.FC<TerminalReplayProps> = ({
 
   useEffect(() => {
     if (textOverride !== undefined) return;
-    let cancelled = false;
+    let canceled = false;
     fetch(src)
       .then((r) => r.text())
       .then((t) => {
-        if (cancelled) return;
+        if (canceled) return;
         setText(t);
         continueRender(handle);
       })
       .catch(() => {
-        if (cancelled) return;
+        if (canceled) return;
         setText('');
         continueRender(handle);
       });
     return () => {
-      cancelled = true;
+      canceled = true;
     };
   }, [src, textOverride, handle]);
 

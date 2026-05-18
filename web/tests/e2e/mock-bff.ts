@@ -85,14 +85,17 @@ async function fulfillJson(
 export async function installDefaultMocks(page: Page): Promise<void> {
   await page.route("**/api/v1/policies", (route) => {
     if (route.request().method() === "GET")
-      return fulfillJson(route, 200, samplePolicies);
+      return fulfillJson(route, 200, {
+        policies: samplePolicies,
+        total: samplePolicies.length,
+      });
     return route.fulfill({ status: 403, body: "forbidden" });
   });
   await page.route("**/api/v1/policies/security-baseline/test", (route) =>
     fulfillJson(route, 200, sampleDenyResult),
   );
   await page.route("**/api/v1/exceptions", (route) =>
-    fulfillJson(route, 200, []),
+    fulfillJson(route, 200, { exceptions: [], total: 0 }),
   );
   await page.route("**/api/metrics/summary", (route) =>
     fulfillJson(route, 200, sampleMetrics),
@@ -105,7 +108,19 @@ export async function installDefaultMocks(page: Page): Promise<void> {
 export async function installReadOnlyMocks(page: Page): Promise<void> {
   await page.route("**/api/v1/**", (route) => {
     const method = route.request().method();
-    if (method === "GET") return fulfillJson(route, 200, []);
+    if (method === "GET") {
+      const url = new URL(route.request().url());
+      if (url.pathname === "/api/v1/policies") {
+        return fulfillJson(route, 200, {
+          policies: samplePolicies,
+          total: samplePolicies.length,
+        });
+      }
+      if (url.pathname === "/api/v1/exceptions") {
+        return fulfillJson(route, 200, { exceptions: [], total: 0 });
+      }
+      return fulfillJson(route, 200, {});
+    }
     return route.fulfill({
       status: 403,
       contentType: "application/json",

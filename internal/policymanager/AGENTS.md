@@ -20,7 +20,7 @@ Implements the policy-manager service: in-memory storage for policies, bundles, 
 ### Working In This Directory
 - Storage is currently in-memory maps guarded by `sync.RWMutex`. There is no persistence layer — restart loses all state. When introducing one, abstract behind an interface and keep the in-memory implementation as the test default.
 - `Manager.Start(ctx)` spawns `syncPolicies` (30s ticker — currently a no-op debug log) and `monitorExceptions` (1h ticker calling `checkExpiredExceptions`). Both terminate on context cancellation.
-- Compliance handlers (`ListComplianceReports`, `GenerateComplianceReport`, `ListComplianceFrameworks`) currently return mocked data. Real implementations should populate `ComplianceReport` from audit log analysis.
+- Compliance handlers (`ListComplianceReports`, `GenerateComplianceReport`, `ListComplianceFrameworks`) currently return `501 Not Implemented`. Real implementations should populate `ComplianceReport` from audit log analysis.
 - Validation in `validatePolicy` requires non-empty `Name`, at least one `Rule`, and each rule must have a `Name` and `Rego` body. Strengthen this when adding fields, not weaken it.
 - Handler IDs default to `uuid.New().String()` if the client doesn't supply one; preserve this so callers can either choose IDs or accept generated ones.
 

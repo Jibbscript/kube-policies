@@ -96,21 +96,21 @@ export const AuditPane: React.FC<AuditPaneProps> = ({
 
   useEffect(() => {
     if (objectOverride !== undefined) return;
-    let cancelled = false;
+    let canceled = false;
     fetch(src)
       .then((r) => r.json())
       .then((j) => {
-        if (cancelled) return;
+        if (canceled) return;
         setObj(j);
         continueRender(handle);
       })
       .catch(() => {
-        if (cancelled) return;
+        if (canceled) return;
         setObj({});
         continueRender(handle);
       });
     return () => {
-      cancelled = true;
+      canceled = true;
     };
   }, [src, objectOverride, handle]);
 

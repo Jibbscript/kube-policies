@@ -178,7 +178,7 @@ func (e *Engine) Evaluate(ctx context.Context, req *EvaluationRequest) (*Evaluat
 				zap.String("policy_id", policy.ID),
 				zap.Error(err),
 			)
-			continue
+			return nil, fmt.Errorf("failed to evaluate policy %q: %w", policy.ID, err)
 		}
 
 		// Merge results
@@ -309,7 +309,7 @@ func (e *Engine) evaluatePolicy(ctx context.Context, policy *Policy, input map[s
 				zap.String("rule_id", rule.ID),
 				zap.Error(err),
 			)
-			continue
+			return nil, fmt.Errorf("failed to evaluate rule %q: %w", rule.ID, err)
 		}
 
 		// Merge rule results
@@ -346,53 +346,57 @@ func (e *Engine) evaluateRule(ctx context.Context, policy *Policy, rule *Rule, i
 		Metadata:   make(map[string]interface{}),
 	}
 
-	if len(results) > 0 && len(results[0].Expressions) > 0 {
-		evalResult, ok := results[0].Expressions[0].Value.(map[string]interface{})
-		if !ok {
-			return result, nil
+	if len(results) == 0 || len(results[0].Expressions) == 0 {
+		return nil, fmt.Errorf("rego result must define data.kube_policies.evaluate")
+	}
+
+	evalResult, ok := results[0].Expressions[0].Value.(map[string]interface{})
+	if !ok {
+		return nil, fmt.Errorf("rego result must be an object with boolean allowed field, got %T", results[0].Expressions[0].Value)
+	}
+
+	allowed, ok := evalResult["allowed"].(bool)
+	if !ok {
+		return nil, fmt.Errorf("rego result must include boolean allowed field")
+	}
+	result.Allowed = allowed
+
+	if !result.Allowed {
+		violation := PolicyViolation{
+			PolicyID:   policy.ID,
+			RuleID:     rule.ID,
+			Severity:   rule.Severity,
+			Category:   rule.Category,
+			Frameworks: rule.Frameworks,
+			Metadata:   rule.Metadata,
 		}
 
-		if allowed, ok := evalResult["allowed"].(bool); ok {
-			result.Allowed = allowed
+		if message, ok := evalResult["message"].(string); ok {
+			violation.Message = message
 		}
 
-		if !result.Allowed {
-			violation := PolicyViolation{
-				PolicyID:   policy.ID,
-				RuleID:     rule.ID,
-				Severity:   rule.Severity,
-				Category:   rule.Category,
-				Frameworks: rule.Frameworks,
-				Metadata:   rule.Metadata,
-			}
-
-			if message, ok := evalResult["message"].(string); ok {
-				violation.Message = message
-			}
-
-			if path, ok := evalResult["path"].(string); ok {
-				violation.Path = path
-			}
-
-			result.Violations = append(result.Violations, violation)
+		if path, ok := evalResult["path"].(string); ok {
+			violation.Path = path
 		}
 
-		// Extract patches for mutation
-		if patches, ok := evalResult["patches"].([]interface{}); ok {
-			for _, patch := range patches {
-				if patchMap, ok := patch.(map[string]interface{}); ok {
-					jsonPatch := JSONPatch{}
-					if op, ok := patchMap["op"].(string); ok {
-						jsonPatch.Op = op
-					}
-					if path, ok := patchMap["path"].(string); ok {
-						jsonPatch.Path = path
-					}
-					if value, ok := patchMap["value"]; ok {
-						jsonPatch.Value = value
-					}
-					result.Patches = append(result.Patches, jsonPatch)
+		result.Violations = append(result.Violations, violation)
+	}
+
+	// Extract patches for mutation
+	if patches, ok := evalResult["patches"].([]interface{}); ok {
+		for _, patch := range patches {
+			if patchMap, ok := patch.(map[string]interface{}); ok {
+				jsonPatch := JSONPatch{}
+				if op, ok := patchMap["op"].(string); ok {
+					jsonPatch.Op = op
 				}
+				if path, ok := patchMap["path"].(string); ok {
+					jsonPatch.Path = path
+				}
+				if value, ok := patchMap["value"]; ok {
+					jsonPatch.Value = value
+				}
+				result.Patches = append(result.Patches, jsonPatch)
 			}
 		}
 	}
@@ -402,6 +406,10 @@ func (e *Engine) evaluateRule(ctx context.Context, policy *Policy, rule *Rule, i
 
 // prepareInput prepares the input for OPA evaluation
 func (e *Engine) prepareInput(req *EvaluationRequest) (map[string]interface{}, error) {
+	if req == nil || req.AdmissionRequest == nil {
+		return nil, fmt.Errorf("admission request is required")
+	}
+
 	input := map[string]interface{}{
 		"request": map[string]interface{}{
 			"uid":       req.AdmissionRequest.UID,
@@ -417,17 +425,19 @@ func (e *Engine) prepareInput(req *EvaluationRequest) (map[string]interface{}, e
 	// Add object if present
 	if req.AdmissionRequest.Object.Raw != nil {
 		var obj interface{}
-		if err := json.Unmarshal(req.AdmissionRequest.Object.Raw, &obj); err == nil {
-			input["object"] = obj
+		if err := json.Unmarshal(req.AdmissionRequest.Object.Raw, &obj); err != nil {
+			return nil, fmt.Errorf("invalid admission object JSON: %w", err)
 		}
+		input["object"] = obj
 	}
 
 	// Add old object if present
 	if req.AdmissionRequest.OldObject.Raw != nil {
 		var oldObj interface{}
-		if err := json.Unmarshal(req.AdmissionRequest.OldObject.Raw, &oldObj); err == nil {
-			input["oldObject"] = oldObj
+		if err := json.Unmarshal(req.AdmissionRequest.OldObject.Raw, &oldObj); err != nil {
+			return nil, fmt.Errorf("invalid admission oldObject JSON: %w", err)
 		}
+		input["oldObject"] = oldObj
 	}
 
 	// Add context if present

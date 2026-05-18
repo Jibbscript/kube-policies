@@ -143,13 +143,13 @@ data:
           },
           "targets": [
             {
-              "expr": "histogram_quantile(0.95, sum(rate(kube_policies_admission_webhook_duration_seconds_bucket[5m])) by (le))",
+              "expr": "histogram_quantile(0.95, sum(rate(kube_policies_admission_evaluation_duration_seconds_bucket[5m])) by (le))",
               "interval": "",
               "legendFormat": "95th percentile",
               "refId": "A"
             },
             {
-              "expr": "histogram_quantile(0.50, sum(rate(kube_policies_admission_webhook_duration_seconds_bucket[5m])) by (le))",
+              "expr": "histogram_quantile(0.50, sum(rate(kube_policies_admission_evaluation_duration_seconds_bucket[5m])) by (le))",
               "interval": "",
               "legendFormat": "50th percentile",
               "refId": "B"
@@ -288,4 +288,3 @@ spec:
     app: grafana
   sessionAffinity: None
   type: ClusterIP
-

@@ -49,7 +49,7 @@ func compileRegoModule(moduleName, ruleName, regoBody string) error {
 		rego.Module(moduleName, regoBody),
 	).PrepareForEval(context.Background())
 	if err != nil {
-		return fmt.Errorf("rego syntax error in rule %q: %v", ruleName, err)
+		return fmt.Errorf("rego syntax error in rule %q: %w", ruleName, err)
 	}
 	return nil
 }

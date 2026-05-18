@@ -155,8 +155,8 @@ func main() {
 		}
 	}()
 
-	// Background-process context. Cancelled on SIGINT/SIGTERM below; the CRD
-	// controllers stop when this is cancelled.
+	// Background-process context. Canceled on SIGINT/SIGTERM below; the CRD
+	// controllers stop when this is canceled.
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 

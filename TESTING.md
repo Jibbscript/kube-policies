@@ -117,7 +117,7 @@ go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
 
 ```bash
 # Unit tests only
-go test -v ./internal/... ./pkg/...
+go test -v ./cmd/... ./internal/... ./pkg/...
 
 # Integration tests only
 go test -v ./test/integration/...
@@ -151,16 +151,16 @@ sudo ./scripts/test/test-k3s.sh
 
 Unit tests validate individual components and functions in isolation.
 
-**Location**: `internal/*/`, `pkg/*/`
+**Location**: `cmd/*/`, `internal/*/`, `pkg/*/`
 **Pattern**: `*_test.go` files alongside source code
 
 **Running Unit Tests**:
 ```bash
 # All unit tests
-go test -v ./internal/... ./pkg/...
+go test -v ./cmd/... ./internal/... ./pkg/...
 
 # With coverage
-go test -v -race -coverprofile=coverage.out ./internal/... ./pkg/...
+go test -v -race -coverprofile=coverage.out ./cmd/... ./internal/... ./pkg/...
 
 # Specific package
 go test -v ./internal/admission/
@@ -340,7 +340,7 @@ act -l  # Requires 'act' tool
 
 ```bash
 # Run Go benchmarks
-go test -bench=. -benchmem ./internal/... ./pkg/...
+go test -bench=. -benchmem ./cmd/... ./internal/... ./pkg/...
 
 # Specific benchmarks
 go test -bench=BenchmarkPolicyEvaluation ./internal/policy/
@@ -550,4 +550,3 @@ The testing suite is continuously improved through:
 - Better error reporting and diagnostics
 
 For questions or contributions to the testing framework, please open an issue or submit a pull request.
-

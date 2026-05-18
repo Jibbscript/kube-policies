@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"sync"
@@ -69,8 +70,10 @@ type WebhookCRDIntegrationTestSuite struct {
 	controllerErr error
 }
 
-const webhookEventuallyTimeout = 10 * time.Second
-const webhookEventuallyInterval = 100 * time.Millisecond
+const (
+	webhookEventuallyTimeout  = 10 * time.Second
+	webhookEventuallyInterval = 100 * time.Millisecond
+)
 
 // crdDenyOnLabelRego denies any pod that carries the marker label this test
 // owns. Bundled defaults don't reference this label, so the pod is allowed
@@ -144,7 +147,7 @@ func (suite *WebhookCRDIntegrationTestSuite) SetupSuite() {
 			PolicySink:            sink,
 			DisableLeaderElection: true,
 		})
-		if err != nil && err != context.Canceled {
+		if err != nil && !errors.Is(err, context.Canceled) {
 			suite.controllerErr = err
 		}
 	}()

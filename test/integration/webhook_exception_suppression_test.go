@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -142,7 +143,7 @@ func (suite *WebhookExceptionSuppressionTestSuite) SetupSuite() {
 			ExceptionSink:         suite.panicSink,
 			DisableLeaderElection: true,
 		})
-		if err != nil && err != context.Canceled {
+		if err != nil && !errors.Is(err, context.Canceled) {
 			suite.controllerErr = err
 		}
 	}()

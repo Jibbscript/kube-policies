@@ -214,7 +214,7 @@ func coalesce(values ...string) string {
 }
 
 // metadataMap converts the CRD's string→string map into the internal
-// map[string]interface{} shape so it can be marshalled via the same JSON path
+// map[string]interface{} shape so it can be marshaled via the same JSON path
 // as policies authored through the HTTP API.
 func metadataMap(in map[string]string) map[string]interface{} {
 	if in == nil {

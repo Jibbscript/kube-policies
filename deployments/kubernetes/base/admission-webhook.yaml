@@ -57,8 +57,8 @@ spec:
               topologyKey: kubernetes.io/hostname
       containers:
       - name: admission-webhook
-        image: ghcr.io/enterprise/admission-webhook:latest
-        imagePullPolicy: Always
+        image: ghcr.io/enterprise/admission-webhook:v1.0.0
+        imagePullPolicy: IfNotPresent
         ports:
         - name: webhook
           containerPort: 8443
@@ -182,18 +182,8 @@ data:
       tls_key_path: /etc/certs/tls.key
     
     policy:
-      bundle_url: "http://kube-policies-policy-manager:8080/api/v1/bundles/default"
-      refresh_interval: "30s"
-      cache_size: 1000
-      timeout: "5s"
       failure_mode: "fail-closed"
-      default_policies:
-        - "security-baseline"
-        - "compliance-cis"
-      frameworks:
-        cis: "CIS Kubernetes Benchmark v1.8.0"
-        nist: "NIST Cybersecurity Framework 2.0"
-        pci: "PCI DSS v4.0"
+      disable_defaults: false
     
     audit:
       enabled: true
@@ -235,13 +225,14 @@ data:
       config: {}
 ---
 apiVersion: admissionregistration.k8s.io/v1
-kind: ValidatingAdmissionWebhook
+kind: ValidatingWebhookConfiguration
 metadata:
   name: kube-policies-validator
   labels:
     app: kube-policies
     component: admission-webhook
-spec:
+webhooks:
+- name: validate.kube-policies.io
   clientConfig:
     service:
       name: kube-policies-admission-webhook
@@ -275,13 +266,14 @@ spec:
   timeoutSeconds: 10
 ---
 apiVersion: admissionregistration.k8s.io/v1
-kind: MutatingAdmissionWebhook
+kind: MutatingWebhookConfiguration
 metadata:
   name: kube-policies-mutator
   labels:
     app: kube-policies
     component: admission-webhook
-spec:
+webhooks:
+- name: mutate.kube-policies.io
   clientConfig:
     service:
       name: kube-policies-admission-webhook
@@ -305,4 +297,3 @@ spec:
   sideEffects: None
   failurePolicy: Fail
   timeoutSeconds: 10
-

@@ -100,7 +100,7 @@ jobs:
 
     - name: Run unit tests
       run: |
-        go test -v -race -coverprofile=coverage.out -covermode=atomic ./internal/... ./pkg/...
+        go test -v -race -coverprofile=coverage.out -covermode=atomic ./cmd/... ./internal/... ./pkg/...
 
     - name: Generate coverage report
       run: go tool cover -html=coverage.out -o coverage.html
@@ -398,7 +398,7 @@ jobs:
         export CLEANUP=false
         ./scripts/test/test-kind.sh
         # Run additional performance benchmarks
-        go test -bench=. -benchmem ./internal/... ./pkg/... > performance-results.txt
+        go test -bench=. -benchmem ./cmd/... ./internal/... ./pkg/... > performance-results.txt
 
     - name: Upload performance results
       uses: actions/upload-artifact@v3
@@ -524,4 +524,3 @@ jobs:
         channel: '#kube-policies-ci'
         webhook_url: ${{ secrets.SLACK_WEBHOOK }}
         fields: repo,message,commit,author,action,eventName,ref,workflow
-

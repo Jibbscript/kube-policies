@@ -70,7 +70,7 @@ describe("api.testPolicy", () => {
 describe("api.listPolicies and getRecentDecisions", () => {
   it("listPolicies hits /api/v1/policies", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
-      new Response("[]", {
+      new Response(JSON.stringify({ policies: [], total: 0 }), {
         status: 200,
         headers: { "content-type": "application/json" },
       }),

@@ -54,8 +54,8 @@ helm install kube-policies kube-policies/kube-policies \
 kubectl get pods -n kube-policies-system
 
 # Verify admission webhooks
-kubectl get validatingadmissionwebhooks
-kubectl get mutatingadmissionwebhooks
+kubectl get validatingwebhookconfigurations
+kubectl get mutatingwebhookconfigurations
 
 # Test policy enforcement
 kubectl apply -f examples/policies/security-baseline.yaml
@@ -310,4 +310,3 @@ This project is licensed under the Apache License 2.0 - see the [LICENSE](LICENS
 ---
 
 **Kube-Policies** - Securing Kubernetes at Enterprise Scale
-

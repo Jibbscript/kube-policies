@@ -47,7 +47,7 @@ func TestStartControllers_RequiresNamespaceWhenLeaderElectionEnabled(t *testing.
 // TestStartControllers_DefaultsLeaderElectionIDToPolicyManager verifies that
 // an empty LeaderElectionID is filled to "kube-policies-policy-manager" before
 // manager.New is called. DisableLeaderElection=true bypasses namespace validation;
-// the immediately-cancelled context causes mgr.Start to exit cleanly (nil).
+// the immediately-canceled context causes mgr.Start to exit cleanly (nil).
 // The absence of any validation error proves the ID-defaulting code ran without issue.
 func TestStartControllers_DefaultsLeaderElectionIDToPolicyManager(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
@@ -65,7 +65,7 @@ func TestStartControllers_DefaultsLeaderElectionIDToPolicyManager(t *testing.T) 
 // TestControllerOptions_ZeroValueEnablesLeaderElection verifies the inverted-bool
 // contract: DisableLeaderElection=false (zero value) means election is ON. With a
 // non-empty LeaderElectionNamespace the namespace precondition passes; the
-// immediately-cancelled context causes mgr.Start to exit cleanly (nil). If the
+// immediately-canceled context causes mgr.Start to exit cleanly (nil). If the
 // zero value had disabled election instead of enabling it, the validation would
 // have been skipped and the manager built with LeaderElection=false — but the
 // log line and the manager options would be wrong. This test pins that the zero

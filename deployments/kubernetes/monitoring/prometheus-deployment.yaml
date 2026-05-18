@@ -175,7 +175,7 @@ data:
     - name: kube-policies.rules
       rules:
       - alert: KubePoliciesHighLatency
-        expr: histogram_quantile(0.95, sum(rate(kube_policies_admission_webhook_duration_seconds_bucket[5m])) by (le)) > 0.1
+        expr: histogram_quantile(0.95, sum(rate(kube_policies_admission_evaluation_duration_seconds_bucket[5m])) by (le)) > 0.1
         for: 2m
         labels:
           severity: warning
@@ -184,7 +184,7 @@ data:
           description: "95th percentile latency is {{ $value }}s for the last 5 minutes."
 
       - alert: KubePoliciesHighErrorRate
-        expr: sum(rate(kube_policies_admission_webhook_errors_total[5m])) / sum(rate(kube_policies_admission_webhook_requests_total[5m])) > 0.05
+        expr: sum(rate(kube_policies_admission_requests_total{status="error"}[5m])) / sum(rate(kube_policies_admission_requests_total[5m])) > 0.05
         for: 2m
         labels:
           severity: critical
@@ -201,14 +201,14 @@ data:
           summary: "Kube-Policies admission webhook is down"
           description: "Kube-Policies admission webhook has been down for more than 1 minute."
 
-      - alert: KubePoliciesHighViolationRate
-        expr: sum(rate(kube_policies_policy_violations_total{severity="HIGH"}[5m])) > 10
+      - alert: KubePoliciesHighDenyRate
+        expr: sum(rate(kube_policies_admission_requests_total{status="denied"}[5m])) > 10
         for: 5m
         labels:
           severity: warning
         annotations:
-          summary: "High rate of high-severity policy violations"
-          description: "{{ $value }} high-severity violations per second for the last 5 minutes."
+          summary: "High admission deny rate"
+          description: "{{ $value }} denied admission requests per second for the last 5 minutes."
 
       - alert: KubePoliciesMemoryUsage
         expr: container_memory_usage_bytes{pod=~"kube-policies-.*"} / container_spec_memory_limit_bytes{pod=~"kube-policies-.*"} > 0.8
@@ -305,4 +305,3 @@ spec:
       targetPort: 9090
       protocol: TCP
       name: web
-

@@ -73,13 +73,13 @@
       "pluginVersion": "8.0.0",
       "targets": [
         {
-          "expr": "sum(increase(kube_policies_policy_violations_total{severity=\"HIGH\"}[1h]))",
+          "expr": "sum(increase(kube_policies_compliance_violations_total{severity=\"HIGH\"}[1h]))",
           "interval": "",
           "legendFormat": "High Severity",
           "refId": "A"
         }
       ],
-      "title": "High Severity Violations (1h)",
+      "title": "High Severity Compliance Violations (1h)",
       "type": "stat"
     },
     {
@@ -135,13 +135,13 @@
       "pluginVersion": "8.0.0",
       "targets": [
         {
-          "expr": "sum(increase(kube_policies_policy_violations_total{severity=\"MEDIUM\"}[1h]))",
+          "expr": "sum(increase(kube_policies_compliance_violations_total{severity=\"MEDIUM\"}[1h]))",
           "interval": "",
           "legendFormat": "Medium Severity",
           "refId": "A"
         }
       ],
-      "title": "Medium Severity Violations (1h)",
+      "title": "Medium Severity Compliance Violations (1h)",
       "type": "stat"
     },
     {
@@ -197,13 +197,13 @@
       "pluginVersion": "8.0.0",
       "targets": [
         {
-          "expr": "sum(kube_policies_active_exceptions_total)",
+          "expr": "sum(increase(kube_policies_policy_exception_suppressions_total[1h]))",
           "interval": "",
-          "legendFormat": "Active Exceptions",
+          "legendFormat": "Exception Suppressions",
           "refId": "A"
         }
       ],
-      "title": "Active Policy Exceptions",
+      "title": "Exception Suppressions (1h)",
       "type": "stat"
     },
     {
@@ -213,23 +213,7 @@
           "color": {
             "mode": "thresholds"
           },
-          "mappings": [
-            {
-              "options": {
-                "0": {
-                  "color": "red",
-                  "index": 0,
-                  "text": "Non-Compliant"
-                },
-                "1": {
-                  "color": "green",
-                  "index": 1,
-                  "text": "Compliant"
-                }
-              },
-              "type": "value"
-            }
-          ],
+          "mappings": [],
           "thresholds": {
             "mode": "absolute",
             "steps": [
@@ -271,13 +255,13 @@
       "pluginVersion": "8.0.0",
       "targets": [
         {
-          "expr": "kube_policies_compliance_score{framework=\"CIS\"}",
+          "expr": "sum(increase(kube_policies_compliance_reports_total{framework=\"CIS\",status=\"success\"}[24h]))",
           "interval": "",
-          "legendFormat": "CIS Compliance",
+          "legendFormat": "CIS Report Successes",
           "refId": "A"
         }
       ],
-      "title": "CIS Kubernetes Benchmark",
+      "title": "CIS Reports Succeeded (24h)",
       "type": "stat"
     },
     {
@@ -398,13 +382,13 @@
       },
       "targets": [
         {
-          "expr": "sum by (severity) (rate(kube_policies_policy_violations_total[5m]))",
+          "expr": "sum by (severity) (rate(kube_policies_compliance_violations_total[5m]))",
           "interval": "",
           "legendFormat": "{{severity}}",
           "refId": "A"
         }
       ],
-      "title": "Policy Violations by Severity",
+      "title": "Compliance Violations by Severity",
       "type": "timeseries"
     },
     {
@@ -451,13 +435,13 @@
       },
       "targets": [
         {
-          "expr": "sum by (policy_category) (rate(kube_policies_policy_violations_total[5m]))",
+          "expr": "sum by (category) (rate(kube_policies_compliance_violations_total[5m]))",
           "interval": "",
-          "legendFormat": "{{policy_category}}",
+          "legendFormat": "{{category}}",
           "refId": "A"
         }
       ],
-      "title": "Violations by Policy Category",
+      "title": "Compliance Violations by Category",
       "type": "piechart"
     },
     {
@@ -539,7 +523,7 @@
       "pluginVersion": "8.0.0",
       "targets": [
         {
-          "expr": "topk(10, sum by (policy_name, severity) (increase(kube_policies_policy_violations_total[1h])))",
+          "expr": "topk(10, sum by (framework, severity, category) (increase(kube_policies_compliance_violations_total[1h])))",
           "format": "table",
           "instant": true,
           "interval": "",
@@ -547,7 +531,7 @@
           "refId": "A"
         }
       ],
-      "title": "Top Policy Violations (Last Hour)",
+      "title": "Top Compliance Violations (Last Hour)",
       "transformations": [
         {
           "id": "organize",
@@ -561,7 +545,8 @@
             "indexByName": {},
             "renameByName": {
               "Value": "Count",
-              "policy_name": "Policy Name",
+              "category": "Category",
+              "framework": "Framework",
               "severity": "Severity"
             }
           }
@@ -590,32 +575,11 @@
         "error": null,
         "hide": 0,
         "includeAll": true,
-        "label": "Namespace",
-        "multi": true,
-        "name": "namespace",
-        "options": [],
-        "query": "label_values(kube_policies_policy_violations_total, namespace)",
-        "refresh": 1,
-        "regex": "",
-        "skipUrlSync": false,
-        "sort": 0,
-        "type": "query"
-      },
-      {
-        "current": {
-          "selected": false,
-          "text": "All",
-          "value": "$__all"
-        },
-        "description": null,
-        "error": null,
-        "hide": 0,
-        "includeAll": true,
         "label": "Severity",
         "multi": true,
         "name": "severity",
         "options": [],
-        "query": "label_values(kube_policies_policy_violations_total, severity)",
+        "query": "label_values(kube_policies_compliance_violations_total, severity)",
         "refresh": 1,
         "regex": "",
         "skipUrlSync": false,
@@ -634,4 +598,3 @@
   "uid": "kube-policies-security",
   "version": 1
 }
-

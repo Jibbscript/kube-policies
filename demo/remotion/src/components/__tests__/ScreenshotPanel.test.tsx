@@ -4,6 +4,7 @@
 // without remounting the test environment.
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { render, cleanup } from '@testing-library/react';
+import { createElement, type ImgHTMLAttributes } from 'react';
 
 const { frameRef } = vi.hoisted(() => ({ frameRef: { value: 0 } }));
 vi.mock('remotion', async () => {
@@ -11,7 +12,7 @@ vi.mock('remotion', async () => {
   return {
     ...actual,
     useCurrentFrame: () => frameRef.value,
-    Img: (props: React.ImgHTMLAttributes<HTMLImageElement>) => <img {...props} />,
+    Img: (props: ImgHTMLAttributes<HTMLImageElement>) => createElement('img', props),
   };
 });
 

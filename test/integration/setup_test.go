@@ -12,10 +12,11 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/Jibbscript/kube-policies/pkg/logger"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 	"k8s.io/klog/v2"
+
+	"github.com/Jibbscript/kube-policies/pkg/logger"
 )
 
 // dynamicStdoutSyncer is a zapcore.WriteSyncer that resolves os.Stdout at
@@ -229,5 +230,7 @@ func capturePipe(t *testing.T, target **os.File) (*bytes.Buffer, func()) {
 
 // Compile-time assertions: suppress "imported and not used" warnings for
 // packages referenced only via type assertions or variable declarations.
-var _ = fmt.Sprintf
-var _ io.Reader = (*bytes.Buffer)(nil)
+var (
+	_           = fmt.Sprintf
+	_ io.Reader = (*bytes.Buffer)(nil)
+)

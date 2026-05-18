@@ -64,8 +64,8 @@ helm install kube-policies kube-policies/kube-policies \
 kubectl get pods -n kube-policies-system
 
 # Check admission webhook
-kubectl get validatingadmissionwebhooks
-kubectl get mutatingadmissionwebhooks
+kubectl get validatingwebhookconfigurations
+kubectl get mutatingwebhookconfigurations
 
 # Test policy enforcement
 kubectl apply -f examples/policies/security-baseline.yaml
@@ -133,18 +133,9 @@ persistence:
 audit:
   enabled: true
   backend:
-    type: elasticsearch
-    elasticsearch:
-      url: "https://elasticsearch.monitoring.svc.cluster.local:9200"
-      index: "kube-policies-audit"
-
-compliance:
-  enabled: true
-  frameworks:
-    cis:
-      enabled: true
-    nist:
-      enabled: true
+    type: file
+    file:
+      path: "/var/log/kube-policies"
 ```
 
 ### Deploy with Production Configuration
@@ -245,16 +236,14 @@ Edit the Alertmanager configuration:
 kubectl edit configmap alertmanager-config -n kube-policies-monitoring
 ```
 
-Update notification channels:
+Replace the default local webhook receiver with the notification channel your cluster supports. For example:
 
 ```yaml
 receivers:
-- name: 'slack-alerts'
-  slack_configs:
-  - api_url: 'YOUR_SLACK_WEBHOOK_URL'
-    channel: '#kube-policies-alerts'
-    title: 'Kube-Policies Alert'
-    text: '{{ range .Alerts }}{{ .Annotations.description }}{{ end }}'
+- name: 'ops-webhook'
+  webhook_configs:
+  - url: 'https://alerts.example.com/prometheus'
+    send_resolved: true
 ```
 
 ## Configuration
@@ -303,7 +292,7 @@ spec:
 
 ### Audit Configuration
 
-Configure audit backends:
+Configure the audit backend:
 
 ```yaml
 # File backend
@@ -314,15 +303,10 @@ audit:
       path: "/var/log/kube-policies"
       maxSize: "100Mi"
 
-# Elasticsearch backend
+# Stdout backend
 audit:
   backend:
-    type: elasticsearch
-    elasticsearch:
-      url: "https://elasticsearch:9200"
-      index: "kube-policies-audit"
-      username: "elastic"
-      password: "password"
+    type: stdout
 ```
 
 ## Troubleshooting
@@ -333,7 +317,7 @@ audit:
 
 ```bash
 # Check webhook status
-kubectl get validatingadmissionwebhooks kube-policies-admission-webhook -o yaml
+kubectl get validatingwebhookconfigurations kube-policies-admission-webhook -o yaml
 
 # Check certificate validity
 kubectl get secret kube-policies-admission-webhook-certs -o yaml
@@ -463,4 +447,3 @@ For additional support:
 - GitHub Issues: https://github.com/kube-policies/kube-policies/issues
 - Community Slack: https://slack.kube-policies.io
 - Email: support@kube-policies.io
-

@@ -26,7 +26,7 @@ import (
 	policiesv1 "github.com/Jibbscript/kube-policies/internal/policymanager/apis/policies/v1"
 )
 
-// LeaderElectionIntegrationTestSuite proves that StartControllers honours the
+// LeaderElectionIntegrationTestSuite proves that StartControllers honors the
 // zero-value DisableLeaderElection contract: when election is enabled (the
 // default), exactly one manager acquires the coordination.k8s.io/v1 Lease and
 // holds it while a second manager stays as follower.
@@ -247,7 +247,7 @@ func TestLeaderElectionIntegrationTestSuite(t *testing.T) {
 }
 
 // noopSink satisfies policymanager.PolicySink by discarding all operations.
-// Used in leader-election tests where the reconciler behaviour is not under
+// Used in leader-election tests where the reconciler behavior is not under
 // test — only the leader-election machinery matters.
 type noopSink struct{}
 

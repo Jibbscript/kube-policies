@@ -17,7 +17,7 @@ Centralized configuration schema, loader, defaults, and validator for both binar
 ### Working In This Directory
 - `LoadConfig` is forgiving: a missing config file is not an error (defaults + env vars fill in). Never change this without updating the deployment story (the chart may rely on running without a mounted config).
 - All defaults live in `setDefaults`. New fields require: a struct field with `mapstructure` tag, a default in `setDefaults`, and (for enum-style fields) validation in `validateConfig`.
-- `validateConfig` enforces enums: `policy.failure_mode` must be `fail-open` or `fail-closed`; `audit.backend` must be `file` or `stdout`; `security.tls.min_version` must be `1.2` or `1.3`. Add to these lists when supporting new values.
+- `validateConfig` enforces enums: `policy.failure_mode` must be `fail-open` or `fail-closed`; `audit.backend` must be `file` or `stdout`; `security.tls.min_version` must be `1.3`. Add to these lists only when the runtime implementation also supports the new value.
 
 ### Testing Requirements
 - No `_test.go` exists in this package today. New behavior should land with tests; until then, integration tests exercise it indirectly.

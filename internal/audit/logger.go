@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 
 	"go.uber.org/zap"
@@ -40,6 +41,7 @@ type Logger struct {
 	cancel  context.CancelFunc
 	logger  *zap.Logger
 	metrics Metrics
+	wg      sync.WaitGroup
 }
 
 // Backend represents an audit backend
@@ -131,6 +133,7 @@ func NewLogger(cfg *config.AuditConfig, opts ...Option) (*Logger, error) {
 	}
 
 	// Start background processor
+	l.wg.Add(1)
 	go l.processEvents()
 
 	return l, nil
@@ -248,6 +251,8 @@ func (l *Logger) enqueue(event *Event) {
 
 // processEvents processes audit events in the background
 func (l *Logger) processEvents() {
+	defer l.wg.Done()
+
 	flushInterval, _ := time.ParseDuration(l.config.FlushInterval)
 	if flushInterval == 0 {
 		flushInterval = 10 * time.Second
@@ -261,9 +266,18 @@ func (l *Logger) processEvents() {
 	for {
 		select {
 		case <-l.ctx.Done():
-			// Flush remaining events before shutdown
-			l.flushEvents(events)
-			return
+			// Drain any queued events before shutdown. Cancel can race with
+			// enqueue, so flushing only the local batch would lose records
+			// still sitting in l.buffer.
+			for {
+				select {
+				case event := <-l.buffer:
+					events = append(events, event)
+				default:
+					l.flushEvents(events)
+					return
+				}
+			}
 
 		case event := <-l.buffer:
 			events = append(events, event)
@@ -309,6 +323,7 @@ func (l *Logger) Close() error {
 	}
 
 	l.cancel()
+	l.wg.Wait()
 
 	if l.backend != nil {
 		return l.backend.Close()
