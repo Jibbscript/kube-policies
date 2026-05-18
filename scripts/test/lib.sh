@@ -98,9 +98,10 @@ nodes:
   - containerPort: 443
     hostPort: 443
     protocol: TCP
-  - containerPort: 8443
-    hostPort: 8443
-    protocol: TCP
+  # Note: integration tests expect host:8443 to be the admission webhook.
+  # We deliberately do NOT bind hostPort 8443 here — docker-proxy would
+  # then intercept connections destined for the test's kubectl port-forward
+  # set up later in test-kind.sh's run_tests(). See PR for that helper.
 - role: worker
   image: kindest/node:${KUBERNETES_VERSION}
 - role: worker
@@ -227,6 +228,12 @@ admissionWebhook:
     registry: localhost:${REGISTRY_PORT}
     repository: kube-policies/admission-webhook
     tag: test
+  # Disable bundled defaults so e2e tests' own policies fire in isolation.
+  # When enabled, every test pod that is non-trivially-compliant triggers 2+
+  # bundled rules, and the engine collapses the response to "Multiple policy
+  # violations detected (N)" — defeating the per-rule substring assertions in
+  # test/e2e/e2e_test.go (require-resource-limits, deny-privileged, ...).
+  disableDefaultPolicies: true
   service:
     type: NodePort
     nodePort: 30443
