@@ -432,6 +432,7 @@ dashboard:
   replicaCount: 1
 
   image:
+    registry: ""
     repository: ghcr.io/Jibbscript/dashboard
     # Defaults to .Chart.AppVersion when empty.
     tag: ""

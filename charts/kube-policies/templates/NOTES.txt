@@ -1,0 +1,47 @@
+Thank you for installing {{ .Chart.Name }} {{ .Chart.Version }}.
+
+## TLS Configuration — Admission Webhook
+
+Four modes are supported for webhook TLS bootstrap (evaluated in order):
+
+1. **lookup-preserve** (upgrade idempotence): if Secret {{ include "kube-policies.fullname" . }}-admission-webhook-certs
+   already exists in the cluster, its bytes are preserved unchanged. Requires
+   `get secrets` RBAC on namespace {{ .Release.Namespace }} for the Helm service account.
+
+2. **inline-pem** (tls.autoGenerate=false + tls.caCert/cert/key set): supply PEM-
+   encoded certificates via --set-file admissionWebhook.tls.{caCert,cert,key}.
+
+3. **autoGenerate** (default, tls.autoGenerate=true): chart generates a self-signed CA
+   and leaf certificate (365-day expiry, 5 DNS SANs + IP 127.0.0.1). On the first
+   install a one-time extra rolling restart occurs as the checksum/webhook-certs
+   annotation transitions from "initial-install" to the stable Secret hash.
+
+4. **cert-manager managed**: create a cert-manager Certificate CR targeting Secret
+   {{ include "kube-policies.fullname" . }}-admission-webhook-certs BEFORE helm install,
+   then set tls.autoGenerate=false. Branch 1 (lookup-preserve) picks up the Secret.
+
+If none of the above applies, the chart fails at render time with a remediation
+message pointing at scripts/gen-webhook-cert.sh (manual certificate generation).
+
+## Cert Rotation
+
+Self-signed certificates expire after 365 days. To rotate:
+
+  kubectl delete secret {{ include "kube-policies.fullname" . }}-admission-webhook-certs -n {{ .Release.Namespace }}
+  helm upgrade {{ .Release.Name }} <chart> --reuse-values
+
+The checksum/webhook-certs annotation on the admission-webhook Deployment detects
+the Secret change on the next upgrade and triggers a rolling restart automatically.
+
+## Image Registry
+
+Two image conventions are used in this chart:
+
+* admission-webhook + policy-manager: registry defaults to docker.io; repository is
+  host-less. Override image.registry to point at a mirror.
+
+* dashboard: repository defaults to ghcr.io/Jibbscript/dashboard (fully-qualified).
+  Setting dashboard.image.registry on top of a fully-qualified repository is DETECTED
+  and the registry is SUPPRESSED to prevent double-prefixing. To use a mirror, set
+  dashboard.image.registry=<mirror> AND dashboard.image.repository=kube-policies/dashboard
+  (host-less), or leave registry empty and override the full repository instead.

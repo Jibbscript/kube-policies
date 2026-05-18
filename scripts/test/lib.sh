@@ -107,8 +107,8 @@ nodes:
   image: kindest/node:${KUBERNETES_VERSION}
 containerdConfigPatches:
 - |-
-  [plugins."io.containerd.grpc.v1.cri".registry.mirrors."localhost:${REGISTRY_PORT}"]
-    endpoint = ["http://${REGISTRY_NAME}:5000"]
+  [plugins."io.containerd.grpc.v1.cri".registry]
+    config_path = "/etc/containerd/certs.d"
 EOF
 
     # Create the cluster
@@ -119,6 +119,16 @@ EOF
         docker network create kind
     fi
     docker network connect "kind" "${REGISTRY_NAME}" 2>/dev/null || true
+
+    # Configure per-node certs.d/hosts.toml for the modern containerd registry mirror
+    local registry_dir="/etc/containerd/certs.d/localhost:${REGISTRY_PORT}"
+    for node in $(kind get nodes --name "${KIND_CLUSTER_NAME}"); do
+        docker exec "${node}" mkdir -p "${registry_dir}"
+        cat <<HOSTSTOML | docker exec -i "${node}" cp /dev/stdin "${registry_dir}/hosts.toml"
+[host."http://${REGISTRY_NAME}:5000"]
+  capabilities = ["pull", "resolve"]
+HOSTSTOML
+    done
 
     # Document the local registry
     kubectl apply -f - <<EOF
@@ -228,13 +238,10 @@ policyManager:
     type: NodePort
     nodePort: 30080
 
-# Dashboard image — chart default points at ghcr.io/Jibbscript/dashboard:1.0.0
-# which is not built locally. Point at the local registry image produced by
-# build_and_push_images (see dashboard build below). Dashboard chart template
-# uses just {{ repository }}:{{ tag }} so we include the registry in repository.
 dashboard:
   image:
-    repository: localhost:${REGISTRY_PORT}/kube-policies/dashboard
+    registry: localhost:${REGISTRY_PORT}
+    repository: kube-policies/dashboard
     tag: test
 
 monitoring:
@@ -293,15 +300,14 @@ wait_for_deployment() {
     # don't have a Ready condition in k8s standard — `kubectl wait --for=condition=ready`
     # would hang until its 300s timeout. We just confirm the resource exists.
     local i
-    for cfg in validatingwebhookconfigurations/kube-policies-validating-webhook \
-               mutatingwebhookconfigurations/kube-policies-mutating-webhook; do
+    for cfg in validatingwebhookconfigurations/kube-policies-validating-webhook; do
         for i in 1 2 3 4 5 6 7 8 9 10; do
             if kubectl get "$cfg" >/dev/null 2>&1; then
                 break
             fi
             sleep 3
         done
-        kubectl get "$cfg" >/dev/null 2>&1 || warn "$cfg not present after wait — continuing"
+        kubectl get "$cfg" >/dev/null 2>&1 || { warn "$cfg not present after wait"; return 1; }
     done
 
     success "All components are ready"

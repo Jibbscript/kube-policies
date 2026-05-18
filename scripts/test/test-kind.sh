@@ -188,8 +188,13 @@ collect_diagnostics() {
 main() {
     log "Starting Kube-Policies testing on Kind cluster"
 
-    # Trap cleanup on exit
-    trap cleanup EXIT
+    # Trap cleanup on exit; preserve diagnostics on failure
+    trap 'rc=$?
+          if [ $rc -ne 0 ]; then
+              warn "test-kind failed (rc=$rc); preserving diagnostics before cleanup"
+              CLEANUP=false collect_diagnostics || true
+          fi
+          cleanup' EXIT
 
     check_prerequisites
     create_registry

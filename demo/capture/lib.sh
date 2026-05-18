@@ -121,6 +121,7 @@ kind_load_demo_images() {
 }
 
 # prestage_webhook_cert
+# NOTE: legacy belt-and-suspenders post-OQ-2; chart self-bootstraps via templates/admission-webhook-tls.yaml when autoGenerate=true. Kept for resume-after-failure idempotence in the capture flow.
 # The chart's webhook deployment mounts a TLS secret named
 # `kube-policies-admission-webhook-certs` which the chart does NOT create.
 # Generate the secret BEFORE the helm install so `helm --wait` doesn't time
@@ -136,6 +137,7 @@ prestage_webhook_cert() {
 }
 
 # patch_vwhc_cabundle
+# NOTE: legacy belt-and-suspenders post-OQ-2; chart self-bootstraps via templates/admission-webhook-tls.yaml when autoGenerate=true. Kept for resume-after-failure idempotence in the capture flow.
 # The ValidatingWebhookConfiguration's caBundle is empty as rendered (the
 # chart expects a cert-manager cainjector annotation, but cert-manager isn't
 # creating the Certificate). Patch it from the prestaged secret's ca.crt.

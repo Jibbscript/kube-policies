@@ -125,18 +125,6 @@ Create the namespace for monitoring resources
 {{- end }}
 
 {{/*
-Generate certificates for admission webhook
-*/}}
-{{- define "kube-policies.gen-certs" -}}
-{{- $altNames := list ( printf "%s.%s" (include "kube-policies.webhookServiceName" .) .Release.Namespace ) ( printf "%s.%s.svc" (include "kube-policies.webhookServiceName" .) .Release.Namespace ) -}}
-{{- $ca := genCA "kube-policies-ca" 365 -}}
-{{- $cert := genSignedCert ( include "kube-policies.webhookServiceName" . ) nil $altNames 365 $ca -}}
-tls.crt: {{ $cert.Cert | b64enc }}
-tls.key: {{ $cert.Key | b64enc }}
-ca.crt: {{ $ca.Cert | b64enc }}
-{{- end -}}
-
-{{/*
 Return the appropriate apiVersion for RBAC resources
 */}}
 {{- define "kube-policies.rbac.apiVersion" -}}
@@ -177,6 +165,42 @@ Return the target Kubernetes version
 {{- end -}}
 
 {{/*
+Render a full image reference, choosing between:
+  - {{ registry }}/{{ repository }}:{{ tag }}     when registry is non-empty AND
+                                                  repository's first slash-segment
+                                                  does NOT contain a "." or ":" and
+                                                  is NOT exactly "localhost".
+  - {{ repository }}:{{ tag }}                    when registry is empty OR repository
+                                                  looks like a fully-qualified ref.
+
+Detection: a "fully-qualified" repository is one whose first slash-separated segment:
+  - contains "." (e.g., docker.io, ghcr.io, quay.io), OR
+  - contains ":" (e.g., localhost:5001), OR
+  - is exactly "localhost".
+
+This intentionally suppresses a global registry mirror override when the
+repository already encodes a registry — applying both would double-prefix.
+Operators wanting a mirror should either set image.repository to a host-less
+path (e.g., "kube-policies/admission-webhook") and set image.registry to the
+mirror host, OR override the full repository (including the host) and leave
+image.registry empty.
+
+Inputs: a dict with keys {registry, repository, tag, defaultTag}.
+*/}}
+{{- define "kube-policies.image" -}}
+{{- $registry := .registry | default "" -}}
+{{- $repository := required "kube-policies.image: repository is required" .repository -}}
+{{- $tag := .tag | default .defaultTag -}}
+{{- $first := (split "/" $repository)._0 -}}
+{{- $qualified := or (contains "." $first) (or (contains ":" $first) (eq $first "localhost")) -}}
+{{- if or (eq $registry "") $qualified -}}
+{{ $repository }}:{{ $tag }}
+{{- else -}}
+{{ $registry }}/{{ $repository }}:{{ $tag }}
+{{- end -}}
+{{- end -}}
+
+{{/*
 Validate required values
 */}}
 {{- define "kube-policies.validateValues" -}}
@@ -185,6 +209,27 @@ Validate required values
 {{- end -}}
 {{- if and .Values.policyManager.enabled (not .Values.policyManager.image.repository) -}}
 {{- fail "policyManager.image.repository is required when policyManager is enabled" -}}
+{{- end -}}
+{{- if and .Values.admissionWebhook.enabled (ne (.Values.admissionWebhook.image.registry | default "") "") -}}
+  {{- $first := (split "/" .Values.admissionWebhook.image.repository)._0 -}}
+  {{- if or (contains "." $first) (or (contains ":" $first) (eq $first "localhost")) -}}
+    {{- fail (printf "admissionWebhook.image: registry=%q AND repository=%q where repository's first slash-segment %q looks fully-qualified. Set image.registry='' OR set image.repository to a host-less path. See NOTES.txt." .Values.admissionWebhook.image.registry .Values.admissionWebhook.image.repository $first) -}}
+  {{- end -}}
+{{- end -}}
+{{- if and .Values.policyManager.enabled (ne (.Values.policyManager.image.registry | default "") "") -}}
+  {{- $first := (split "/" .Values.policyManager.image.repository)._0 -}}
+  {{- if or (contains "." $first) (or (contains ":" $first) (eq $first "localhost")) -}}
+    {{- fail (printf "policyManager.image: registry=%q AND repository=%q where repository's first slash-segment %q looks fully-qualified. Set image.registry='' OR set image.repository to a host-less path. See NOTES.txt." .Values.policyManager.image.registry .Values.policyManager.image.repository $first) -}}
+  {{- end -}}
+{{- end -}}
+{{- if and .Values.dashboard.enabled (ne (.Values.dashboard.image.registry | default "") "") -}}
+  {{- $first := (split "/" .Values.dashboard.image.repository)._0 -}}
+  {{- if or (contains "." $first) (or (contains ":" $first) (eq $first "localhost")) -}}
+    {{- fail (printf "dashboard.image: registry=%q AND repository=%q where repository's first slash-segment %q looks fully-qualified. Set image.registry='' OR set image.repository to a host-less path. See NOTES.txt." .Values.dashboard.image.registry .Values.dashboard.image.repository $first) -}}
+  {{- end -}}
+{{- end -}}
+{{- if and .Values.admissionWebhook.enabled (not .Values.admissionWebhook.tls.autoGenerate) (not (and .Values.admissionWebhook.tls.caCert .Values.admissionWebhook.tls.cert .Values.admissionWebhook.tls.key)) -}}
+  {{- /* The render-time fail in admission-webhook-tls.yaml is the actual guard. This is a friendlier pre-render check. */ -}}
 {{- end -}}
 {{- end -}}
 

@@ -1,0 +1,97 @@
+{{- if .Values.admissionWebhook.enabled -}}
+{{- $secretName := printf "%s-admission-webhook-certs" (include "kube-policies.fullname" .) -}}
+{{- $existingSecret := lookup "v1" "Secret" .Release.Namespace $secretName -}}
+{{- $tlsCrt := "" -}}
+{{- $tlsKey := "" -}}
+{{- $caBundle := "" -}}
+
+{{- /* Three-branch render order (per A1/C2):
+       1. lookup-preserve: existing Secret takes precedence (upgrade idempotence,
+          preserves cert-manager-provided material, RBAC-blocked-lookup degrades to fresh-gen).
+       2. inline-pem: operator-supplied tls.caCert/tls.cert/tls.key (autoGenerate=false path).
+       3. gen-certs: chart-generated self-signed CA + leaf when autoGenerate=true.
+       The single-file scope is REQUIRED — Helm lookup queries the live API server at
+       render time, NOT the current release's pending manifests, so a separate Secret
+       template + VWHC template + cross-template lookup would render caBundle="" on
+       first install. */ -}}
+
+{{- if and $existingSecret $existingSecret.data -}}
+  {{- $tlsCrt = index $existingSecret.data "tls.crt" | default "" -}}
+  {{- $tlsKey = index $existingSecret.data "tls.key" | default "" -}}
+  {{- $caBundle = index $existingSecret.data "ca.crt" | default "" -}}
+{{- else if and (not .Values.admissionWebhook.tls.autoGenerate) .Values.admissionWebhook.tls.caCert .Values.admissionWebhook.tls.cert .Values.admissionWebhook.tls.key -}}
+  {{- $tlsCrt = .Values.admissionWebhook.tls.cert | b64enc -}}
+  {{- $tlsKey = .Values.admissionWebhook.tls.key | b64enc -}}
+  {{- $caBundle = .Values.admissionWebhook.tls.caCert | b64enc -}}
+{{- else if .Values.admissionWebhook.tls.autoGenerate -}}
+  {{- $svc := printf "%s-admission-webhook" (include "kube-policies.fullname" .) -}}
+  {{- $ns := .Release.Namespace -}}
+  {{- /* Per A2/C3 — five DNS names + one IP, matching scripts/gen-webhook-cert.sh:53-58 verbatim. */ -}}
+  {{- $altNames := list
+       $svc
+       (printf "%s.%s" $svc $ns)
+       (printf "%s.%s.svc" $svc $ns)
+       (printf "%s.%s.svc.cluster.local" $svc $ns)
+       "localhost"
+  -}}
+  {{- $ca := genCA "kube-policies-webhook-ca" 365 -}}
+  {{- $cert := genSignedCert $svc (list "127.0.0.1") $altNames 365 $ca -}}
+  {{- $tlsCrt = $cert.Cert | b64enc -}}
+  {{- $tlsKey = $cert.Key | b64enc -}}
+  {{- $caBundle = $ca.Cert | b64enc -}}
+{{- else -}}
+  {{- /* Render-time fail-fast: no existing Secret, no inline PEM, autoGenerate=false.
+         The webhook would be installed with empty caBundle and reject all admissions. */ -}}
+  {{- fail (printf "admissionWebhook.tls: no Secret %s exists, no inline tls.caCert/cert/key provided, and tls.autoGenerate=false. Set tls.autoGenerate=true, OR run scripts/gen-webhook-cert.sh before helm install, OR supply tls.caCert/cert/key inline." $secretName) -}}
+{{- end -}}
+
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ $secretName }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kube-policies.labels" . | nindent 4 }}
+type: kubernetes.io/tls
+data:
+  tls.crt: {{ $tlsCrt | quote }}
+  tls.key: {{ $tlsKey | quote }}
+  ca.crt: {{ $caBundle | quote }}
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingWebhookConfiguration
+metadata:
+  name: {{ include "kube-policies.fullname" . }}-validating-webhook
+  labels:
+    {{- include "kube-policies.labels" . | nindent 4 }}
+webhooks:
+  - name: validate.kube-policies.io
+    admissionReviewVersions: ["v1"]
+    sideEffects: None
+    failurePolicy: {{ .Values.admissionWebhook.webhook.failurePolicy | default "Fail" }}
+    timeoutSeconds: {{ .Values.admissionWebhook.webhook.timeoutSeconds | default 10 }}
+    clientConfig:
+      service:
+        name: {{ include "kube-policies.fullname" . }}-admission-webhook
+        namespace: {{ .Release.Namespace }}
+        path: /validate
+        port: 8443
+      caBundle: {{ $caBundle | quote }}
+    rules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["pods"]
+        scope: "Namespaced"
+    namespaceSelector:
+      matchExpressions:
+        - key: kubernetes.io/metadata.name
+          operator: NotIn
+          values:
+            - kube-system
+            - kube-public
+            - kube-node-lease
+            - local-path-storage
+            - {{ .Release.Namespace }}
+{{- end }}
