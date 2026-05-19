@@ -253,6 +253,12 @@ security: ## Run security scans
 check-logger-wiring: ## Verify no direct .SetLogger or ctrl-runtime/klog imports outside pkg/logger/
 	bash scripts/check-logger-wiring.sh
 
+.PHONY: validate-manifests
+validate-manifests: ## Validate Helm, Kubernetes, Prometheus, Alertmanager, and dashboard artifacts offline
+	@echo "$(BLUE)Validating deployment artifacts offline...$(NC)"
+	bash scripts/validate/manifests.sh
+	@echo "$(GREEN)Deployment artifact validation completed$(NC)"
+
 .PHONY: check
 check: lint vet security check-logger-wiring ## Run all quality checks
 
