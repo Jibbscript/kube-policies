@@ -3,7 +3,7 @@
 FROM --platform=${BUILDPLATFORM:-linux/amd64} golang:1.25-alpine AS builder
 
 # Install build dependencies
-RUN apk add --no-cache git ca-certificates tzdata
+RUN apk add --no-cache git ca-certificates tzdata curl
 
 # Set working directory
 WORKDIR /workspace
@@ -11,8 +11,21 @@ WORKDIR /workspace
 # Copy go mod files
 COPY go.mod go.sum ./
 
-# Download dependencies
-RUN go mod download
+# Download dependencies with retry logic via shell
+RUN set -e; \
+    for attempt in 1 2 3; do \
+      echo "Download attempt $attempt..."; \
+      if go mod download -x 2>&1; then \
+        echo "Download successful"; \
+        break; \
+      elif [ $attempt -lt 3 ]; then \
+        echo "Download failed, retrying in 5s..."; \
+        sleep 5; \
+      else \
+        echo "Download failed after 3 attempts"; \
+        exit 1; \
+      fi; \
+    done
 
 # Copy source code
 COPY . .
@@ -33,6 +46,11 @@ RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build \
 
 # Final stage
 FROM gcr.io/distroless/static:nonroot
+
+# Re-declare ARGs for final stage
+ARG VERSION=dev
+ARG COMMIT=unknown
+ARG DATE=unknown
 
 # Copy CA certificates
 COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
@@ -56,5 +74,7 @@ LABEL org.opencontainers.image.vendor="Enterprise"
 LABEL org.opencontainers.image.licenses="Apache-2.0"
 LABEL org.opencontainers.image.source="https://github.com/Jibbscript/kube-policies"
 LABEL org.opencontainers.image.documentation="https://docs.kube-policies.io"
-LABEL org.opencontainers.image.version="${VERSION}"
+LABEL org.opencontainers.image.version="${VERSION}" \
+      org.opencontainers.image.revision="${COMMIT}" \
+      org.opencontainers.image.created="${DATE}"
 
