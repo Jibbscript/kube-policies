@@ -2,15 +2,18 @@
 
 ## Overview
 
-This repository contains a comprehensive, production-ready implementation of **Kube-Policies**, an enterprise-grade Kubernetes policy enforcement system inspired by Block's (Square) blog post on Kubernetes guardrails. The solution provides comprehensive security controls, compliance monitoring, and governance capabilities for containerized applications.
+This repository contains a **Proof-of-Concept / reference implementation** of **Kube-Policies**, a Kubernetes admission-control and policy-management system inspired by Block's (Square) blog post on Kubernetes guardrails. It demonstrates admission-time policy enforcement, exception handling, audit, and a read-only dashboard. It is **not yet production-ready or authorized**: it is being driven to **FedRAMP-Moderate** (NIST SP 800-53 Rev 5) and **CIS** readiness, with most security controls currently **Planned** or **Partial**. See the compliance evidence package under [`docs/compliance/`](docs/compliance/README.md) — in particular the [FIPS-199 categorization](docs/compliance/categorization/FIPS-199.md), the [control matrix](docs/compliance/control-matrix.csv), and the [POA&M](docs/compliance/POAM.md) of open weaknesses — for the authoritative, evidence-backed status.
 
 ## Architecture Highlights
 
-### Core Design Principles
-- **Defense in Depth**: Multi-layered security with admission control, runtime monitoring, and compliance reporting
-- **Zero Trust Architecture**: mTLS communication, encryption at rest/transit, and minimal privilege access
-- **Cloud Native**: Built for Kubernetes with CRDs, operators, and cloud-native patterns
-- **Enterprise Ready**: High availability, scalability, comprehensive audit, and enterprise integrations
+### Core Design Targets
+
+> These are the intended design properties; current per-control status is tracked in [`docs/compliance/control-matrix.csv`](docs/compliance/control-matrix.csv). Several are aspirational and are being phased in across P1–P12 — they are not asserted as currently implemented.
+
+- **Defense in Depth**: admission control today; runtime monitoring and broader controls *(Planned — P9/P10)*
+- **Zero Trust** *(Target — P2/P3/P4)*: mTLS between services, encryption in transit/at-rest, and least-privilege are Planned; today only the admission webhook serves TLS 1.3
+- **Cloud Native**: Kubernetes-native via CRDs, admission webhook, and controllers (no separate operator today)
+- **Enterprise Readiness** *(Target)*: high availability, scalability, durable audit, and SSO/integrations are Planned/Partial (P3/P7/P8)
 
 ### System Components
 
@@ -27,10 +30,10 @@ This repository contains a comprehensive, production-ready implementation of **K
    - GitOps-enabled policy deployment
 
 3. **Audit and Compliance Subsystem**
-   - Comprehensive audit logging (`internal/audit/`)
+   - Audit logging (`internal/audit/`)
    - Pluggable backend support (file, stdout)
-   - Tamper-evident audit trails
-   - Compliance reporting for CIS, NIST, PCI DSS
+   - Tamper-evidence, durable storage, and SIEM forwarding *(Planned — P7)*
+   - Compliance status tracked in [`docs/compliance/`](docs/compliance/README.md) (NIST 800-53 / FedRAMP-Moderate target; CIS mapping Planned — P10)
 
 4. **Observability and Monitoring**
    - Prometheus metrics (`internal/metrics/`)
@@ -43,27 +46,29 @@ This repository contains a comprehensive, production-ready implementation of **K
    - Environment-specific settings
    - Security-first defaults
 
-## Key Features Implemented
+## Key Features (PoC status: Implemented / Partial / Planned)
+
+> Status reflects the honest control posture in [`docs/compliance/control-matrix.csv`](docs/compliance/control-matrix.csv); open gaps are tracked in the [POA&M](docs/compliance/POAM.md).
 
 ### Security Controls
-- **Real-time Policy Enforcement**: Sub-millisecond policy evaluation
-- **Comprehensive Security Policies**: Built-in CIS Kubernetes Benchmark compliance
-- **Multi-Tenant Support**: Hierarchical policy inheritance with tenant isolation
-- **Exception Management**: Structured exception handling with approval workflows
-- **Security Hardening**: mTLS, encryption, and zero-trust principles
+- **Real-time Policy Enforcement** *(Implemented)*: OPA/Rego policy evaluation at admission
+- **CIS / Pod Security policy pack** *(Planned — P10)*: the bundled rule set is currently minimal and does not yet traverse `spec.template.spec`
+- **Multi-Tenant Support** *(Partial)*: namespaced `Policy`/`PolicyException` CRDs; tenant-isolation hardening Planned
+- **Exception Management** *(Implemented)*: structured `PolicyException` handling with attribution
+- **Security Hardening** *(Partial)*: TLS 1.3 on the webhook; mTLS, encryption-at-rest, and zero-trust are Planned (P2/P3/P4)
 
 ### Enterprise Capabilities
-- **High Availability**: Multi-zone deployment with automatic failover
-- **Scalability**: Horizontal scaling with intelligent caching
-- **Audit Compliance**: Comprehensive audit logging with multiple backends
-- **API-First Design**: REST APIs for all management operations
-- **Integration Ready**: Enterprise SSO, RBAC, and webhook support
+- **High Availability** *(Planned — P8)*: PDB, anti-affinity, and HA policy-manager are not yet in the chart
+- **Scalability** *(Partial)*: prepared-query caching today; horizontal scaling / HPA Planned (P8)
+- **Audit logging** *(Partial)*: file/stdout backends today; durability, integrity, and retention Planned (P7)
+- **API-First Design** *(Implemented)*: REST APIs for management operations (authentication Planned — P3)
+- **Integration** *(Partial)*: admission webhook support Implemented; OIDC SSO and application RBAC Planned (P3)
 
 ### Developer Experience
-- **Policy as Code**: GitOps-enabled policy management
-- **Testing Framework**: Comprehensive policy testing and validation
-- **Documentation**: Complete arc42 architecture documentation
-- **CI/CD Ready**: Automated build, test, and deployment pipelines
+- **Policy as Code**: Git-managed policy resources
+- **Testing Framework**: policy unit/integration tests (coverage gates Planned — P11)
+- **Documentation**: architecture/operations docs under [`docs/`](docs/) and the compliance package under [`docs/compliance/`](docs/compliance/README.md)
+- **CI/CD**: build/test/deploy pipelines (toolchain-trust + security gates Planned — P1/P6/P11)
 
 ## Repository Structure
 
@@ -103,7 +108,7 @@ kube-policies/
 ## Technical Implementation
 
 ### Technology Stack
-- **Language**: Go 1.21+ for high performance and cloud-native compatibility
+- **Language**: Go 1.25 (see `go.mod`)
 - **Policy Engine**: Open Policy Agent (OPA) with Rego for flexible policy definition
 - **Web Framework**: Gin for high-performance HTTP services
 - **Metrics**: Prometheus for comprehensive observability
@@ -111,41 +116,40 @@ kube-policies/
 - **Configuration**: Viper for flexible configuration management
 - **Container Runtime**: Distroless images for security and minimal attack surface
 
-### Security Architecture
-- **Network Security**: mTLS for all inter-service communication
-- **Identity Management**: Kubernetes RBAC with enterprise SSO integration
-- **Data Protection**: AES-256 encryption at rest, TLS 1.3 in transit
-- **Vulnerability Management**: Automated container scanning and dependency updates
-- **Audit Compliance**: Tamper-evident audit logs with digital signatures
+### Security Architecture (target vs. current)
+- **Network Security**: TLS 1.3 on the admission webhook today; mTLS between services and default-deny NetworkPolicy are **Planned (P3/P4)** — see [POA&M](docs/compliance/POAM.md)
+- **Identity Management**: Kubernetes RBAC today (least-privilege split **Planned — P3**); OIDC SSO for the API/dashboard **Planned (P3)**
+- **Data Protection**: TLS 1.3 in transit on the webhook; encryption-at-rest is **CSP-inherited / Planned (P2)** — KP does not implement at-rest encryption itself
+- **Vulnerability Management**: **Planned (P6/P11)** — gating image/dependency scanning is not yet enforced in CI
+- **Audit Integrity**: **Planned (P7)** — tamper-evident audit logging with integrity chaining is not yet implemented
 
-### Performance Characteristics
-- **Latency**: Sub-millisecond policy evaluation with intelligent caching
-- **Throughput**: Handles thousands of admission requests per second
-- **Scalability**: Horizontal scaling with load balancing
-- **Resource Efficiency**: Optimized memory usage and CPU utilization
-- **High Availability**: Multi-zone deployment with automatic failover
+### Performance Characteristics (design targets — not yet independently benchmarked)
+- **Latency**: low-latency policy evaluation with prepared-query caching
+- **Throughput**: target of high admission-request throughput (not yet load-tested — see P11)
+- **Scalability**: horizontal scaling / HPA *(Planned — P8)*
+- **Resource Efficiency**: resource requests/limits to be enforced in the chart *(Planned — P5)*
+- **High Availability**: PDB, anti-affinity, and HA policy-manager *(Planned — P8)*
 
-## Compliance Frameworks Supported
+## Compliance Posture (PoC — in progress)
 
-### Built-in Compliance
-- **CIS Kubernetes Benchmark v1.8.0**: Complete implementation of security controls
-- **NIST Cybersecurity Framework 2.0**: Core security functions and controls
-- **PCI DSS v4.0**: Payment card industry security requirements
-- **SOX Compliance**: Financial reporting and audit controls
-- **HIPAA**: Healthcare data protection requirements
+This system is being driven toward **FIPS-199 Moderate** under **NIST SP 800-53 Rev 5 (FedRAMP Moderate baseline)** and **CIS** readiness. It is **not yet authorized** and makes no claim of completed compliance with any framework. Status is tracked honestly in the compliance evidence package; most controls are currently **Planned** or **Partial**. See the [compliance index](docs/compliance/README.md) for the full artifact set.
 
-### Custom Frameworks
-- Extensible framework for organization-specific compliance requirements
-- Policy templating for rapid compliance implementation
-- Automated compliance reporting and evidence collection
+### Target frameworks and current status
+- **NIST SP 800-53 Rev 5 / FedRAMP Moderate**: target baseline. Control-by-control status (Implemented | Partial | Planned | Inherited | Customer | Not-Applicable) is recorded in the [control matrix](docs/compliance/control-matrix.csv) and summarized in [control-matrix.md](docs/compliance/control-matrix.md).
+- **FIPS-199**: categorized **Moderate** — see the [FIPS-199 / FIPS-200 categorization](docs/compliance/categorization/FIPS-199.md).
+- **CIS Kubernetes Benchmark / NIST SP 800-190**: a self-assessment crosswalk (DOC-WU-29) is **planned for phase P10**; it is not yet authored. The bundled default Pod guardrails (privileged containers, `hostPath`, `:latest` images, missing security context) are illustrative starting points, not a verified benchmark implementation.
+
+### Open weaknesses and remediation
+- Known foundational gaps are tracked in the [POA&M](docs/compliance/POAM.md) and remediated across phases **P1–P12** (see `.omc/plans/PRODUCTION-READINESS-FEDRAMP-CIS.md`).
+- Shared, customer, and inherited responsibilities are described in the [Customer Responsibility Matrix (CRM)](docs/compliance/CRM.md).
 
 ## Deployment Options
 
-### Production Deployment
-- **Kubernetes Native**: Full Kubernetes deployment with CRDs and operators
-- **Helm Charts**: Parameterized deployment with environment-specific values
-- **GitOps Ready**: ArgoCD/Flux integration for automated deployments
-- **Multi-Cluster**: Cross-cluster policy distribution and management
+### Deployment (reference / PoC)
+- **Kubernetes Native**: deployment via CRDs, the admission webhook, and controllers (no separate operator today)
+- **Helm Charts**: parameterized deployment with environment-specific values
+- **GitOps**: chart is GitOps-compatible (ArgoCD/Flux) for managed environments
+- **Multi-Cluster**: cross-cluster policy distribution *(Planned — not implemented)*
 
 ### Development Environment
 - **Local Development**: Docker Compose for local testing
@@ -186,17 +190,16 @@ make dev-start
 ## Documentation
 
 ### Architecture Documentation
-- **arc42 Architecture**: Complete architectural documentation following arc42 template
-- **System Context**: High-level system overview and external interfaces
-- **Component Architecture**: Detailed component design and interactions
-- **Deployment Architecture**: Production deployment patterns and configurations
-- **Security Architecture**: Comprehensive security design and controls
+- **Security Architecture**: see [docs/compliance/security-architecture.md](docs/compliance/security-architecture.md) and the [authorization-boundary](docs/compliance/diagrams/authorization-boundary.md) / [data-flow](docs/compliance/diagrams/data-flow.md) diagrams
+- **System Context**: high-level overview and external interfaces (see [system-facts](docs/compliance/system-facts.md))
+- **Component Architecture**: component design and interactions
+- **arc42 architecture document** *(Planned)*: not yet authored
 
 ### API Documentation
-- **REST API**: Complete OpenAPI/Swagger documentation
 - **Kubernetes API**: Custom Resource Definitions and API extensions
 - **Policy Language**: Rego policy development guide
-- **Integration Guide**: Enterprise system integration patterns
+- **REST API**: OpenAPI/Swagger specification *(Planned — P3/P11)*: not yet published
+- **Integration Guide** *(Planned)*
 
 ### Operational Documentation
 - **Installation Guide**: Step-by-step deployment instructions
@@ -207,18 +210,18 @@ make dev-start
 ## Quality Assurance
 
 ### Testing Strategy
-- **Unit Tests**: Comprehensive unit test coverage (>90%)
-- **Integration Tests**: Component integration validation
-- **End-to-End Tests**: Full system workflow testing
-- **Policy Tests**: Automated policy validation and testing
-- **Performance Tests**: Load testing and benchmarking
+- **Unit Tests**: present across most packages; an enforced coverage gate is *(Planned — P11)* (no verified ≥90% claim today)
+- **Integration Tests**: component integration validation
+- **End-to-End Tests**: Kind-based workflow testing
+- **Policy Tests**: policy validation/testing (golden-file harness expanded in P10)
+- **Performance Tests** *(Planned — P11)*: load testing and benchmarking
 
-### Security Validation
-- **Static Analysis**: Automated code security scanning
-- **Dependency Scanning**: Vulnerability assessment of dependencies
-- **Container Scanning**: Image vulnerability assessment
-- **Penetration Testing**: Regular security assessments
-- **Compliance Validation**: Automated compliance checking
+### Security Validation (mostly Planned — see phases P6/P11)
+- **Static Analysis** *(Planned — P11)*: gating SAST (CodeQL/gosec) not yet enforced
+- **Dependency Scanning** *(Planned — P6/P11)*: govulncheck/SCA gating not yet enforced
+- **Container Scanning** *(Planned — P6)*: image scan present but not gating
+- **Penetration Testing** *(Planned — P12)*: plan authored in P0; execution not yet staffed
+- **Compliance Validation**: offline artifact checks via `make validate-compliance` (Implemented); control-level assessment *(Planned — P12)*
 
 ### Code Quality
 - **Linting**: Automated code quality checks

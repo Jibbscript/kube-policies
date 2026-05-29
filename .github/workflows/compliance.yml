@@ -1,0 +1,27 @@
+name: Compliance
+
+# Offline validation of the docs/compliance artifacts (control matrix, POA&M,
+# inventory <-> boundary consistency, and relative markdown links). Additive
+# and self-contained: requires only Python (no Helm/kube toolchain).
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  validate-compliance:
+    name: Validate compliance artifacts
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Validate compliance artifacts
+        run: make validate-compliance

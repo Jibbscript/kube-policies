@@ -1,0 +1,301 @@
+control_id,title,family,baseline,status,responsible_party,implementing_artifact,remediating_phase,poam_id,notes
+AC-1,Policy and Procedures,AC,Moderate,Planned,CSP,see P12,P12,POAM-010,Access-control -1 policy not yet authored; drafted at SSP finalization.
+AC-2,Account Management,AC,Moderate,Planned,System,see P3,P3,POAM-001,No app-plane account model; OIDC principals + lifecycle defined in P3.
+AC-2(1),Account Management | Automated System Account Management,AC,Moderate,Planned,System,see P3,P3,POAM-001,Automated account mgmt depends on P3 IdP integration.
+AC-2(2),Account Management | Automated Temporary and Emergency Account Management,AC,Moderate,Planned,System,see P3,P3,,Temporary/emergency account expiry handled by inherited IdP + P3.
+AC-2(3),Account Management | Disable Accounts,AC,Moderate,Planned,System,see P3,P3,,Account disablement via IdP; integrated in P3.
+AC-2(4),Account Management | Automated Audit Actions,AC,Moderate,Planned,System,see P3,P3,,Account-mgmt audit events depend on P3 authn + P7 audit pipeline.
+AC-2(5),Account Management | Inactivity Logout,AC,Moderate,Planned,System,see P3,P3,,Session inactivity logout to be enforced by dashboard OIDC session (P3).
+AC-2(12),Account Management | Account Monitoring for Atypical Usage,AC,Moderate,Planned,Shared,see P9,P9,,Atypical-usage detection via SIEM/alerting in P9.
+AC-2(13),Account Management | Disable Accounts for High-Risk Individuals,AC,Moderate,Planned,CSP,see P12,P12,,Procedural; depends on CSP HR/IdP process.
+AC-3,Access Enforcement,AC,Moderate,Planned,System,see P3,P3,POAM-001,Data-plane unauthenticated today; authZ middleware + RBAC least-priv in P3.
+AC-4,Information Flow Enforcement,AC,Moderate,Planned,System,"charts/kube-policies/templates/ (NetworkPolicy, P4)",P4,POAM-004,No NetworkPolicy exists; default-deny + scoped flows in P4.
+AC-5,Separation of Duties,AC,Moderate,Planned,System,see P3,P3,,Role separation defined alongside RBAC split in P3.
+AC-6,Least Privilege,AC,Moderate,Partial,System,charts/kube-policies/templates/rbac.yaml,P3,POAM-001,Bright spot: pods runAsNonRoot/drop-ALL caps; SA RBAC still over-broad/shared (P3).
+AC-6(1),Least Privilege | Authorize Access to Security Functions,AC,Moderate,Planned,System,charts/kube-policies/templates/rbac.yaml,P3,,Security-function authZ refined in P3 RBAC split.
+AC-6(2),Least Privilege | Non-Privileged Access for Nonsecurity Functions,AC,Moderate,Partial,System,charts/kube-policies/values.yaml,P5,,"Bright spot: containers run non-root, no privilege escalation; formalized in P5."
+AC-6(5),Least Privilege | Privileged Accounts,AC,Moderate,Planned,System,see P3,P3,,Privileged-account restriction handled by RBAC least-priv in P3.
+AC-6(7),Least Privilege | Review of User Privileges,AC,Moderate,Planned,CSP,see P12,P12,,Periodic privilege review is a procedural control (P12).
+AC-6(9),Least Privilege | Log Use of Privileged Functions,AC,Moderate,Planned,System,see P7,P7,,Privileged-function logging depends on P3 authn + P7 audit.
+AC-6(10),Least Privilege | Prohibit Non-Privileged Users from Executing Privileged Functions,AC,Moderate,Planned,System,see P3,P3,,Enforced via authZ middleware in P3.
+AC-7,Unsuccessful Logon Attempts,AC,Moderate,Inherited,Customer,Inherited from IdP/CSP,P3,,Lockout thresholds inherited from federated IdP; verified in P3.
+AC-8,System Use Notification,AC,Moderate,Planned,System,see P3,P3,,Login banner to be added to dashboard OIDC login (P3).
+AC-11,Device Lock,AC,Moderate,Inherited,Customer,Inherited from operator endpoints,P12,,Endpoint/device lock is an operator-workstation control; inherited.
+AC-11(1),Device Lock | Pattern-Hiding Displays,AC,Moderate,Inherited,Customer,Inherited from operator endpoints,P12,,Endpoint control; inherited.
+AC-12,Session Termination,AC,Moderate,Planned,System,see P3,P3,,Automatic session termination via dashboard OIDC session mgmt (P3).
+AC-14,Permitted Actions Without Identification or Authentication,AC,Moderate,Planned,System,cmd/dashboard/proxy.go,P3,,Define unauthenticated-allowed actions (healthz/readyz); rest gated in P3.
+AC-17,Remote Access,AC,Moderate,Planned,System,see P3,P3,POAM-003,Dashboard/API reachable without TLS+authn today; remote-access protection in P3.
+AC-17(1),Remote Access | Monitoring and Control,AC,Moderate,Planned,Shared,see P9,P9,,Remote-access monitoring via ConMon/SIEM in P9.
+AC-17(2),Remote Access | Protection of Confidentiality and Integrity Using Encryption,AC,Moderate,Planned,System,see P3,P3,POAM-003,TLS termination for management plane added in P3.
+AC-17(3),Remote Access | Managed Access Control Points,AC,Moderate,Planned,Shared,see P4,P4,,Managed access points via ingress + NetworkPolicy in P4.
+AC-17(4),Remote Access | Privileged Commands and Access,AC,Moderate,Planned,System,see P3,P3,,Privileged remote commands gated by authZ in P3.
+AC-18,Wireless Access,AC,Moderate,Not-Applicable,Customer,N/A - no wireless in boundary,P3,,System has no wireless components; inherited infra control.
+AC-18(1),Wireless Access | Authentication and Encryption,AC,Moderate,Not-Applicable,Customer,N/A - no wireless in boundary,P3,,No wireless components in boundary.
+AC-19,Access Control for Mobile Devices,AC,Moderate,Inherited,Customer,Inherited from CSP/operator MDM,P12,,Mobile-device control inherited from operator org.
+AC-20,Use of External Systems,AC,Moderate,Planned,CSP,see P12,P12,,External-system rules of behavior authored in P12.
+AC-20(1),Use of External Systems | Limits on Authorized Use,AC,Moderate,Planned,CSP,see P12,P12,,Procedural; authored in P12.
+AC-20(2),Use of External Systems | Portable Storage Devices - Restricted Use,AC,Moderate,Planned,CSP,see P12,P12,,Procedural; authored in P12.
+AC-21,Information Sharing,AC,Moderate,Planned,CSP,see P12,P12,,Procedural; authored in P12.
+AC-22,Publicly Accessible Content,AC,Moderate,Not-Applicable,System,N/A - no public content service,P3,,System publishes no public-facing content; admin-only planes.
+AT-1,Policy and Procedures,AT,Moderate,Planned,CSP,see P12,P12,POAM-010,AT -1 policy authored in P12.
+AT-2,Literacy Training and Awareness,AT,Moderate,Planned,CSP,see P12,P12,,Org security-awareness program (P12).
+AT-2(2),Literacy Training and Awareness | Insider Threat,AT,Moderate,Planned,CSP,see P12,P12,,Insider-threat awareness module (P12).
+AT-2(3),Literacy Training and Awareness | Social Engineering and Mining,AT,Moderate,Planned,CSP,see P12,P12,,Social-engineering awareness module (P12).
+AT-3,Role-Based Training,AT,Moderate,Planned,CSP,see P12,P12,,Role-based training for ISSO/admins (P12).
+AT-4,Training Records,AT,Moderate,Planned,CSP,see P12,P12,,Training-record retention (P12).
+AU-1,Policy and Procedures,AU,Moderate,Planned,CSP,see P12,P12,POAM-010,AU -1 policy authored in P12.
+AU-2,Event Logging,AU,Moderate,Partial,System,internal/audit/logger.go,P7,POAM-002,Bright spot: webhook logs every allow/deny decision; mgmt-plane events + event-list completeness in P7.
+AU-3,Content of Audit Records,AU,Moderate,Partial,System,internal/audit/logger.go,P7,POAM-002,Event struct captures who/what/when/decision; missing src IP/UA/req-URI added in P7.
+AU-3(1),Content of Audit Records | Additional Audit Information,AU,Moderate,Planned,System,internal/audit/logger.go,P7,POAM-002,"Add source IP, user-agent, request-URI, apiserver-id in P7."
+AU-4,Audit Log Storage Capacity,AU,Moderate,Planned,System,charts/kube-policies/templates/policy-manager-pvc.yaml,P7,POAM-002,Audit currently on emptyDir; durable PVC + capacity sizing in P7.
+AU-5,Response to Audit Logging Process Failures,AU,Moderate,Planned,System,see P7,P7,,Audit-failure alerting wired in P7/P9.
+AU-6,"Audit Record Review, Analysis, and Reporting",AU,Moderate,Planned,Shared,see P9,P9,,Central review/SIEM analysis stood up in P9.
+AU-6(1),Audit Record Review | Automated Process Integration,AU,Moderate,Planned,Shared,see P9,P9,,Automated SIEM correlation in P9.
+AU-6(3),Audit Record Review | Correlate Audit Record Repositories,AU,Moderate,Planned,Shared,see P9,P9,,Cross-repository correlation in P9.
+AU-7,Audit Record Reduction and Report Generation,AU,Moderate,Planned,Shared,see P9,P9,,Reduction/reporting provided by SIEM in P9.
+AU-7(1),Audit Record Reduction | Automatic Processing,AU,Moderate,Planned,Shared,see P9,P9,,Automatic query/processing in SIEM (P9).
+AU-8,Time Stamps,AU,Moderate,Partial,System,internal/audit/logger.go,P7,,Records carry timestamps; dual-UTC + authoritative time source formalized in P7.
+AU-9,Protection of Audit Information,AU,Moderate,Planned,System,internal/audit/logger.go,P7,POAM-002,No tamper protection today; HMAC signing + access restriction in P7.
+AU-9(2),Protection of Audit Information | Store on Separate Physical Systems or Components,AU,Moderate,Planned,Shared,see P7,P7,,Forwarding to separate SIEM store in P7/P9.
+AU-9(3),Protection of Audit Information | Cryptographic Protection,AU,Moderate,Planned,System,internal/audit/logger.go,P7,POAM-002,HMAC chain over audit records added in P7.
+AU-9(4),Protection of Audit Information | Access by Subset of Privileged Users,AU,Moderate,Planned,System,see P7,P7,,Restrict audit access to ISSO subset; RBAC in P3/P7.
+AU-11,Audit Record Retention,AU,Moderate,Planned,Shared,see P7,P7,,Retention policy (FedRAMP) set in P7; long-term in SIEM (P9).
+AU-12,Audit Record Generation,AU,Moderate,Partial,System,internal/admission/controller.go,P7,,Webhook generates decision records; mgmt-plane API audit generation added in P7.
+AU-12(1),Audit Record Generation | System-Wide and Time-Correlated Audit Trail,AU,Moderate,Planned,System,see P7,P7,,System-wide correlated trail across components in P7/P9.
+CA-1,Policy and Procedures,CA,Moderate,Planned,CSP,see P12,P12,POAM-010,CA -1 policy authored in P12.
+CA-2,Control Assessments,CA,Moderate,Planned,CSP,see P12,P12,,Independent assessment scheduled in P12.
+CA-2(1),Control Assessments | Independent Assessors,CA,Moderate,Planned,CSP,see P12,P12,,Independent Assessor (TBD - assign) engaged in P12.
+CA-2(2),Control Assessments | Specialized Assessments,CA,Moderate,Planned,CSP,see P12,P12,,Pen test + specialized assessment in P12.
+CA-2(3),Control Assessments | Leveraging Results from External Organizations,CA,Moderate,Planned,CSP,see P12,P12,,Leverage CSP/3PAO results in P12.
+CA-3,Information Exchange,CA,Moderate,Planned,System,docs/compliance/system-facts.md (ICX-01..06),P4,,Interconnections ICX-01..06 documented; agreements + scoped flows in P4.
+CA-5,Plan of Action and Milestones,CA,Moderate,Partial,CSP,docs/compliance/poam.csv,P0,,POA&M established (poam.csv); driven to closure across P1-P12.
+CA-6,Authorization,CA,Moderate,Planned,CSP,see P12,P12,,AO (TBD - assign) authorization decision in P12.
+CA-7,Continuous Monitoring,CA,Moderate,Planned,Shared,see P9,P9,,ConMon program stood up in P9.
+CA-7(1),Continuous Monitoring | Independent Assessment,CA,Moderate,Planned,CSP,see P12,P12,,Independent ConMon assessment in P12.
+CA-7(4),Continuous Monitoring | Risk Monitoring,CA,Moderate,Planned,Shared,see P9,P9,,Risk monitoring integrated with ConMon (P9).
+CA-8,Penetration Testing,CA,Moderate,Planned,CSP,see P12,P12,,Independent pen test in P12.
+CA-9,Internal System Connections,CA,Moderate,Planned,System,"docs/compliance/system-facts.md (ICX-02,04,06)",P4,,Internal connections (ICX-02/04/06) documented; mTLS/TLS in P4.
+CM-1,Policy and Procedures,CM,Moderate,Planned,CSP,see P12,P12,POAM-010,CM -1 policy authored in P12.
+CM-2,Baseline Configuration,CM,Moderate,Partial,System,charts/kube-policies/values.yaml,P5,,"Secure-config baseline exists (TLS1.3, fail-closed defaults); formalized + versioned in P5."
+CM-2(2),Baseline Configuration | Automation Support for Accuracy and Currency,CM,Moderate,Planned,System,charts/kube-policies/,P5,,Helm-rendered baseline + CI drift checks in P5.
+CM-2(3),Baseline Configuration | Retention of Previous Configurations,CM,Moderate,Planned,System,git history,P5,,Config retained in VCS; formalized in P5.
+CM-3,Configuration Change Control,CM,Moderate,Planned,System,see P11,P11,,Change-control via PR review + CI gates in P11.
+CM-3(2),"Configuration Change Control | Testing, Validation, and Documentation of Changes",CM,Moderate,Planned,System,see P11,P11,,Change testing via CI quality gates in P11.
+CM-4,Impact Analyses,CM,Moderate,Planned,System,see P11,P11,,Security-impact analysis in PR process (P11).
+CM-5,Access Restrictions for Change,CM,Moderate,Planned,System,see P1,P1,,Branch protection + CODEOWNERS + signed commits in P1.
+CM-6,Configuration Settings,CM,Moderate,Partial,System,internal/config/config.go,P5,,Config validation enforces TLS1.3/failure-mode; full CIS-restricted settings in P5.
+CM-6(1),"Configuration Settings | Automated Management, Application, and Verification",CM,Moderate,Planned,System,charts/kube-policies/,P5,,CI renders + verifies settings (helm template gate) in P5.
+CM-7,Least Functionality,CM,Moderate,Partial,System,charts/kube-policies/values.yaml,P5,,"Distroless images, dropped caps; restricted PSS + disabled services in P5."
+CM-7(1),Least Functionality | Periodic Review,CM,Moderate,Planned,System,see P5,P5,,Periodic review of enabled functions in P5/P11.
+CM-7(2),Least Functionality | Prevent Program Execution,CM,Moderate,Planned,System,internal/policy/engine.go,P10,,Image/exec policy enforcement extended in P10.
+CM-7(5),Least Functionality | Authorized Software - Allow-by-Exception,CM,Moderate,Planned,System,see P6,P6,,Image-signature/allowlist admission in P6/P10.
+CM-8,System Component Inventory,CM,Moderate,Partial,System,docs/compliance/inventory.csv,P0,,Inventory established (AST-* assets); kept current per release in P5/P6.
+CM-8(1),System Component Inventory | Updates During Installation and Removal,CM,Moderate,Planned,System,docs/compliance/inventory.csv,P6,,Inventory auto-updated from SBOM in P6.
+CM-8(3),System Component Inventory | Automated Unauthorized Component Detection,CM,Moderate,Planned,System,see P6,P6,,SBOM/scan-driven detection in P6.
+CM-9,Configuration Management Plan,CM,Moderate,Planned,CSP,see P12,P12,,CM plan authored in P12.
+CM-10,Software Usage Restrictions,CM,Moderate,Planned,CSP,see P12,P12,,Software-usage policy in P12.
+CM-11,User-Installed Software,CM,Moderate,Planned,System,charts/kube-policies/values.yaml,P5,,Immutable distroless images + readOnlyRootFilesystem restrict installs; formalized P5.
+CM-12,Information Location,CM,Moderate,Planned,System,docs/compliance/system-facts.md,P0,,"Information types IT-1..3 located in CRDs/audit; documented in facts sheet, finalized P12."
+CM-14,Signed Components,CM,Moderate,Planned,System,see P6,P6,POAM-006,Cosign signing + signature-verifying admission in P6.
+CP-1,Policy and Procedures,CP,Moderate,Planned,CSP,see P12,P12,POAM-010,CP -1 policy authored in P12.
+CP-2,Contingency Plan,CP,Moderate,Planned,Shared,see P8,P8,,Contingency plan authored in P8/P12.
+CP-2(1),Contingency Plan | Coordinate with Related Plans,CP,Moderate,Planned,CSP,see P12,P12,,Coordinate with IR/CSP DR plans in P12.
+CP-2(3),Contingency Plan | Resume Mission and Business Functions,CP,Moderate,Planned,Shared,see P8,P8,,Resumption objectives defined in P8.
+CP-2(8),Contingency Plan | Identify Critical Assets,CP,Moderate,Partial,System,docs/compliance/inventory.csv,P8,,Critical assets (AST-WH gatekeeper) identified in inventory; RTO/RPO in P8.
+CP-3,Contingency Training,CP,Moderate,Planned,CSP,see P12,P12,,Contingency training in P12.
+CP-4,Contingency Plan Testing,CP,Moderate,Planned,Shared,see P8,P8,,DR/restore testing in P8.
+CP-4(1),Contingency Plan Testing | Coordinate with Related Plans,CP,Moderate,Planned,CSP,see P12,P12,,Coordinated test with CSP plans in P12.
+CP-6,Alternate Storage Site,CP,Moderate,Inherited,Customer,Inherited from CSP infrastructure,P8,,Alternate storage inherited from hosting CSP; backup targets defined in P8.
+CP-6(1),Alternate Storage Site | Separation from Primary Site,CP,Moderate,Inherited,Customer,Inherited from CSP infrastructure,P8,,Geographic separation inherited from CSP.
+CP-6(3),Alternate Storage Site | Accessibility,CP,Moderate,Inherited,Customer,Inherited from CSP infrastructure,P8,,Accessibility inherited from CSP.
+CP-7,Alternate Processing Site,CP,Moderate,Inherited,Customer,Inherited from CSP infrastructure,P8,,Alternate processing inherited from CSP region/cluster topology.
+CP-7(1),Alternate Processing Site | Separation from Primary Site,CP,Moderate,Inherited,Customer,Inherited from CSP infrastructure,P8,,Separation inherited from CSP.
+CP-7(2),Alternate Processing Site | Accessibility,CP,Moderate,Inherited,Customer,Inherited from CSP infrastructure,P8,,Accessibility inherited from CSP.
+CP-7(3),Alternate Processing Site | Priority of Service,CP,Moderate,Inherited,Customer,Inherited from CSP infrastructure,P8,,Priority-of-service inherited from CSP.
+CP-8,Telecommunications Services,CP,Moderate,Inherited,Customer,Inherited from CSP infrastructure,P8,,Telecom services inherited from hosting CSP.
+CP-8(1),Telecommunications Services | Priority of Service Provisions,CP,Moderate,Inherited,Customer,Inherited from CSP infrastructure,P8,,Inherited from CSP.
+CP-8(2),Telecommunications Services | Single Points of Failure,CP,Moderate,Inherited,Customer,Inherited from CSP infrastructure,P8,,Inherited from CSP.
+CP-9,System Backup,CP,Moderate,Planned,Shared,charts/kube-policies/templates/policy-manager-pvc.yaml,P8,POAM-007,CRDs in etcd (CSP-backed); app-state/audit backup procedure defined in P8.
+CP-9(1),System Backup | Testing for Reliability and Integrity,CP,Moderate,Planned,Shared,see P8,P8,POAM-007,Backup-restore reliability testing in P8.
+CP-10,System Recovery and Reconstitution,CP,Moderate,Partial,System,cmd/admission-webhook/main.go (leader election),P8,,Leader election + replicas aid recovery; full reconstitution/RTO-RPO in P8.
+CP-10(2),System Recovery and Reconstitution | Transaction Recovery,CP,Moderate,Planned,System,see P8,P8,,Decision/transaction recovery semantics defined in P8.
+IA-1,Policy and Procedures,IA,Moderate,Planned,CSP,see P12,P12,POAM-010,IA -1 policy authored in P12.
+IA-2,Identification and Authentication (Organizational Users),IA,Moderate,Planned,System,see P3,P3,POAM-001,No user authn on planes today; OIDC bearer auth on every /api/v1 route in P3.
+IA-2(1),IA (Organizational Users) | MFA to Privileged Accounts,IA,Moderate,Planned,Shared,see P3,P3,,MFA enforced by federated IdP; integrated in P3.
+IA-2(2),IA (Organizational Users) | MFA to Non-Privileged Accounts,IA,Moderate,Planned,Shared,see P3,P3,,MFA via federated IdP; integrated in P3.
+IA-2(8),IA (Organizational Users) | Access to Accounts - Replay Resistant,IA,Moderate,Planned,System,see P3,P3,,Replay-resistant OIDC tokens (nonce/aud) verified in P3.
+IA-2(12),IA (Organizational Users) | Acceptance of PIV Credentials,IA,Moderate,Planned,Shared,see P3,P3,,PIV acceptance via IdP federation; verified in P3.
+IA-3,Device Identification and Authentication,IA,Moderate,Planned,System,charts/kube-policies/templates/admission-webhook-tls.yaml,P3,POAM-003,mTLS to apiserver + audience-bound service tokens (ICX-01/02) in P3.
+IA-4,Identifier Management,IA,Moderate,Planned,Shared,see P3,P3,,Identifier mgmt via IdP; service identities in P3.
+IA-5,Authenticator Management,IA,Moderate,Planned,System,see P2,P2,POAM-003,Static bearer token today; cert/secret lifecycle + rotation in P2.
+IA-5(1),Authenticator Management | Password-Based Authentication,IA,Moderate,Inherited,Customer,Inherited from IdP,P3,,Password policy inherited from federated IdP.
+IA-5(2),Authenticator Management | Public Key-Based Authentication,IA,Moderate,Planned,System,see P2,P2,,PKI cert lifecycle (webhook/mTLS certs) in P2.
+IA-6,Authentication Feedback,IA,Moderate,Inherited,Customer,Inherited from IdP,P3,,Authn feedback obscuring inherited from IdP login UI.
+IA-7,Cryptographic Module Authentication,IA,Moderate,Planned,System,see P2,P2,POAM-005,FIPS-140-3 validated module (GOFIPS140) established in P2.
+IA-8,Identification and Authentication (Non-Organizational Users),IA,Moderate,Planned,System,see P3,P3,,Non-org user authn scoping in P3 (likely N/A post-scoping).
+IA-8(1),IA (Non-Org Users) | Acceptance of PIV Credentials from Other Agencies,IA,Moderate,Planned,Shared,see P3,P3,,PIV-I acceptance via IdP federation (P3).
+IA-8(2),IA (Non-Org Users) | Acceptance of External Authenticators,IA,Moderate,Planned,Shared,see P3,P3,,External authenticator acceptance via IdP (P3).
+IA-8(4),IA (Non-Org Users) | Use of Defined Profiles,IA,Moderate,Planned,Shared,see P3,P3,,Identity-profile conformance via IdP (P3).
+IA-11,Re-Authentication,IA,Moderate,Planned,System,see P3,P3,,Re-authentication on privileged actions/session expiry in P3.
+IA-12,Identity Proofing,IA,Moderate,Inherited,Customer,Inherited from IdP/CSP,P3,,Identity proofing inherited from federated IdP.
+IA-12(2),Identity Proofing | Identity Evidence,IA,Moderate,Inherited,Customer,Inherited from IdP/CSP,P3,,Identity evidence handling inherited from IdP.
+IA-12(3),Identity Proofing | Identity Evidence Validation and Verification,IA,Moderate,Inherited,Customer,Inherited from IdP/CSP,P3,,Evidence validation inherited from IdP.
+IA-12(5),Identity Proofing | Address Confirmation,IA,Moderate,Inherited,Customer,Inherited from IdP/CSP,P3,,Address confirmation inherited from IdP.
+IR-1,Policy and Procedures,IR,Moderate,Planned,CSP,see P12,P12,POAM-010,IR -1 policy authored in P12.
+IR-2,Incident Response Training,IR,Moderate,Planned,CSP,see P12,P12,,IR training program in P12.
+IR-3,Incident Response Testing,IR,Moderate,Planned,CSP,see P9,P9,,Tabletop/IR testing scheduled in P9/P12.
+IR-3(2),Incident Response Testing | Coordination with Related Plans,IR,Moderate,Planned,CSP,see P12,P12,,Coordinated with CP/CSP plans in P12.
+IR-4,Incident Handling,IR,Moderate,Planned,Shared,see P9,P9,,Incident-handling workflow from alerting in P9.
+IR-4(1),Incident Handling | Automated Incident Handling Processes,IR,Moderate,Planned,Shared,see P9,P9,,Automated alert-to-incident pipeline in P9.
+IR-5,Incident Monitoring,IR,Moderate,Planned,Shared,see P9,P9,,Incident monitoring via metrics/alerts in P9.
+IR-6,Incident Reporting,IR,Moderate,Planned,CSP,see P9,P9,,US-CERT/CSP reporting workflow in P9/P12.
+IR-6(1),Incident Reporting | Automated Reporting,IR,Moderate,Planned,Shared,see P9,P9,,Automated reporting integration in P9.
+IR-7,Incident Response Assistance,IR,Moderate,Planned,CSP,see P12,P12,,IR assistance/contacts defined in P12.
+IR-7(1),Incident Response Assistance | Automation Support for Availability of Information,IR,Moderate,Planned,Shared,see P9,P9,,Automation support via SIEM/runbooks in P9.
+IR-8,Incident Response Plan,IR,Moderate,Planned,CSP,see P12,P12,POAM-010,IR plan authored in P12.
+MA-1,Policy and Procedures,MA,Moderate,Planned,CSP,see P12,P12,POAM-010,MA -1 policy authored in P12.
+MA-2,Controlled Maintenance,MA,Moderate,Planned,Shared,see P12,P12,,Maintenance via GitOps/rolling upgrade; procedure in P12.
+MA-3,Maintenance Tools,MA,Moderate,Inherited,Customer,Inherited from CSP,P12,,Physical maintenance tools inherited from CSP.
+MA-3(1),Maintenance Tools | Inspect Tools,MA,Moderate,Inherited,Customer,Inherited from CSP,P12,,Tool inspection inherited from CSP.
+MA-3(2),Maintenance Tools | Inspect Media,MA,Moderate,Inherited,Customer,Inherited from CSP,P12,,Media inspection inherited from CSP.
+MA-3(3),Maintenance Tools | Prevent Unauthorized Removal,MA,Moderate,Inherited,Customer,Inherited from CSP,P12,,Inherited from CSP.
+MA-4,Nonlocal Maintenance,MA,Moderate,Planned,Shared,see P3,P3,,Remote maintenance over authenticated/TLS planes (P3); procedure P12.
+MA-5,Maintenance Personnel,MA,Moderate,Inherited,Customer,Inherited from CSP,P12,,Maintenance-personnel vetting inherited from CSP/operator.
+MA-6,Timely Maintenance,MA,Moderate,Planned,Shared,see P12,P12,,Spares/support-availability via container orchestration; procedure P12.
+MP-1,Policy and Procedures,MP,Moderate,Planned,CSP,see P12,P12,POAM-010,MP -1 policy authored in P12.
+MP-2,Media Access,MP,Moderate,Inherited,Customer,Inherited from CSP,P12,,Physical media access inherited from CSP.
+MP-3,Media Marking,MP,Moderate,Inherited,Customer,Inherited from CSP,P12,,Media marking inherited from CSP.
+MP-4,Media Storage,MP,Moderate,Inherited,Customer,Inherited from CSP,P12,,Physical media storage inherited from CSP.
+MP-5,Media Transport,MP,Moderate,Inherited,Customer,Inherited from CSP,P12,,Media transport inherited from CSP.
+MP-6,Media Sanitization,MP,Moderate,Inherited,Customer,Inherited from CSP,P12,,Media sanitization inherited from CSP.
+MP-7,Media Use,MP,Moderate,Planned,CSP,see P12,P12,,Removable-media use policy authored in P12.
+PE-1,Policy and Procedures,PE,Moderate,Inherited,Customer,Inherited from CSP data center,P12,,Physical/environmental control fully inherited from hosting CSP; verified via CSP ATO/CRM in P12.
+PE-2,Physical Access Authorizations,PE,Moderate,Inherited,Customer,Inherited from CSP data center,P12,,Physical/environmental control fully inherited from hosting CSP; verified via CSP ATO/CRM in P12.
+PE-3,Physical Access Control,PE,Moderate,Inherited,Customer,Inherited from CSP data center,P12,,Physical/environmental control fully inherited from hosting CSP; verified via CSP ATO/CRM in P12.
+PE-4,Access Control for Transmission,PE,Moderate,Inherited,Customer,Inherited from CSP data center,P12,,Physical/environmental control fully inherited from hosting CSP; verified via CSP ATO/CRM in P12.
+PE-5,Access Control for Output Devices,PE,Moderate,Inherited,Customer,Inherited from CSP data center,P12,,Physical/environmental control fully inherited from hosting CSP; verified via CSP ATO/CRM in P12.
+PE-6,Monitoring Physical Access,PE,Moderate,Inherited,Customer,Inherited from CSP data center,P12,,Physical/environmental control fully inherited from hosting CSP; verified via CSP ATO/CRM in P12.
+PE-6(1),Monitoring Physical Access | Intrusion Alarms and Surveillance Equipment,PE,Moderate,Inherited,Customer,Inherited from CSP data center,P12,,Physical/environmental control fully inherited from hosting CSP; verified via CSP ATO/CRM in P12.
+PE-8,Visitor Access Records,PE,Moderate,Inherited,Customer,Inherited from CSP data center,P12,,Physical/environmental control fully inherited from hosting CSP; verified via CSP ATO/CRM in P12.
+PE-9,Power Equipment and Cabling,PE,Moderate,Inherited,Customer,Inherited from CSP data center,P12,,Physical/environmental control fully inherited from hosting CSP; verified via CSP ATO/CRM in P12.
+PE-10,Emergency Shutoff,PE,Moderate,Inherited,Customer,Inherited from CSP data center,P12,,Physical/environmental control fully inherited from hosting CSP; verified via CSP ATO/CRM in P12.
+PE-11,Emergency Power,PE,Moderate,Inherited,Customer,Inherited from CSP data center,P12,,Physical/environmental control fully inherited from hosting CSP; verified via CSP ATO/CRM in P12.
+PE-12,Emergency Lighting,PE,Moderate,Inherited,Customer,Inherited from CSP data center,P12,,Physical/environmental control fully inherited from hosting CSP; verified via CSP ATO/CRM in P12.
+PE-13,Fire Protection,PE,Moderate,Inherited,Customer,Inherited from CSP data center,P12,,Physical/environmental control fully inherited from hosting CSP; verified via CSP ATO/CRM in P12.
+PE-13(1),Fire Protection | Detection Systems - Automatic Activation and Notification,PE,Moderate,Inherited,Customer,Inherited from CSP data center,P12,,Physical/environmental control fully inherited from hosting CSP; verified via CSP ATO/CRM in P12.
+PE-13(2),Fire Protection | Suppression Systems - Automatic Activation and Notification,PE,Moderate,Inherited,Customer,Inherited from CSP data center,P12,,Physical/environmental control fully inherited from hosting CSP; verified via CSP ATO/CRM in P12.
+PE-14,Environmental Controls,PE,Moderate,Inherited,Customer,Inherited from CSP data center,P12,,Physical/environmental control fully inherited from hosting CSP; verified via CSP ATO/CRM in P12.
+PE-15,Water Damage Protection,PE,Moderate,Inherited,Customer,Inherited from CSP data center,P12,,Physical/environmental control fully inherited from hosting CSP; verified via CSP ATO/CRM in P12.
+PE-16,Delivery and Removal,PE,Moderate,Inherited,Customer,Inherited from CSP data center,P12,,Physical/environmental control fully inherited from hosting CSP; verified via CSP ATO/CRM in P12.
+PE-17,Alternate Work Site,PE,Moderate,Inherited,Customer,Inherited from CSP data center,P12,,Physical/environmental control fully inherited from hosting CSP; verified via CSP ATO/CRM in P12.
+PL-1,Policy and Procedures,PL,Moderate,Planned,CSP,see P12,P12,POAM-010,PL -1 policy authored in P12.
+PL-2,System Security and Privacy Plans,PL,Moderate,Partial,CSP,docs/compliance/ssp/SSP.md,P0,,SSP skeleton established in P0; narratives finalized in P12.
+PL-4,Rules of Behavior,PL,Moderate,Planned,CSP,see P12,P12,,Rules of behavior authored in P12.
+PL-4(1),Rules of Behavior | Social Media and External Site/Application Usage Restrictions,PL,Moderate,Planned,CSP,see P12,P12,,Authored in P12.
+PL-8,Security and Privacy Architectures,PL,Moderate,Partial,System,docs/compliance/system-facts.md,P0,,Architecture/trust-zones (ZONE-EXT/ZONE-SYS) documented in facts + boundary; finalized in SSP P12.
+PL-10,Baseline Selection,PL,Moderate,Implemented,CSP,docs/compliance/control-matrix.csv,P0,,FedRAMP Moderate baseline selected (this matrix); reconcile vs official OSCAL profile - POAM-009.
+PL-11,Baseline Tailoring,PL,Moderate,Partial,CSP,docs/compliance/control-matrix.md,P0,POAM-009,"Tailoring (N/A, inherited) recorded here; reconcile vs official FedRAMP Rev5 Moderate OSCAL profile."
+PS-1,Policy and Procedures,PS,Moderate,Planned,CSP,see P12,P12,POAM-010,PS -1 policy authored in P12.
+PS-2,Position Risk Designation,PS,Moderate,Planned,CSP,see P12,P12,,Position risk designation in P12.
+PS-3,Personnel Screening,PS,Moderate,Inherited,Customer,Inherited from CSP/operator HR,P12,,Personnel screening inherited from operator org; verified P12.
+PS-4,Personnel Termination,PS,Moderate,Planned,CSP,see P12,P12,,Termination/offboarding procedure in P12.
+PS-5,Personnel Transfer,PS,Moderate,Planned,CSP,see P12,P12,,Transfer procedure in P12.
+PS-6,Access Agreements,PS,Moderate,Planned,CSP,see P12,P12,,Access agreements in P12.
+PS-7,External Personnel Security,PS,Moderate,Planned,CSP,see P12,P12,,External-personnel security in P12.
+PS-8,Personnel Sanctions,PS,Moderate,Planned,CSP,see P12,P12,,Sanctions process in P12.
+PS-9,Position Descriptions,PS,Moderate,Planned,CSP,see P12,P12,,Security position descriptions in P12.
+RA-1,Policy and Procedures,RA,Moderate,Planned,CSP,see P12,P12,POAM-010,RA -1 policy authored in P12.
+RA-2,Security Categorization,RA,Moderate,Implemented,CSP,docs/compliance/categorization/FIPS-199.md,P0,,FIPS-199 Moderate categorization completed in P0.
+RA-3,Risk Assessment,RA,Moderate,Partial,CSP,.omc/research/fedramp-cis-gap-analysis.json,P0,,Grounded 12-dimension gap analysis serves as initial risk assessment; formal RA in P12.
+RA-3(1),Risk Assessment | Supply Chain Risk Assessment,RA,Moderate,Planned,System,see P6,P6,,Supply-chain risk assessment (SBOM/provenance) in P6.
+RA-5,Vulnerability Monitoring and Scanning,RA,Moderate,Partial,System,.github/workflows/ci.yml (trivy),P6,POAM-008,Trivy fs/image scan exists but non-gating; authenticated monthly gating scans + SLA in P6/P11.
+RA-5(2),Vulnerability Monitoring and Scanning | Update Vulnerabilities to Be Scanned,RA,Moderate,Planned,System,see P6,P6,,Scanner DB auto-update + cadence in P6/P11.
+RA-5(5),Vulnerability Monitoring and Scanning | Privileged Access,RA,Moderate,Planned,System,see P11,P11,,Authenticated/credentialed scanning configured in P11.
+RA-7,Risk Response,RA,Moderate,Partial,CSP,docs/compliance/poam.csv,P0,,Risk response tracked via POA&M; closure across P1-P12.
+SA-1,Policy and Procedures,SA,Moderate,Planned,CSP,see P12,P12,POAM-010,SA -1 policy authored in P12.
+SA-2,Allocation of Resources,SA,Moderate,Planned,CSP,see P12,P12,,Resource allocation for security in P12.
+SA-3,System Development Life Cycle,SA,Moderate,Partial,CSP,CONTRIBUTING.md,P11,,"SDLC scaffold exists (CI, PR review); secure-SDLC formalized in P11."
+SA-4,Acquisition Process,SA,Moderate,Planned,CSP,see P12,P12,,Acquisition/security-requirements language in P12.
+SA-4(1),Acquisition Process | Functional Properties of Controls,SA,Moderate,Planned,CSP,see P12,P12,,Functional-property requirements in P12.
+SA-4(2),Acquisition Process | Design and Implementation Information for Controls,SA,Moderate,Planned,CSP,see P12,P12,,Design/impl documentation in P12.
+SA-4(9),"Acquisition Process | Functions, Ports, Protocols, and Services in Use",SA,Moderate,Partial,System,docs/compliance/system-facts.md (ports table),P0,,Ports/protocols/services documented in facts sheet; finalized in SSP P12.
+SA-4(10),Acquisition Process | Use of Approved PIV Products,SA,Moderate,Planned,Shared,see P3,P3,,PIV product use via IdP federation (P3).
+SA-5,System Documentation,SA,Moderate,Partial,System,README.md,P11,,Engineering docs exist; admin/security documentation completed in P11/P12.
+SA-8,Security and Privacy Engineering Principles,SA,Moderate,Partial,System,docs/compliance/system-facts.md,P0,,Trust-zone/fail-closed design principles applied; documented across P0-P12.
+SA-9,External System Services,SA,Moderate,Planned,CSP,see P12,P12,,External-service agreements (CSP/IdP) in P12.
+SA-9(2),"External System Services | Identification of Functions, Ports, Protocols, and Services",SA,Moderate,Partial,System,docs/compliance/system-facts.md (ICX-01..06),P4,,External connections ICX-01..06 enumerated; agreements in P12.
+SA-10,Developer Configuration Management,SA,Moderate,Partial,System,.github/workflows/release.yml,P6,,Versioned build via CI/Helm; provenance/SBOM integrity in P6.
+SA-11,Developer Testing and Evaluation,SA,Moderate,Partial,System,.github/workflows/ci.yml,P11,,Unit tests + trivy/scan exist (non-gating); enforced SAST/DAST/coverage gates in P11.
+SA-11(1),Developer Testing and Evaluation | Static Code Analysis,SA,Moderate,Planned,System,see P11,P11,POAM-008,CodeQL/gosec gating SAST added in P11.
+SA-11(8),Developer Testing and Evaluation | Dynamic Code Analysis,SA,Moderate,Planned,System,see P11,P11,,DAST/fuzz harness added in P11.
+SA-15,"Development Process, Standards, and Tools",SA,Moderate,Partial,System,Makefile,P11,,Toolchain/Make targets exist; documented secure dev process + tool baseline in P11.
+SA-15(3),Development Process | Criticality Analysis,SA,Moderate,Planned,System,see P11,P11,,Criticality analysis integrated in P11.
+SA-22,Unsupported System Components,SA,Moderate,Planned,System,see P1,P1,,Go 1.25 toolchain alignment + EOL removal in P1; ongoing in P6/P11.
+SC-1,Policy and Procedures,SC,Moderate,Planned,CSP,see P12,P12,POAM-010,SC -1 policy authored in P12.
+SC-2,Separation of System and User Functionality,SC,Moderate,Partial,System,cmd/dashboard/proxy.go,P3,,Dashboard BFF separates UI from API; management/enforcement plane split formalized in P3/P4.
+SC-4,Information in Shared System Resources,SC,Moderate,Planned,System,charts/kube-policies/values.yaml,P5,,readOnlyRootFilesystem + non-root reduce residual data; formalized in P5.
+SC-5,Denial-of-Service Protection,SC,Moderate,Planned,System,see P4,P4,,Rate limiting + resource limits + fail-closed posture in P4/P8.
+SC-6,Resource Availability,SC,Moderate,Partial,System,cmd/admission-webhook/main.go (leader election),P8,,Replicas + leader election aid availability; PDB/anti-affinity/limits in P8.
+SC-7,Boundary Protection,SC,Moderate,Planned,System,"charts/kube-policies/templates/ (NetworkPolicy, P4)",P4,POAM-004,No NetworkPolicy today; default-deny boundary + scoped flows in P4.
+SC-7(3),Boundary Protection | Access Points,SC,Moderate,Planned,System,see P4,P4,POAM-004,Limit/manage access points via ingress + NetworkPolicy in P4.
+SC-7(4),Boundary Protection | External Telecommunications Services,SC,Moderate,Planned,System,see P4,P4,,Scoped egress (DNS/apiserver only) + traffic agreements in P4.
+SC-7(5),Boundary Protection | Deny by Default - Allow by Exception,SC,Moderate,Planned,System,"charts/kube-policies/templates/ (NetworkPolicy, P4)",P4,POAM-004,Default-deny ingress+egress NetworkPolicy with scoped allow in P4.
+SC-7(7),Boundary Protection | Split Tunneling for Remote Devices,SC,Moderate,Planned,System,see P4,P4,,Split-tunnel prevention via egress policy in P4.
+SC-8,Transmission Confidentiality and Integrity,SC,Moderate,Partial,System,cmd/admission-webhook/main.go:269-280,P4,POAM-003,Bright spot: webhook serves TLS 1.3 with fixed cipher suites; other planes plaintext - TLS/mTLS in P3/P4.
+SC-8(1),Transmission Confidentiality and Integrity | Cryptographic Protection,SC,Moderate,Partial,System,cmd/admission-webhook/main.go:269-280,P4,POAM-003,Webhook TLS1.3 cryptographic protection present (ICX-01); in-cluster mTLS for ICX-02/04 in P4.
+SC-10,Network Disconnect,SC,Moderate,Planned,System,see P3,P3,,Session/idle disconnect on management plane in P3.
+SC-12,Cryptographic Key Establishment and Management,SC,Moderate,Planned,System,charts/kube-policies/templates/admission-webhook-tls.yaml,P2,POAM-005,Cert/secret material exists but no lifecycle; PKI key mgmt + rotation in P2.
+SC-12(2),Cryptographic Key Establishment | Symmetric Keys,SC,Moderate,Planned,System,see P2,P2,,Symmetric key mgmt (audit HMAC key) in P2.
+SC-12(3),Cryptographic Key Establishment | Asymmetric Keys,SC,Moderate,Planned,System,see P2,P2,,Asymmetric key mgmt (TLS/mTLS certs) in P2.
+SC-13,Cryptographic Protection,SC,Moderate,Planned,System,see P2,P2,POAM-005,No FIPS-validated module today; FIPS-140-3 (GOFIPS140) crypto in P2.
+SC-15,Collaborative Computing Devices and Applications,SC,Moderate,Not-Applicable,System,N/A - no collaborative computing,P4,,System has no collaborative-computing (mic/camera) components.
+SC-17,Public Key Infrastructure Certificates,SC,Moderate,Planned,System,see P2,P2,POAM-005,PKI certificate issuance/management (cert-manager or equivalent) in P2.
+SC-18,Mobile Code,SC,Moderate,Planned,System,web/,P5,,Svelte SPA mobile code; CSP headers + integrity controls in P5.
+SC-20,Secure Name/Address Resolution Service (Authoritative Source),SC,Moderate,Inherited,Customer,Inherited from cluster DNS/CSP,P4,,Authoritative DNS inherited from cluster/CSP; egress scoped in P4.
+SC-21,Secure Name/Address Resolution Service (Recursive or Caching Resolver),SC,Moderate,Inherited,Customer,Inherited from cluster DNS/CSP,P4,,Recursive resolver inherited from cluster CoreDNS/CSP.
+SC-22,Architecture and Provisioning for Name/Address Resolution Service,SC,Moderate,Inherited,Customer,Inherited from cluster DNS/CSP,P4,,DNS architecture inherited from cluster/CSP.
+SC-23,Session Authenticity,SC,Moderate,Planned,System,see P3,P3,,TLS session authenticity on all planes + token binding in P3.
+SC-28,Protection of Information at Rest,SC,Moderate,Planned,System,see P2,P2,POAM-005,CRDs in etcd; etcd encryption-at-rest verification + app at-rest crypto in P2.
+SC-28(1),Protection of Information at Rest | Cryptographic Protection,SC,Moderate,Planned,Shared,see P2,P2,POAM-005,Encryption-at-rest via CSP/etcd KMS + FIPS module; verified in P2.
+SC-39,Process Isolation,SC,Moderate,Partial,System,charts/kube-policies/values.yaml,P5,,"Container isolation (distroless, non-root, dropped caps); restricted PSS in P5."
+SI-1,Policy and Procedures,SI,Moderate,Planned,CSP,see P12,P12,POAM-010,SI -1 policy authored in P12.
+SI-2,Flaw Remediation,SI,Moderate,Partial,System,.github/workflows/ci.yml,P6,POAM-008,Scanning produces signal but no SLA/patch process; flaw-remediation cadence + gating in P6/P11.
+SI-2(2),Flaw Remediation | Automated Flaw Remediation Status,SI,Moderate,Planned,System,see P6,P6,POAM-008,Automated remediation-status tracking via scan + POA&M in P6/P11.
+SI-3,Malicious Code Protection,SI,Moderate,Planned,System,see P6,P6,,Image scanning (trivy) + signature verification admission in P6/P10.
+SI-4,System Monitoring,SI,Moderate,Partial,System,internal/metrics/collector.go,P9,,Prometheus collector + Alertmanager exist (PoC); IDS-grade detection/SIEM in P9.
+SI-4(2),System Monitoring | Automated Tools and Mechanisms for Real-Time Analysis,SI,Moderate,Planned,Shared,see P9,P9,,Real-time SIEM analysis in P9.
+SI-4(4),System Monitoring | Inbound and Outbound Communications Traffic,SI,Moderate,Planned,Shared,see P9,P9,,Traffic monitoring (NetworkPolicy logs + SIEM) in P4/P9.
+SI-4(5),System Monitoring | System-Generated Alerts,SI,Moderate,Planned,Shared,internal/metrics/collector.go,P9,,System-generated security alerts packaged as PrometheusRule in P9.
+SI-5,"Security Alerts, Advisories, and Directives",SI,Moderate,Planned,CSP,see P11,P11,,CISA/vendor advisory intake process in P11/P12.
+SI-6,Security and Privacy Function Verification,SI,Moderate,Planned,System,see P11,P11,,Self-test/function verification of security controls in P11.
+SI-7,"Software, Firmware, and Information Integrity",SI,Moderate,Planned,System,see P6,P6,POAM-006,Image-signature verification + SBOM/provenance integrity in P6.
+SI-7(1),"Software, Firmware, and Information Integrity | Integrity Checks",SI,Moderate,Planned,System,see P6,P6,POAM-006,Integrity checks at admission (cosign verify) in P6/P10.
+SI-8,Spam Protection,SI,Moderate,Not-Applicable,System,N/A - no email/messaging in boundary,P9,,System has no email/messaging components.
+SI-10,Information Input Validation,SI,Moderate,Partial,System,internal/config/config.go,P3,,Config + admission input validation present; API request validation hardened in P3/P11.
+SI-11,Error Handling,SI,Moderate,Partial,System,internal/policymanager/router.go,P11,,gin.Recovery() handles panics; structured error handling/no-leak review in P11.
+SI-12,Information Management and Retention,SI,Moderate,Planned,Shared,see P7,P7,,Audit/data retention policy defined in P7; long-term in P9.
+SI-16,Memory Protection,SI,Moderate,Partial,System,charts/kube-policies/values.yaml,P5,,Go memory safety + non-root/read-only FS; seccomp RuntimeDefault in P5.
+SR-1,Policy and Procedures,SR,Moderate,Planned,CSP,see P12,P12,POAM-010,SR -1 policy authored in P12.
+SR-2,Supply Chain Risk Management Plan,SR,Moderate,Planned,CSP,see P6,P6,,SCRM plan authored in P6/P12.
+SR-2(1),Supply Chain Risk Management Plan | Establish SCRM Team,SR,Moderate,Planned,CSP,see P12,P12,,SCRM team designation in P12.
+SR-3,Supply Chain Controls and Processes,SR,Moderate,Partial,System,.github/workflows/release.yml,P6,POAM-006,SBOM generation exists but unverified at consumption; provenance + verification controls in P6.
+SR-4,Provenance,SR,Moderate,Planned,System,.github/workflows/release.yml,P6,POAM-006,SLSA provenance attestation (build-by-digest) added in P6.
+SR-5,"Acquisition Strategies, Tools, and Methods",SR,Moderate,Planned,System,see P6,P6,,Pinned dependencies/actions + acquisition controls in P1/P6.
+SR-6,Supplier Assessments and Reviews,SR,Moderate,Planned,CSP,see P6,P6,,Supplier/dependency review in P6.
+SR-8,Notification Agreements,SR,Moderate,Planned,CSP,see P12,P12,,Supplier notification agreements in P12.
+SR-9,Tamper Resistance and Detection,SR,Moderate,Planned,System,see P6,P6,POAM-006,Image digest pinning + signature verification provide tamper detection in P6.
+SR-10,Inspection of Systems or Components,SR,Moderate,Planned,System,see P6,P6,,Component inspection via SBOM/scan/verify in P6.
+SR-11,Component Authenticity,SR,Moderate,Planned,System,see P6,P6,POAM-006,Cosign signature verification establishes authenticity in P6.
+SR-11(1),Component Authenticity | Anti-Counterfeit Training,SR,Moderate,Planned,CSP,see P12,P12,,Anti-counterfeit awareness in P12.
+SR-11(2),Component Authenticity | Configuration Control for Component Service and Repair,SR,Moderate,Planned,System,see P6,P6,,Config control for component repair via GitOps in P6.
+SR-12,Component Disposal,SR,Moderate,Planned,Shared,see P12,P12,,Component/image disposal procedure in P12.
+PM-1,Information Security Program Plan,PM,Moderate,Planned,CSP,see P12,P12,,Org infosec program plan (P12).
+PM-2,Information Security Program Leadership Role,PM,Moderate,Planned,CSP,see P12,P12,,ISSO/senior-official role (TBD - assign) designated in P12.
+PM-3,Information Security and Privacy Resources,PM,Moderate,Planned,CSP,see P12,P12,,Program resourcing in P12.
+PM-4,Plan of Action and Milestones Process,PM,Moderate,Partial,CSP,docs/compliance/poam.csv,P0,,POA&M process established (poam.csv); program-level tracking matured in P12.
+PM-5,System Inventory,PM,Moderate,Partial,CSP,docs/compliance/inventory.csv,P0,,System inventory established (AST-*); org-wide inventory program in P12.
+PM-6,Measures of Performance,PM,Moderate,Planned,CSP,see P9,P9,,Security performance measures via ConMon metrics in P9/P12.
+PM-7,Enterprise Architecture,PM,Moderate,Planned,CSP,see P12,P12,,Enterprise architecture alignment in P12.
+PM-9,Risk Management Strategy,PM,Moderate,Planned,CSP,see P12,P12,,Org risk-management strategy in P12.
+PM-10,Authorization Process,PM,Moderate,Planned,CSP,see P12,P12,,Authorization/ATO process in P12.
+PM-11,Mission and Business Process Definition,PM,Moderate,Planned,CSP,see P12,P12,,Mission/business process definition in P12.

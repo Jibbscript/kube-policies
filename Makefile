@@ -259,6 +259,12 @@ validate-manifests: ## Validate Helm, Kubernetes, Prometheus, Alertmanager, and 
 	bash scripts/validate/manifests.sh
 	@echo "$(GREEN)Deployment artifact validation completed$(NC)"
 
+.PHONY: validate-compliance
+validate-compliance: ## Validate compliance artifacts (control matrix, POA&M, inventory, doc links) offline
+	@echo "$(BLUE)Validating compliance artifacts offline...$(NC)"
+	bash scripts/validate/compliance.sh
+	@echo "$(GREEN)Compliance artifact validation completed$(NC)"
+
 .PHONY: check
 check: lint vet security check-logger-wiring ## Run all quality checks
 
