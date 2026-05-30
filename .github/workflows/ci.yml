@@ -8,29 +8,38 @@ on:
   schedule:
     # Run nightly tests at 2 AM UTC
     - cron: '0 2 * * *'
+  workflow_call:
 
 env:
-  GO_VERSION: '1.21'
+  GO_VERSION: '1.25'
+  GOTOOLCHAIN: local
+  GOFLAGS: -mod=readonly
   KUBERNETES_VERSION: 'v1.28.2'
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
+
+permissions:
+  contents: read
 
 jobs:
   # Static analysis and linting
   lint:
     name: Lint and Static Analysis
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
     steps:
     - name: Checkout code
-      uses: actions/checkout@v4
+      uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
 
     - name: Set up Go
-      uses: actions/setup-go@v4
+      uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff  # v5
       with:
         go-version: ${{ env.GO_VERSION }}
 
     - name: Cache Go modules
-      uses: actions/cache@v3
+      uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830  # v4
       with:
         path: |
           ~/.cache/go-build
@@ -42,10 +51,16 @@ jobs:
     - name: Install dependencies
       run: go mod download
 
+    - name: Verify module integrity
+      run: |
+        go mod verify
+        go mod tidy
+        git diff --exit-code -- go.mod go.sum
+
     - name: Run golangci-lint
-      uses: golangci/golangci-lint-action@v3
+      uses: golangci/golangci-lint-action@55c2c1448f86e01eaae002a5a3a9624417608d84  # v6
       with:
-        version: latest
+        version: v1.64.8
         args: --timeout=5m
 
     - name: Run go vet
@@ -60,12 +75,12 @@ jobs:
         fi
 
     - name: Check for security issues
-      uses: securecodewarrior/github-action-gosec@master
+      uses: securego/gosec@4a3bd8af174872c778439083ded7adbf3747e770  # v2.26.1
       with:
         args: '-fmt sarif -out gosec.sarif ./...'
 
     - name: Upload SARIF file
-      uses: github/codeql-action/upload-sarif@v2
+      uses: github/codeql-action/upload-sarif@03e4368ac7daa2bd82b3e85262f3bf87ee112f57  # v3
       with:
         sarif_file: gosec.sarif
 
@@ -75,18 +90,18 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        go-version: ['1.20', '1.21']
+        go-version: ['1.25']
     steps:
     - name: Checkout code
-      uses: actions/checkout@v4
+      uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
 
     - name: Set up Go
-      uses: actions/setup-go@v4
+      uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff  # v5
       with:
         go-version: ${{ matrix.go-version }}
 
     - name: Cache Go modules
-      uses: actions/cache@v3
+      uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830  # v4
       with:
         path: |
           ~/.cache/go-build
@@ -106,14 +121,14 @@ jobs:
       run: go tool cover -html=coverage.out -o coverage.html
 
     - name: Upload coverage to Codecov
-      uses: codecov/codecov-action@v3
+      uses: codecov/codecov-action@b9fd7d16f6d7d1b5d2bec1a2887e65ceed900238  # v4
       with:
         file: ./coverage.out
         flags: unittests
         name: codecov-umbrella
 
     - name: Upload coverage artifacts
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
       with:
         name: coverage-report-${{ matrix.go-version }}
         path: |
@@ -125,18 +140,21 @@ jobs:
     name: Build Docker Images
     runs-on: ubuntu-latest
     needs: [lint, unit-tests]
+    permissions:
+      contents: read
+      packages: write
     outputs:
       admission-webhook-image: ${{ steps.meta-webhook.outputs.tags }}
       policy-manager-image: ${{ steps.meta-manager.outputs.tags }}
     steps:
     - name: Checkout code
-      uses: actions/checkout@v4
+      uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
 
     - name: Set up Docker Buildx
-      uses: docker/setup-buildx-action@v3
+      uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f  # v3
 
     - name: Log in to Container Registry
-      uses: docker/login-action@v3
+      uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9  # v3
       with:
         registry: ${{ env.REGISTRY }}
         username: ${{ github.actor }}
@@ -144,7 +162,7 @@ jobs:
 
     - name: Extract metadata for admission webhook
       id: meta-webhook
-      uses: docker/metadata-action@v5
+      uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051  # v5
       with:
         images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/admission-webhook
         tags: |
@@ -154,7 +172,7 @@ jobs:
           type=raw,value=latest,enable={{is_default_branch}}
 
     - name: Build and push admission webhook image
-      uses: docker/build-push-action@v5
+      uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8  # v6
       with:
         context: .
         file: ./build/docker/admission-webhook.Dockerfile
@@ -166,7 +184,7 @@ jobs:
 
     - name: Extract metadata for policy manager
       id: meta-manager
-      uses: docker/metadata-action@v5
+      uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051  # v5
       with:
         images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/policy-manager
         tags: |
@@ -176,7 +194,7 @@ jobs:
           type=raw,value=latest,enable={{is_default_branch}}
 
     - name: Build and push policy manager image
-      uses: docker/build-push-action@v5
+      uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8  # v6
       with:
         context: .
         file: ./build/docker/policy-manager.Dockerfile
@@ -193,15 +211,15 @@ jobs:
     needs: [build-images]
     steps:
     - name: Checkout code
-      uses: actions/checkout@v4
+      uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
 
     - name: Set up Go
-      uses: actions/setup-go@v4
+      uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff  # v5
       with:
         go-version: ${{ env.GO_VERSION }}
 
     - name: Cache Go modules
-      uses: actions/cache@v3
+      uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830  # v4
       with:
         path: |
           ~/.cache/go-build
@@ -225,7 +243,7 @@ jobs:
         go test -v -race -coverprofile=coverage-integration.out ./test/integration/...
 
     - name: Upload integration test results
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
       with:
         name: integration-test-results
         path: |
@@ -239,10 +257,10 @@ jobs:
     needs: [build-images]
     steps:
     - name: Checkout code
-      uses: actions/checkout@v4
+      uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
 
     - name: Set up Go
-      uses: actions/setup-go@v4
+      uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff  # v5
       with:
         go-version: ${{ env.GO_VERSION }}
 
@@ -277,7 +295,7 @@ jobs:
 
     - name: Upload Kind test artifacts
       if: always()
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
       with:
         name: kind-test-artifacts
         path: artifacts/kind/
@@ -289,10 +307,10 @@ jobs:
     needs: [build-images]
     steps:
     - name: Checkout code
-      uses: actions/checkout@v4
+      uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
 
     - name: Set up Go
-      uses: actions/setup-go@v4
+      uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff  # v5
       with:
         go-version: ${{ env.GO_VERSION }}
 
@@ -321,7 +339,7 @@ jobs:
 
     - name: Upload k3s test artifacts
       if: always()
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
       with:
         name: k3s-test-artifacts
         path: artifacts/k3s/
@@ -331,12 +349,15 @@ jobs:
     name: Security Scanning
     runs-on: ubuntu-latest
     needs: [build-images]
+    permissions:
+      contents: read
+      security-events: write
     steps:
     - name: Checkout code
-      uses: actions/checkout@v4
+      uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
 
     - name: Run Trivy vulnerability scanner
-      uses: aquasecurity/trivy-action@master
+      uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # v0.36.0
       with:
         scan-type: 'fs'
         scan-ref: '.'
@@ -344,19 +365,19 @@ jobs:
         output: 'trivy-results.sarif'
 
     - name: Upload Trivy scan results to GitHub Security tab
-      uses: github/codeql-action/upload-sarif@v2
+      uses: github/codeql-action/upload-sarif@03e4368ac7daa2bd82b3e85262f3bf87ee112f57  # v3
       with:
         sarif_file: 'trivy-results.sarif'
 
     - name: Scan admission webhook image
-      uses: aquasecurity/trivy-action@master
+      uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # v0.36.0
       with:
         image-ref: ${{ needs.build-images.outputs.admission-webhook-image }}
         format: 'sarif'
         output: 'trivy-webhook.sarif'
 
     - name: Scan policy manager image
-      uses: aquasecurity/trivy-action@master
+      uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # v0.36.0
       with:
         image-ref: ${{ needs.build-images.outputs.policy-manager-image }}
         format: 'sarif'
@@ -370,10 +391,10 @@ jobs:
     if: github.event_name == 'schedule' || contains(github.event.pull_request.labels.*.name, 'performance')
     steps:
     - name: Checkout code
-      uses: actions/checkout@v4
+      uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
 
     - name: Set up Go
-      uses: actions/setup-go@v4
+      uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff  # v5
       with:
         go-version: ${{ env.GO_VERSION }}
 
@@ -401,7 +422,7 @@ jobs:
         go test -bench=. -benchmem ./cmd/... ./internal/... ./pkg/... > performance-results.txt
 
     - name: Upload performance results
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
       with:
         name: performance-results
         path: performance-results.txt
@@ -413,7 +434,7 @@ jobs:
     needs: [build-images]
     steps:
     - name: Checkout code
-      uses: actions/checkout@v4
+      uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
 
     - name: Install Helm
       run: |
@@ -449,10 +470,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - name: Checkout code
-      uses: actions/checkout@v4
+      uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
 
     - name: Check for broken links
-      uses: gaurav-nelson/github-action-markdown-link-check@v1
+      uses: gaurav-nelson/github-action-markdown-link-check@3c3b66f1f7d0900e37b71eca45b63ea9eedfce31  # 1.0.17
       with:
         use-quiet-mode: 'yes'
         use-verbose-mode: 'yes'
@@ -472,9 +493,12 @@ jobs:
     runs-on: ubuntu-latest
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     needs: [lint, unit-tests, integration-tests, e2e-kind, e2e-k3s, security-scan, helm-tests, docs-tests]
+    permissions:
+      contents: write
+      pull-requests: write
     steps:
     - name: Checkout code
-      uses: actions/checkout@v4
+      uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
       with:
         fetch-depth: 0
 
@@ -485,7 +509,7 @@ jobs:
 
     - name: Create release PR
       if: contains(github.event.head_commit.message, 'feat:') || contains(github.event.head_commit.message, 'fix:')
-      uses: peter-evans/create-pull-request@v5
+      uses: peter-evans/create-pull-request@22a9089034f40e5a961c8808d113e2c98fb63676  # v7
       with:
         token: ${{ secrets.GITHUB_TOKEN }}
         commit-message: 'chore: update changelog for release'
@@ -500,6 +524,23 @@ jobs:
         branch: prepare-release
         delete-branch: true
 
+  # Aggregate gate — single required check for branch protection.
+  ci-gate:
+    name: CI Gate
+    runs-on: ubuntu-latest
+    if: always()
+    needs: [lint, unit-tests, build-images, integration-tests, e2e-kind, e2e-k3s, security-scan, helm-tests, docs-tests]
+    steps:
+    - name: Verify all required jobs succeeded
+      run: |
+        results="${{ needs.lint.result }} ${{ needs.unit-tests.result }} ${{ needs.build-images.result }} ${{ needs.integration-tests.result }} ${{ needs.e2e-kind.result }} ${{ needs.e2e-k3s.result }} ${{ needs.security-scan.result }} ${{ needs.helm-tests.result }} ${{ needs.docs-tests.result }}"
+        echo "job results: ${results}"
+        # shellcheck disable=SC2086
+        for r in ${results}; do
+          if [ "$r" != "success" ]; then echo "::error::a required CI job did not succeed (${r})"; exit 1; fi
+        done
+        echo "All required CI gates passed."
+
   # Notification
   notify:
     name: Notify Results
@@ -509,18 +550,20 @@ jobs:
     steps:
     - name: Notify Slack on failure
       if: failure()
-      uses: 8398a7/action-slack@v3
+      uses: 8398a7/action-slack@77eaa4f1c608a7d68b38af4e3f739dcd8cba273e  # v3
       with:
         status: failure
         channel: '#kube-policies-ci'
-        webhook_url: ${{ secrets.SLACK_WEBHOOK }}
         fields: repo,message,commit,author,action,eventName,ref,workflow
+      env:
+        SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK }}
 
     - name: Notify Slack on success
       if: success() && github.ref == 'refs/heads/main'
-      uses: 8398a7/action-slack@v3
+      uses: 8398a7/action-slack@77eaa4f1c608a7d68b38af4e3f739dcd8cba273e  # v3
       with:
         status: success
         channel: '#kube-policies-ci'
-        webhook_url: ${{ secrets.SLACK_WEBHOOK }}
         fields: repo,message,commit,author,action,eventName,ref,workflow
+      env:
+        SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK }}

@@ -1,6 +1,6 @@
 # Build stage — uses TARGETARCH so the image is native to the kind cluster
 # arch by default (arm64 on Apple Silicon, amd64 on x86_64 CI).
-FROM --platform=${BUILDPLATFORM:-linux/amd64} golang:1.25-alpine AS builder
+FROM --platform=${BUILDPLATFORM:-linux/amd64} golang:1.25-alpine@sha256:8d22e29d960bc50cd025d93d5b7c7d220b1ee9aa7a239b3c8f55a57e987e8d45 AS builder
 
 # Install build dependencies
 RUN apk add --no-cache git ca-certificates tzdata
@@ -32,7 +32,7 @@ RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build \
     ./cmd/policy-manager
 
 # Final stage
-FROM gcr.io/distroless/static:nonroot
+FROM gcr.io/distroless/static:nonroot@sha256:963fa6c544fe5ce420f1f54fb88b6fb01479f054c8056d0f74cc2c6000df5240
 
 # Copy CA certificates
 COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/

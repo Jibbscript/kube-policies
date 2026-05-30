@@ -1,0 +1,8 @@
+# helm/chart-testing (ct) configuration — used by the helm-tests job in ci.yml.
+target-branch: main
+chart-dirs:
+  - charts
+chart-repos: []
+helm-extra-args: --timeout 600s
+validate-maintainers: false
+check-version-increment: true
