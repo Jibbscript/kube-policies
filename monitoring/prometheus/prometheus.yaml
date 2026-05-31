@@ -45,6 +45,19 @@ scrape_configs:
     scrape_interval: 15s
     scrape_timeout: 10s
 
+  # Kube-Policies Dashboard (:9092)
+  #
+  # No scrape job is defined here today — the dashboard /metrics endpoint is not
+  # currently scraped by this demo Prometheus config. When you DO add one, the
+  # dashboard mirrors the webhook/policy-manager metrics posture (IAM-WU-12):
+  # plain HTTP + unauthenticated by default, and TLS 1.3 + bearer-token auth when
+  # the chart is deployed with dashboard.tls.enabled=true. To scrape the
+  # TLS-protected dashboard metrics, use the same shape as the admission-webhook
+  # job above (scheme: https + tls_config.ca_file + bearer_token_file pointing at
+  # the mounted serving CA and the <release>-internal-token Secret), with
+  # server_name kube-policies-dashboard.kube-policies-system.svc and target
+  # kube-policies-dashboard:9092.
+
   # Kubernetes API Server
   - job_name: 'kubernetes-apiservers'
     kubernetes_sd_configs:

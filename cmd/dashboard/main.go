@@ -15,6 +15,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"go.uber.org/zap"
 
+	"github.com/Jibbscript/kube-policies/internal/auth"
 	"github.com/Jibbscript/kube-policies/internal/config"
 	"github.com/Jibbscript/kube-policies/internal/cryptofips"
 	"github.com/Jibbscript/kube-policies/internal/tlsreload"
@@ -70,7 +71,30 @@ func main() {
 	if err != nil {
 		log.Fatal("failed to construct API server", zap.Error(err))
 	}
-	metricsServer := newMetricsServer(*metricsPort)
+
+	// Bearer-token auth for the dashboard /metrics endpoint (IAM-WU-12),
+	// mirroring the webhook (:9090) and policy-manager (:9091) pattern. Bearer
+	// tokens must never cross a plaintext hop, so metrics auth is coupled to
+	// metrics TLS: the verifier is built ONLY when cfg.TLSEnabled (the dashboard
+	// metrics listener gets TLS 1.3 from the same reloader below in that case).
+	// When TLS is off (the default, Ingress-terminated topology), /metrics stays
+	// plain HTTP and UNAUTHENTICATED — a documented dev gap, consistent with the
+	// webhook/PM behavior when their --metrics-tls flag is off.
+	var metricsVerifier *auth.TokenVerifier
+	if cfg.TLSEnabled {
+		metricsVerifier = auth.NewTokenVerifier(cfg.InternalToken, cfg.InternalTokenPrevious)
+		if metricsVerifier.Configured() {
+			log.Info("dashboard /metrics auth ENFORCED (TLS 1.3 + bearer token)")
+		} else {
+			// Fail-closed: an unconfigured verifier 401s every scrape. Surface
+			// the misconfiguration loudly rather than silently breaking scrapes.
+			log.Warn("dashboard /metrics auth ENFORCED but the internal token is UNSET; every scrape will 401 until INTERNAL_TOKEN is provided")
+		}
+	} else {
+		log.Warn("dashboard /metrics auth DISABLED (plain HTTP, no bearer token) — dev posture; set DASHBOARD_TLS_ENABLED=true to enforce TLS + bearer auth")
+	}
+
+	metricsServer := newMetricsServer(*metricsPort, metricsVerifier)
 
 	// In-pod TLS serving (CRY-WU-07), gated on DASHBOARD_TLS_ENABLED. One shared
 	// hot-reload cert source backs BOTH listeners (no double watcher). When TLS
@@ -204,10 +228,21 @@ func newAPIServer(ctx context.Context, cfg *Config, log *zap.Logger) (*http.Serv
 	}, nil
 }
 
-func newMetricsServer(port int) *http.Server {
+// newMetricsServer builds the dashboard :9092 metrics server. When verifier is
+// non-nil, /metrics is wrapped with constant-time bearer-token auth (IAM-WU-12),
+// mirroring the webhook's setupMetricsServer and the policy-manager's
+// NewMetricsRouter. /healthz is always left open so kubelet probes (which send
+// no Authorization header) keep working. A nil verifier yields the legacy
+// plain-HTTP, unauthenticated /metrics — main only passes nil when TLS is off,
+// so a bearer token is never sent over plaintext.
+func newMetricsServer(port int, verifier *auth.TokenVerifier) *http.Server {
 	mux := http.NewServeMux()
-	mux.Handle("/metrics", promhttp.Handler())
-	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
+	metricsHandler := promhttp.Handler()
+	if verifier != nil {
+		metricsHandler = auth.RequireBearer(verifier, metricsHandler)
+	}
+	mux.Handle("/metrics", metricsHandler)
+	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("OK"))
 	})

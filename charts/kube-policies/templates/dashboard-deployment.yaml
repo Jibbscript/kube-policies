@@ -71,6 +71,21 @@ spec:
                   key: token
                   optional: true
             {{- end }}
+            {{- if .Values.dashboard.tls.enabled }}
+            # Serving-side metrics auth (IAM-WU-12): the dashboard /metrics
+            # endpoint requires this bearer token. Coupled to dashboard.tls.enabled
+            # so the token is only present when /metrics serves TLS 1.3 — a bearer
+            # token must never be accepted over plaintext (mirrors the webhook /
+            # policy-manager metrics auth gating). The same internal-token Secret
+            # is reused so a scraper that already presents it (POLICY_MANAGER_INTERNAL_TOKEN
+            # above) authenticates against the dashboard too.
+            - name: INTERNAL_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "kube-policies.fullname" . }}-internal-token
+                  key: token
+                  optional: true
+            {{- end }}
             - name: ALLOW_WRITES
               value: {{ .Values.dashboard.allowWrites | default false | quote }}
             - name: POLICY_MANAGER_STREAM_URL
