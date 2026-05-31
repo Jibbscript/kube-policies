@@ -113,6 +113,26 @@ func main() {
 	if err != nil {
 		log.Fatal("Failed to build API TLS config", zap.Error(err))
 	}
+
+	// OIDC bearer authN + RBAC for the management plane (IAM-WU-01/02). When
+	// security.authentication.enabled is false the management API is served
+	// unauthenticated — a tracked dev-only gap. NewOIDCVerifier only sets up a
+	// lazy RemoteKeySet (no blocking network call); if it errors we fail closed.
+	var apiVerifier policymanager.OIDCVerifier
+	if cfg.Security.Authentication.Enabled {
+		apiVerifier, err = policymanager.NewOIDCVerifier(ctx, cfg.Security.Authentication)
+		if err != nil {
+			log.Fatal("Failed to build OIDC verifier", zap.Error(err))
+		}
+	}
+	log.Info("policy-manager API authentication configured",
+		zap.Bool("oidc_enforced", cfg.Security.Authentication.Enabled),
+		zap.String("issuer", cfg.Security.Authentication.Issuer),
+		zap.Int("rbac_role_bindings", len(cfg.Security.RBAC.RoleBindings)),
+	)
+	if !cfg.Security.Authentication.Enabled {
+		log.Warn("SECURITY: OIDC authentication is DISABLED — the policy-manager management API (/api/v1 policies/bundles/exceptions/compliance) is served UNAUTHENTICATED. This is a dev-only posture and a tracked gap; production deployments MUST set security.authentication.enabled=true with issuer/jwks_url/audience.")
+	}
 	certReloader, err := tlsreload.New(*certPath, *keyPath, log.Named("tls-reload"),
 		tlsreload.WithOnReload(func(cert *tls.Certificate) {
 			if cert != nil && cert.Leaf != nil {
@@ -131,7 +151,7 @@ func main() {
 
 	apiServer := &http.Server{
 		Addr:         fmt.Sprintf(":%d", *port),
-		Handler:      policymanager.NewAPIRouter(policyManager),
+		Handler:      policymanager.NewAPIRouter(policyManager, cfg.Security.Authentication, cfg.Security.RBAC, apiVerifier),
 		TLSConfig:    tlsConf,
 		ReadTimeout:  30 * time.Second,
 		WriteTimeout: 30 * time.Second,

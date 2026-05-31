@@ -7,6 +7,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
 	"github.com/Jibbscript/kube-policies/internal/auth"
+	"github.com/Jibbscript/kube-policies/internal/config"
 )
 
 // NewAPIRouter returns the gin.Engine that backs the policy-manager API on
@@ -15,9 +16,20 @@ import (
 // the route definitions in test setup. cmd/policy-manager/main.go calls this
 // to construct the production server.
 //
+// AuthN/RBAC are config-gated by security.authentication.enabled. When that
+// flag is true and verifier is non-nil, the management plane
+// (policies/bundles/exceptions/compliance) is protected by OIDC bearer authN
+// (IAM-WU-01) plus group-to-role RBAC (IAM-WU-02). When the flag is false the
+// /api/v1 management plane is served UNAUTHENTICATED — a dev-only path that
+// cmd/policy-manager/main.go logs as a startup warning and that remains a
+// tracked gap. This function does not itself force authN on; production
+// deployments MUST set security.authentication.enabled=true together with
+// issuer/jwks_url/audience. The Helm production values do this, and the chart
+// fails to render otherwise — but that guarantee lives in the chart, not here.
+//
 // CORS is intentionally not configured here: the policy-manager API is
 // deployed behind an ingress/mesh that owns CORS, auth, and TLS termination.
-func NewAPIRouter(m *Manager) *gin.Engine {
+func NewAPIRouter(m *Manager, authCfg config.AuthConfig, rbacCfg config.RBACConfig, verifier oidcVerifier) *gin.Engine {
 	gin.SetMode(gin.ReleaseMode)
 	router := gin.New()
 	router.Use(gin.Recovery())
@@ -29,44 +41,58 @@ func NewAPIRouter(m *Manager) *gin.Engine {
 		c.JSON(http.StatusOK, gin.H{"status": "ready"})
 	})
 
-	api := router.Group("/api/v1")
+	// Management plane: human-facing CRUD + read RPCs. Guarded by OIDC authN +
+	// RBAC when enabled.
+	mgmt := router.Group("/api/v1")
+	if authCfg.Enabled && verifier != nil {
+		mgmt.Use(OIDCAuthMiddleware(verifier, authCfg), RBACMiddleware(rbacCfg))
+	}
 	{
 		// Policy CRUD
-		api.GET("/policies", m.ListPolicies)
-		api.GET("/policies/:id", m.GetPolicy)
-		api.POST("/policies", m.CreatePolicy)
-		api.PUT("/policies/:id", m.UpdatePolicy)
-		api.DELETE("/policies/:id", m.DeletePolicy)
+		mgmt.GET("/policies", m.ListPolicies)
+		mgmt.GET("/policies/:id", m.GetPolicy)
+		mgmt.POST("/policies", m.CreatePolicy)
+		mgmt.PUT("/policies/:id", m.UpdatePolicy)
+		mgmt.DELETE("/policies/:id", m.DeletePolicy)
 
 		// Policy evaluation (RPC, no persistence)
-		api.POST("/policies/:id/test", m.TestPolicy)
-		api.POST("/policies/validate", m.ValidatePolicy)
-		api.POST("/policies/evaluate", m.EvaluatePolicy)
+		mgmt.POST("/policies/:id/test", m.TestPolicy)
+		mgmt.POST("/policies/validate", m.ValidatePolicy)
+		mgmt.POST("/policies/evaluate", m.EvaluatePolicy)
 
 		// Policy lifecycle (stubs)
-		api.POST("/policies/:id/deploy", m.DeployPolicy)
-		api.GET("/policies/:id/status", m.GetPolicyStatus)
+		mgmt.POST("/policies/:id/deploy", m.DeployPolicy)
+		mgmt.GET("/policies/:id/status", m.GetPolicyStatus)
 
 		// Bundles
-		api.GET("/bundles", m.ListBundles)
-		api.GET("/bundles/:id", m.GetBundle)
-		api.POST("/bundles", m.CreateBundle)
+		mgmt.GET("/bundles", m.ListBundles)
+		mgmt.GET("/bundles/:id", m.GetBundle)
+		mgmt.POST("/bundles", m.CreateBundle)
 
 		// Exceptions
-		api.GET("/exceptions", m.ListExceptions)
-		api.POST("/exceptions", m.CreateException)
-		api.PUT("/exceptions/:id", m.UpdateException)
-		api.DELETE("/exceptions/:id", m.DeleteException)
+		mgmt.GET("/exceptions", m.ListExceptions)
+		mgmt.POST("/exceptions", m.CreateException)
+		mgmt.PUT("/exceptions/:id", m.UpdateException)
+		mgmt.DELETE("/exceptions/:id", m.DeleteException)
 
 		// Compliance (stubs)
-		api.GET("/compliance/reports", m.ListComplianceReports)
-		api.POST("/compliance/reports", m.GenerateComplianceReport)
-		api.GET("/compliance/frameworks", m.ListComplianceFrameworks)
+		mgmt.GET("/compliance/reports", m.ListComplianceReports)
+		mgmt.POST("/compliance/reports", m.GenerateComplianceReport)
+		mgmt.GET("/compliance/frameworks", m.ListComplianceFrameworks)
+	}
 
-		// Decisions live-ticker (M2)
-		api.POST("/decisions/internal", m.IngestInternal)
-		api.GET("/decisions/stream", m.StreamDecisions)
-		api.GET("/decisions/recent", m.RecentDecisions)
+	// Decisions machine-plane (M2): the live-ticker ingest/stream/recent
+	// endpoints. This group is intentionally NOT wrapped by the OIDC middleware
+	// — it is a service-to-service plane, not a human one. /decisions/internal
+	// keeps its own constant-time symmetric internal-token auth
+	// (CRY-WU-13, IAM-WU-07); stream/recent are read-only ticker feeds.
+	// Hardening of the inter-service authn for this plane (projected ServiceAccount
+	// tokens) is tracked separately in IAM-WU-11.
+	decisions := router.Group("/api/v1")
+	{
+		decisions.POST("/decisions/internal", m.IngestInternal)
+		decisions.GET("/decisions/stream", m.StreamDecisions)
+		decisions.GET("/decisions/recent", m.RecentDecisions)
 	}
 
 	return router

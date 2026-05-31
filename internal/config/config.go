@@ -76,24 +76,31 @@ type TLSConfig struct {
 	ClientCAPath string `mapstructure:"client_ca_path"`
 }
 
-// RBACConfig represents RBAC configuration
-type RBACConfig struct {
-	Enabled     bool              `mapstructure:"enabled"`
-	Provider    string            `mapstructure:"provider"`
-	Config      map[string]string `mapstructure:"config"`
-	DefaultRole string            `mapstructure:"default_role"`
-}
-
-// AuthConfig represents authentication configuration
+// AuthConfig configures OIDC bearer-token authentication for the policy-manager API.
 type AuthConfig struct {
-	Providers []AuthProvider `mapstructure:"providers"`
+	Enabled       bool     `mapstructure:"enabled"`        // when false, API is unauthenticated (dev only; tracked gap)
+	Issuer        string   `mapstructure:"issuer"`         // OIDC issuer URL (iss claim must match)
+	JWKSURL       string   `mapstructure:"jwks_url"`       // JWKS endpoint (explicit; no discovery round-trip)
+	Audience      []string `mapstructure:"audience"`       // accepted aud values (token aud must intersect)
+	UsernameClaim string   `mapstructure:"username_claim"` // claim for principal username (default "sub")
+	GroupsClaim   string   `mapstructure:"groups_claim"`   // claim for principal groups (default "groups")
+	SupportedAlgs []string `mapstructure:"supported_algs"` // FIPS-approved signing algs allow-list
 }
 
-// AuthProvider represents an authentication provider
-type AuthProvider struct {
-	Name   string            `mapstructure:"name"`
-	Type   string            `mapstructure:"type"` // "oidc", "ldap", "cert"
-	Config map[string]string `mapstructure:"config"`
+// RBACConfig maps authenticated OIDC groups to API roles (viewer/editor/admin).
+// There is intentionally no enable flag: RBAC is mounted together with OIDC
+// authN (gated by security.authentication.enabled), and DefaultRole already
+// expresses an "everyone gets role X" posture. Role-name validation is
+// unconditional so a typo can never silently grant or withhold access.
+type RBACConfig struct {
+	DefaultRole  string        `mapstructure:"default_role"` // role for an authenticated principal with no matching binding ("" => deny mutations)
+	RoleBindings []RoleBinding `mapstructure:"role_bindings"`
+}
+
+// RoleBinding grants an API role to one or more OIDC groups.
+type RoleBinding struct {
+	Role   string   `mapstructure:"role"`   // "viewer" | "editor" | "admin"
+	Groups []string `mapstructure:"groups"` // OIDC groups granted this role
 }
 
 // StorageConfig represents storage configuration
@@ -129,6 +136,11 @@ func LoadConfig(configPath string) (*Config, error) {
 	if err := v.Unmarshal(&config); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal config: %w", err)
 	}
+
+	// Apply OIDC auth defaults (IAM-WU-13). These depend on
+	// security.authentication.enabled, which is only known after unmarshal, so
+	// they are set on the struct here rather than via viper.SetDefault.
+	applyAuthDefaults(&config.Security.Authentication)
 
 	// Validate configuration
 	if err := validateConfig(&config); err != nil {
@@ -166,13 +178,40 @@ func setDefaults(v *viper.Viper) {
 	// Security defaults
 	v.SetDefault("security.tls.min_version", "1.3")
 	v.SetDefault("security.tls.client_auth", "require")
-	v.SetDefault("security.rbac.enabled", true)
 	// security.encryption.* defaults removed with the inert EncryptionConfig
 	// (CRY-WU-15): at-rest protection is a cluster EncryptionConfiguration + KMS
 	// concern, not an in-app control.
 
 	// Storage defaults
 	v.SetDefault("storage.type", "memory")
+}
+
+// fipsAsymmetricAlgs is the allow-list of asymmetric JWS signing algorithms
+// whose verification routes through stdlib crypto/rsa + crypto/ecdsa, i.e. the
+// Go FIPS 140-3 module (CRY-WU-14). Symmetric (HMAC) and "none" are excluded so
+// an attacker cannot downgrade a token to an unapproved or unsigned algorithm.
+var fipsAsymmetricAlgs = []string{
+	"RS256", "RS384", "RS512",
+	"PS256", "PS384", "PS512",
+	"ES256", "ES384", "ES512",
+}
+
+// applyAuthDefaults fills the OIDC claim-name and signing-algorithm defaults
+// when authentication is enabled and the operator left them unset (IAM-WU-13).
+// Disabled auth is left untouched so the zero value stays inert.
+func applyAuthDefaults(a *AuthConfig) {
+	if !a.Enabled {
+		return
+	}
+	if a.UsernameClaim == "" {
+		a.UsernameClaim = "sub"
+	}
+	if a.GroupsClaim == "" {
+		a.GroupsClaim = "groups"
+	}
+	if len(a.SupportedAlgs) == 0 {
+		a.SupportedAlgs = append([]string(nil), fipsAsymmetricAlgs...)
+	}
 }
 
 // validateConfig validates the configuration
@@ -219,5 +258,46 @@ func validateConfig(config *Config) error {
 		return fmt.Errorf("invalid TLS configuration: %w", err)
 	}
 
+	// Validate OIDC authentication (IAM-WU-01/13): when enabled, an issuer, a
+	// JWKS endpoint, and at least one accepted audience are mandatory. Fail
+	// closed at startup rather than booting an "authenticated" API that cannot
+	// actually verify a token.
+	if config.Security.Authentication.Enabled {
+		auth := config.Security.Authentication
+		if strings.TrimSpace(auth.Issuer) == "" {
+			return fmt.Errorf("security.authentication.issuer is required when authentication is enabled")
+		}
+		if strings.TrimSpace(auth.JWKSURL) == "" {
+			return fmt.Errorf("security.authentication.jwks_url is required when authentication is enabled")
+		}
+		if len(auth.Audience) == 0 {
+			return fmt.Errorf("security.authentication.audience must list at least one accepted audience when authentication is enabled")
+		}
+	}
+
+	// Validate RBAC role names (IAM-WU-02) unconditionally: every RoleBinding.Role
+	// and a set DefaultRole must be one of viewer/editor/admin so a typo cannot
+	// silently grant or withhold access. An empty DefaultRole is allowed and
+	// means "deny mutations for principals with no matching binding". There is no
+	// enable flag to gate this on — RBAC enforcement is mounted with OIDC authN.
+	for i, rb := range config.Security.RBAC.RoleBindings {
+		if !validRole(rb.Role) {
+			return fmt.Errorf("security.rbac.role_bindings[%d].role %q is invalid (must be viewer, editor, or admin)", i, rb.Role)
+		}
+	}
+	if dr := strings.TrimSpace(config.Security.RBAC.DefaultRole); dr != "" && !validRole(dr) {
+		return fmt.Errorf("security.rbac.default_role %q is invalid (must be viewer, editor, or admin)", config.Security.RBAC.DefaultRole)
+	}
+
 	return nil
+}
+
+// validRole reports whether name is one of the three API roles.
+func validRole(name string) bool {
+	switch name {
+	case "viewer", "editor", "admin":
+		return true
+	default:
+		return false
+	}
 }

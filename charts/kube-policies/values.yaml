@@ -218,6 +218,48 @@ policyManager:
     cert: ""
     key: ""
 
+# Management API authentication & authorization (P3 Increment 1).
+# Controls the policy-manager management API (:8080). These keys are rendered
+# into security.authentication / security.rbac in the shared ConfigMap and
+# unmarshal into the runtime SecurityConfig.
+#
+# DEV DEFAULT IS UNAUTHENTICATED: with auth.enabled=false the management API
+# accepts requests WITHOUT an OIDC bearer token. This is a tracked gap suitable
+# only for kind / ct / demo clusters. PRODUCTION MUST set auth.enabled=true
+# (see values-production.yaml); when enabled, the chart REFUSES TO RENDER unless
+# auth.issuer, auth.jwksUrl, and a non-empty auth.audience are supplied
+# (fail-closed boundary, mirrors the metrics.tls / webhook-TLS guards).
+auth:
+  # When false, the management API is UNAUTHENTICATED (dev only; tracked gap).
+  # When true, OIDC bearer-token auth is enforced and issuer/jwksUrl/audience
+  # become REQUIRED (the render fails otherwise).
+  enabled: false
+  # OIDC issuer URL (e.g. https://oidc.example.com). REQUIRED when enabled.
+  issuer: ""
+  # OIDC JWKS endpoint used to fetch token-signing keys. REQUIRED when enabled.
+  jwksUrl: ""
+  # Accepted token audiences. At least one entry REQUIRED when enabled.
+  audience: []
+  # JWT claim carrying the username. Optional; runtime defaults to "sub".
+  usernameClaim: "sub"
+  # JWT claim carrying the user's groups (used for RBAC role bindings).
+  # Optional; runtime defaults to "groups".
+  groupsClaim: "groups"
+  # Role-based access control for the management API.
+  rbac:
+    # Role granted to authenticated users with no matching role binding.
+    # "" => no default role: such users are denied mutations.
+    # One of: "" | viewer | editor | admin.
+    defaultRole: ""
+    # Bind OIDC groups to roles. Each entry maps a role to a list of groups.
+    # Example:
+    #   roleBindings:
+    #     - role: admin
+    #       groups: ["platform-admins"]
+    #     - role: viewer
+    #       groups: ["sre", "auditors"]
+    roleBindings: []
+
 # Policy Configuration
 policies:
   # Enable default security policies

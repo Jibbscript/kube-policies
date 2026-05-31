@@ -50,6 +50,35 @@ audit:
   integrity:
     enabled: true
 
+# Management API authentication is MANDATORY in production (P3 Increment 1):
+# the policy-manager :8080 API enforces OIDC bearer-token auth instead of
+# shipping unauthenticated. This overlay turns it on but does NOT hardcode an
+# issuer — the operator MUST supply issuer, jwksUrl, and a non-empty audience
+# for their environment. The chart's render-fail guard makes these effectively
+# required: with auth.enabled=true and any of them empty,
+#   helm template -f values-production.yaml
+# is EXPECTED TO FAIL with
+#   "auth.enabled=true requires auth.issuer, auth.jwksUrl, and a non-empty auth.audience"
+# Set them via additional -f overrides or --set, e.g.:
+#   --set auth.issuer=https://oidc.example.com \
+#   --set auth.jwksUrl=https://oidc.example.com/keys \
+#   --set 'auth.audience={kube-policies}'
+auth:
+  enabled: true
+  # REQUIRED — supply per environment (left empty so the render fails until set).
+  issuer: ""
+  jwksUrl: ""
+  audience: []
+  rbac:
+    # Grant authenticated users with no matching binding a read-only role.
+    defaultRole: viewer
+    # Sample bindings — replace the group names with your IdP groups.
+    roleBindings:
+      - role: admin
+        groups: ["platform-admins"]
+      - role: editor
+        groups: ["policy-authors"]
+
 # If the dashboard is enabled in production, terminate TLS in-pod and emit HSTS
 # (CRY-WU-07). Harmless when dashboard.enabled stays false. Operators who
 # terminate TLS at the Ingress instead can leave dashboard.tls.enabled false and

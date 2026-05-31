@@ -2,6 +2,15 @@
 {{- if not (or (eq $auditBackendType "file") (eq $auditBackendType "stdout")) -}}
 {{- fail (printf "audit.backend.type=%q is not supported by the runtime; use file or stdout" $auditBackendType) -}}
 {{- end -}}
+{{- /* Fail-closed guard for management-API authentication (P3 Increment 1).
+       When auth.enabled=true, OIDC issuer/jwksUrl/audience are mandatory; an
+       enabled-but-misconfigured render is a security regression, so refuse to
+       render. Mirrors the metrics.tls / webhook-TLS render-fail guards. */ -}}
+{{- if .Values.auth.enabled -}}
+{{- if or (empty .Values.auth.issuer) (empty .Values.auth.jwksUrl) (empty .Values.auth.audience) -}}
+{{- fail "auth.enabled=true requires auth.issuer, auth.jwksUrl, and a non-empty auth.audience" -}}
+{{- end -}}
+{{- end -}}
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -33,3 +42,28 @@ data:
         integrity_key_path: {{ .Values.audit.integrity.keyPath | default "/etc/audit-integrity/key" | quote }}
         {{- end }}
       {{- end }}
+    security:
+      # Management API authentication (policy-manager :8080). When
+      # authentication.enabled=false the API is UNAUTHENTICATED (dev only;
+      # tracked gap). Production sets auth.enabled=true (values-production.yaml),
+      # which the render-fail guard above gates on issuer/jwks_url/audience.
+      authentication:
+        enabled: {{ .Values.auth.enabled }}
+        {{- if .Values.auth.enabled }}
+        issuer: {{ .Values.auth.issuer | quote }}
+        jwks_url: {{ .Values.auth.jwksUrl | quote }}
+        audience:
+          {{- toYaml .Values.auth.audience | nindent 10 }}
+        username_claim: {{ .Values.auth.usernameClaim | default "sub" | quote }}
+        groups_claim: {{ .Values.auth.groupsClaim | default "groups" | quote }}
+        {{- end }}
+      rbac:
+        # default_role grants a role to authenticated users without a matching
+        # binding; "" denies mutations to such users.
+        default_role: {{ .Values.auth.rbac.defaultRole | quote }}
+        {{- if .Values.auth.rbac.roleBindings }}
+        role_bindings:
+          {{- toYaml .Values.auth.rbac.roleBindings | nindent 10 }}
+        {{- else }}
+        role_bindings: []
+        {{- end }}

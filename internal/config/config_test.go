@@ -29,7 +29,6 @@ func clearConfigEnv(t *testing.T) {
 		"KUBE_POLICIES_METRICS_SUBSYSTEM",
 		"KUBE_POLICIES_SECURITY_TLS_MIN_VERSION",
 		"KUBE_POLICIES_SECURITY_TLS_CLIENT_AUTH",
-		"KUBE_POLICIES_SECURITY_RBAC_ENABLED",
 		"KUBE_POLICIES_SECURITY_ENCRYPTION_AT_REST_ENABLED",
 		"KUBE_POLICIES_SECURITY_ENCRYPTION_AT_REST_ALGORITHM",
 		"KUBE_POLICIES_SECURITY_ENCRYPTION_IN_TRANSIT_ENABLED",
@@ -98,6 +97,131 @@ security:
 	_, err := LoadConfig(path)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "invalid TLS min version")
+}
+
+func TestLoadConfig_AuthEnabledRequiresIssuerJWKSAudience(t *testing.T) {
+	cases := []struct {
+		name    string
+		body    string
+		wantErr string
+	}{
+		{
+			name: "empty issuer",
+			body: `
+security:
+  authentication:
+    enabled: true
+    jwks_url: https://issuer.example.com/jwks
+    audience: ["kube-policies-api"]
+`,
+			wantErr: "issuer is required",
+		},
+		{
+			name: "empty jwks_url",
+			body: `
+security:
+  authentication:
+    enabled: true
+    issuer: https://issuer.example.com
+    audience: ["kube-policies-api"]
+`,
+			wantErr: "jwks_url is required",
+		},
+		{
+			name: "empty audience",
+			body: `
+security:
+  authentication:
+    enabled: true
+    issuer: https://issuer.example.com
+    jwks_url: https://issuer.example.com/jwks
+`,
+			wantErr: "audience must list at least one",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			clearConfigEnv(t)
+			path := filepath.Join(t.TempDir(), "config.yaml")
+			writeConfig(t, path, tc.body)
+			_, err := LoadConfig(path)
+			require.Error(t, err)
+			require.Contains(t, err.Error(), tc.wantErr)
+		})
+	}
+}
+
+func TestLoadConfig_RejectsInvalidRBACRoles(t *testing.T) {
+	cases := []struct {
+		name    string
+		body    string
+		wantErr string
+	}{
+		{
+			name: "invalid role binding role",
+			body: `
+security:
+  rbac:
+    role_bindings:
+      - role: superuser
+        groups: ["platform"]
+`,
+			wantErr: "role_bindings[0].role",
+		},
+		{
+			name: "invalid default role",
+			body: `
+security:
+  rbac:
+    default_role: superuser
+`,
+			wantErr: "default_role",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			clearConfigEnv(t)
+			path := filepath.Join(t.TempDir(), "config.yaml")
+			writeConfig(t, path, tc.body)
+			_, err := LoadConfig(path)
+			require.Error(t, err)
+			require.Contains(t, err.Error(), tc.wantErr)
+		})
+	}
+}
+
+func TestLoadConfig_AuthEnabledDefaultsSupportedAlgsToFIPSAsymmetricSet(t *testing.T) {
+	clearConfigEnv(t)
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	writeConfig(t, path, `
+security:
+  authentication:
+    enabled: true
+    issuer: https://issuer.example.com
+    jwks_url: https://issuer.example.com/jwks
+    audience: ["kube-policies-api"]
+`)
+
+	cfg, err := LoadConfig(path)
+	require.NoError(t, err)
+
+	require.ElementsMatch(t, fipsAsymmetricAlgs, cfg.Security.Authentication.SupportedAlgs)
+	require.NotContains(t, cfg.Security.Authentication.SupportedAlgs, "HS256")
+	require.NotContains(t, cfg.Security.Authentication.SupportedAlgs, "none")
+	// Claim-name defaults fill in too when auth is enabled.
+	require.Equal(t, "sub", cfg.Security.Authentication.UsernameClaim)
+	require.Equal(t, "groups", cfg.Security.Authentication.GroupsClaim)
+}
+
+func TestLoadConfig_AuthDisabledLeavesZeroValue(t *testing.T) {
+	clearConfigEnv(t)
+	cfg, err := LoadConfig(filepath.Join(t.TempDir(), "missing.yaml"))
+	require.NoError(t, err)
+
+	require.False(t, cfg.Security.Authentication.Enabled)
+	require.Empty(t, cfg.Security.Authentication.SupportedAlgs)
+	require.Empty(t, cfg.Security.Authentication.UsernameClaim)
+	require.Empty(t, cfg.Security.Authentication.GroupsClaim)
 }
 
 func writeConfig(t *testing.T, path string, body string) {

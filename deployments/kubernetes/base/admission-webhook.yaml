@@ -213,9 +213,14 @@ data:
           - "TLS_CHACHA20_POLY1305_SHA256"
           - "TLS_AES_128_GCM_SHA256"
         client_auth: "require"
+      # This base/example manifest ships the policy-manager management API with
+      # authentication DISABLED (dev only; tracked gap). It is NOT production
+      # secure. The production path is the Helm chart with auth.enabled=true,
+      # which enforces OIDC bearer-token auth and REFUSES TO RENDER without an
+      # issuer, jwksUrl, and audience.
+      authentication:
+        enabled: false
       rbac:
-        enabled: true
-        provider: "kubernetes"
         default_role: "viewer"
       # NOTE: no security.encryption stanza — at-rest protection is a cluster
       # EncryptionConfiguration + KMS concern, not an in-app control (CRY-WU-15;
