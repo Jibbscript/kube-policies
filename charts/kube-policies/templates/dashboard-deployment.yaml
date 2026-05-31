@@ -94,6 +94,15 @@ spec:
             - name: POLICY_MANAGER_CA_PATH
               value: "/etc/policy-manager-ca/ca.crt"
             {{- end }}
+            {{- if and .Values.policyManager.enabled .Values.policyManager.tls.mtls.enabled }}
+            # Present a client certificate to the policy-manager for mutual TLS
+            # (IAM-WU-03) on the proxied API + SSE stream; the metrics scraper
+            # does not (those listeners use bearer auth, not mTLS).
+            - name: POLICY_MANAGER_CLIENT_CERT_PATH
+              value: "/etc/policy-manager-client/tls.crt"
+            - name: POLICY_MANAGER_CLIENT_KEY_PATH
+              value: "/etc/policy-manager-client/tls.key"
+            {{- end }}
             # In-pod TLS serving + HSTS (CRY-WU-07). Default off (Ingress
             # terminates TLS); the production overlay turns these on.
             - name: DASHBOARD_TLS_ENABLED
@@ -154,6 +163,11 @@ spec:
               mountPath: /etc/policy-manager-ca
               readOnly: true
             {{- end }}
+            {{- if and .Values.policyManager.enabled .Values.policyManager.tls.mtls.enabled }}
+            - name: policy-manager-client
+              mountPath: /etc/policy-manager-client
+              readOnly: true
+            {{- end }}
       volumes:
         - name: tmp
           emptyDir: {}
@@ -172,6 +186,14 @@ spec:
               - key: ca.crt
                 path: ca.crt
             optional: true
+        {{- end }}
+        {{- if and .Values.policyManager.enabled .Values.policyManager.tls.mtls.enabled }}
+        # Client identity the dashboard presents to the policy-manager for mTLS
+        # (IAM-WU-03), issued by the shared cert-manager issuer. NOT optional:
+        # when mTLS is enabled the dashboard must hold this cert to reach the PM.
+        - name: policy-manager-client
+          secret:
+            secretName: {{ include "kube-policies.dashboardClientCertSecretName" . }}
         {{- end }}
       {{- with .Values.dashboard.nodeSelector }}
       nodeSelector:

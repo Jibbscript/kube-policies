@@ -87,18 +87,29 @@ func (c TLSConfig) ClientAuthType() tls.ClientAuthType {
 
 // BuildClientTLSConfig builds a *tls.Config for an outbound client that
 // verifies the server certificate against the CA bundle at caPath (CRY-WU-06,
-// CRY-WU-07). An empty caPath returns (nil, nil) so the caller falls back to
-// the system root pool. MinVersion is pinned to TLS 1.3; InsecureSkipVerify is
-// never set.
-func BuildClientTLSConfig(caPath string) (*tls.Config, error) {
+// CRY-WU-07). When getClientCert is non-nil the client also PRESENTS a
+// certificate for mutual TLS (IAM-WU-03) — typically a
+// tlsreload.Reloader.GetClientCertificate so a rotated client cert is served
+// without a process restart.
+//
+// It returns (nil, nil) only when caPath is empty AND getClientCert is nil, so a
+// caller with neither a custom trust root nor a client identity falls back to
+// the default transport (system roots, no client cert). MinVersion is pinned to
+// TLS 1.3; InsecureSkipVerify is never set.
+func BuildClientTLSConfig(caPath string, getClientCert func(*tls.CertificateRequestInfo) (*tls.Certificate, error)) (*tls.Config, error) {
 	pool, err := LoadClientCAPool(caPath)
 	if err != nil {
 		return nil, err
 	}
-	if pool == nil {
+	if pool == nil && getClientCert == nil {
 		return nil, nil
 	}
-	return &tls.Config{MinVersion: tls.VersionTLS13, RootCAs: pool}, nil
+	// pool may be nil here (system roots) when only a client identity is set.
+	cfg := &tls.Config{MinVersion: tls.VersionTLS13, RootCAs: pool}
+	if getClientCert != nil {
+		cfg.GetClientCertificate = getClientCert
+	}
+	return cfg, nil
 }
 
 // LoadClientCAPool loads a PEM bundle of client-certificate CAs from path

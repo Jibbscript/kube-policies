@@ -130,6 +130,21 @@ func (r *Reloader) GetCertificate(*tls.ClientHelloInfo) (*tls.Certificate, error
 	return nil, errors.New("tlsreload: no certificate loaded")
 }
 
+// GetClientCertificate is a tls.Config.GetClientCertificate callback returning
+// the cached certificate for CLIENT-side mutual TLS (IAM-WU-03): an outbound
+// caller (the admission-webhook or dashboard) presents this key pair to a
+// policy-manager that requires a client certificate. Like GetCertificate it
+// serves the atomically-cached pair so a rotated client cert is presented
+// without a restart, and never reads the disk on the handshake hot path. The
+// CertificateRequestInfo is ignored — the loaded pair is the pod's single
+// service identity.
+func (r *Reloader) GetClientCertificate(*tls.CertificateRequestInfo) (*tls.Certificate, error) {
+	if c := r.cached.Load(); c != nil {
+		return c, nil
+	}
+	return nil, errors.New("tlsreload: no certificate loaded")
+}
+
 // reload attempts to refresh the cached certificate. On failure it logs and
 // KEEPS the last-known-good certificate (never blanks the cache).
 func (r *Reloader) reload() {

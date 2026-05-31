@@ -1,4 +1,7 @@
 {{- if .Values.policyManager.enabled }}
+{{- if and .Values.policyManager.tls.mtls.enabled (not .Values.certManager.enabled) }}
+{{- fail "policyManager.tls.mtls.enabled=true requires certManager.enabled=true: demo self-signed certs cannot establish a shared client-CA trust chain for the webhook/dashboard -> policy-manager mTLS path (IAM-WU-03). Enable cert-manager or disable policyManager.tls.mtls." }}
+{{- end }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -50,6 +53,14 @@ spec:
             {{- if .Values.metrics.tls.enabled }}
             # Serve /metrics over TLS 1.3 with bearer-token auth (CRY-WU-08).
             - --metrics-tls
+            {{- end }}
+            {{- if .Values.policyManager.tls.mtls.enabled }}
+            # Mutual TLS on the :8080 API (IAM-WU-03): require + verify a client
+            # certificate from the webhook/dashboard callers. The trust anchor is
+            # the shared issuer CA already published as ca.crt in the serving
+            # Secret (cert-manager populates it), mounted at /etc/certs.
+            - --require-client-cert
+            - --client-ca-path=/etc/certs/ca.crt
             {{- end }}
           ports:
             - name: http

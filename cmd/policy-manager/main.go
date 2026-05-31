@@ -39,6 +39,23 @@ var (
 	// auth on /metrics (CRY-WU-08); /healthz + /readyz stay open. Default off.
 	metricsTLS = flag.Bool("metrics-tls", false, "Serve /metrics over TLS 1.3 with bearer-token auth (CRY-WU-08)")
 
+	// clientCAPath enables OPTIONAL mutual TLS on the :8080 API (IAM-WU-03): when
+	// set, the policy-manager verifies a client certificate presented by the
+	// service callers (admission-webhook decision publisher, dashboard proxy/SSE)
+	// against this PEM client-CA bundle. The flag overrides the config-file
+	// security.tls.client_ca_path. Empty disables client-cert verification.
+	clientCAPath = flag.String("client-ca-path", "", "Path to PEM client-CA bundle for policy-manager API mTLS (IAM-WU-03); empty disables client-cert verification")
+
+	// requireClientCert makes API mTLS ENFORCING: the listener requires + verifies
+	// the client certificate (RequireAndVerifyClientCert) regardless of the
+	// config's client_auth string. Default FALSE (optional mTLS) — unlike the
+	// admission webhook (enforce-by-default, IAM-WU-06), the management API is also
+	// reachable by human operators and the OIDC/bearer layers already authenticate
+	// it, so mTLS is defense-in-depth that operators opt into. When true, a
+	// client-CA bundle MUST be supplied via --client-ca-path /
+	// security.tls.client_ca_path or startup fails closed.
+	requireClientCert = flag.Bool("require-client-cert", false, "Require + verify a client certificate (mTLS) on the API listener (IAM-WU-03). Default false (optional). When true a client-CA bundle must be supplied or startup fails closed.")
+
 	// disableControllers disables the CRD reconcilers. Off by default — the
 	// whole point of the policy-manager is to reconcile Policy and
 	// PolicyException CRDs into its in-memory registry. Operators running
@@ -109,9 +126,27 @@ func main() {
 	// callback (CRY-WU-10). The metrics server (:9091) stays plain HTTP — it
 	// carries no secret and is the target of the liveness/readiness probes and
 	// the Prometheus scrape.
-	tlsConf, err := config.BuildServerTLSConfig(cfg.Security.TLS, nil)
+	// Optional mutual TLS on the API listener (IAM-WU-03). An explicit
+	// --client-ca-path overrides the config-file value; --require-client-cert is
+	// the authoritative enforcement switch (mirrors the webhook, IAM-WU-06). The
+	// branch logic lives in buildAPITLSConfig so it is unit-tested directly.
+	if *clientCAPath != "" {
+		cfg.Security.TLS.ClientCAPath = *clientCAPath
+	}
+	tlsConf, err := buildAPITLSConfig(cfg.Security.TLS, *requireClientCert)
 	if err != nil {
 		log.Fatal("Failed to build API TLS config", zap.Error(err))
+	}
+	switch tlsConf.ClientAuth {
+	case tls.RequireAndVerifyClientCert:
+		log.Info("policy-manager API mTLS ENFORCED (RequireAndVerifyClientCert)",
+			zap.String("client_ca_path", cfg.Security.TLS.ClientCAPath),
+			zap.Bool("mtls_enforced", true),
+		)
+	case tls.VerifyClientCertIfGiven:
+		log.Info("policy-manager API optional mTLS (client-CA loaded; a presented client cert is verified, an absent cert is admitted)",
+			zap.String("client_ca_path", cfg.Security.TLS.ClientCAPath),
+		)
 	}
 
 	// OIDC bearer authN + RBAC for the management plane (IAM-WU-01/02). When
@@ -278,4 +313,45 @@ func main() {
 	}
 
 	log.Info("Servers stopped")
+}
+
+// buildAPITLSConfig builds the policy-manager API (:8080) listener TLS config
+// with OPTIONAL mutual TLS (IAM-WU-03). requireClientCert is authoritative over
+// the config's client_auth string, mirroring the admission webhook (IAM-WU-06):
+//
+//   - requireClientCert=true → RequireAndVerifyClientCert; fails CLOSED with an
+//     error when no client-CA bundle is configured (serving an enforce-intent
+//     listener that cannot verify is worse than refusing to start).
+//   - requireClientCert=false + a client-CA bundle present → VerifyClientCertIfGiven:
+//     a presented client cert is verified against the CA, an absent one is
+//     admitted. The shipped config default client_auth="require" must NOT be
+//     allowed to silently lock out the OIDC/bearer-authenticated operators that
+//     optional mode keeps serving, so an enforcing mode is downgraded here.
+//   - requireClientCert=false + no bundle → server-auth only (BuildServerTLSConfig
+//     downgrades a "require" config to NoClientCert when no pool is supplied).
+func buildAPITLSConfig(tlsCfg config.TLSConfig, requireClientCert bool) (*tls.Config, error) {
+	clientCAs, err := config.LoadClientCAPool(tlsCfg.ClientCAPath)
+	if err != nil {
+		return nil, fmt.Errorf("load client-CA bundle: %w", err)
+	}
+	if requireClientCert && clientCAs == nil {
+		return nil, fmt.Errorf("client certificate verification is required (--require-client-cert=true) but no client-CA bundle was provided via --client-ca-path / security.tls.client_ca_path; supply the CA that signs the webhook/dashboard client certificates, or leave --require-client-cert=false (optional mTLS)")
+	}
+	tlsConf, err := config.BuildServerTLSConfig(tlsCfg, clientCAs)
+	if err != nil {
+		return nil, err
+	}
+	switch {
+	case requireClientCert:
+		// Authoritative enforce: force RequireAndVerifyClientCert regardless of the
+		// config's client_auth. clientCAs is guaranteed non-nil (checked above).
+		tlsConf.ClientCAs = clientCAs
+		tlsConf.ClientAuth = tls.RequireAndVerifyClientCert
+	case clientCAs != nil:
+		// Optional mTLS: verify a presented cert, admit an absent one. The config
+		// default client_auth="require" would otherwise enforce and lock out the
+		// cert-less callers (human operators) that optional mode must keep serving.
+		tlsConf.ClientAuth = tls.VerifyClientCertIfGiven
+	}
+	return tlsConf, nil
 }

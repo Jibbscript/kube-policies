@@ -61,7 +61,10 @@ type TopViolatingRule struct {
 func NewMetricsHandler(cfg *Config, log *zap.Logger) gin.HandlerFunc {
 	// Short timeout so a hung upstream cannot stall the summary endpoint.
 	client := &http.Client{Timeout: 5 * time.Second}
-	if tlsConf, err := config.BuildClientTLSConfig(cfg.PolicyManagerCAPath); err != nil {
+	// nil getClientCert: the metrics listeners (:9091 PM, :9090 webhook) use
+	// bearer-token auth, not mTLS, so the scraper presents no client certificate
+	// (IAM-WU-03).
+	if tlsConf, err := config.BuildClientTLSConfig(cfg.PolicyManagerCAPath, nil); err != nil {
 		log.Warn("metrics CA bundle unavailable; scraper falls back to system roots",
 			zap.String("policy_manager_ca_path", cfg.PolicyManagerCAPath), zap.Error(err))
 	} else if tlsConf != nil {

@@ -111,6 +111,23 @@ Create the dashboard TLS certificate secret name (CRY-WU-07)
 {{- end }}
 
 {{/*
+Create the admission-webhook CLIENT certificate secret name (IAM-WU-03). This is
+the identity the webhook PRESENTS to the policy-manager for mutual TLS — distinct
+from its serving cert (certSecretName) and the apiserver client-CA bundle.
+*/}}
+{{- define "kube-policies.webhookClientCertSecretName" -}}
+{{- printf "%s-admission-webhook-client-certs" (include "kube-policies.fullname" .) }}
+{{- end }}
+
+{{/*
+Create the dashboard CLIENT certificate secret name (IAM-WU-03): the identity the
+dashboard PRESENTS to the policy-manager for mutual TLS on the proxied API + SSE.
+*/}}
+{{- define "kube-policies.dashboardClientCertSecretName" -}}
+{{- printf "%s-dashboard-client-certs" (include "kube-policies.fullname" .) }}
+{{- end }}
+
+{{/*
 Create the config map name
 */}}
 {{- define "kube-policies.configMapName" -}}

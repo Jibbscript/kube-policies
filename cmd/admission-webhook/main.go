@@ -65,6 +65,15 @@ var (
 	// serving CA so the in-cluster self-signed / cert-manager cert verifies.
 	policyManagerCAPath = flag.String("policy-manager-ca-path", "", "Path to PEM CA bundle trusted for the policy-manager TLS connection; empty uses system roots")
 
+	// policyManagerClientCertPath / policyManagerClientKeyPath, when BOTH set, make
+	// the decision publisher PRESENT a client certificate to the policy-manager for
+	// mutual TLS (IAM-WU-03) — authenticating the webhook as a service caller when
+	// the policy-manager enforces --require-client-cert. Empty (default) keeps the
+	// server-auth-only connection (CRY-WU-06). The cert is hot-reloaded so a
+	// cert-manager rotation needs no restart.
+	policyManagerClientCertPath = flag.String("policy-manager-client-cert-path", "", "Path to the PEM client certificate presented to the policy-manager for mTLS (IAM-WU-03); empty disables client-cert presentation")
+	policyManagerClientKeyPath  = flag.String("policy-manager-client-key-path", "", "Path to the private key for --policy-manager-client-cert-path")
+
 	// metricsTLS, when set, serves the :9090 metrics endpoint over TLS 1.3 and
 	// requires a bearer token on /metrics (CRY-WU-08). /healthz stays open for
 	// probes. Default off so plain-HTTP scraping/probing keeps working.
@@ -182,7 +191,24 @@ func main() {
 	// still applies (no InsecureSkipVerify), so an unverifiable connection just
 	// drops decisions; the token never crosses a plaintext connection. The
 	// webhook's own admission path is unaffected.
-	pmClientTLS, err := config.BuildClientTLSConfig(*policyManagerCAPath)
+	// Optionally present a client certificate to the policy-manager for mutual TLS
+	// (IAM-WU-03). The reloader's initial load is synchronous, so the publisher has
+	// a cert immediately; its rotation watcher is started below once the background
+	// context exists. A failed load is fatal: an operator who configured a client
+	// cert intends mTLS, and silently degrading would be rejected by an enforcing
+	// policy-manager anyway.
+	var (
+		pmClientCertReloader *tlsreload.Reloader
+		pmClientGetCert      func(*tls.CertificateRequestInfo) (*tls.Certificate, error)
+	)
+	if *policyManagerClientCertPath != "" && *policyManagerClientKeyPath != "" {
+		pmClientCertReloader, err = tlsreload.New(*policyManagerClientCertPath, *policyManagerClientKeyPath, log.Named("pm-client-cert"))
+		if err != nil {
+			log.Fatal("Failed to load policy-manager client certificate", zap.Error(err))
+		}
+		pmClientGetCert = pmClientCertReloader.GetClientCertificate
+	}
+	pmClientTLS, err := config.BuildClientTLSConfig(*policyManagerCAPath, pmClientGetCert)
 	if err != nil {
 		log.Warn("policy-manager CA bundle unavailable; decision publisher falls back to system roots",
 			zap.String("policy_manager_ca_path", *policyManagerCAPath),
@@ -232,6 +258,18 @@ func main() {
 			log.Error("TLS certificate reloader stopped with error", zap.Error(startErr))
 		}
 	}()
+
+	// Start the policy-manager client-cert rotation watcher (IAM-WU-03) now that
+	// the background context exists. The initial load already happened in
+	// tlsreload.New above, so the publisher has been presenting a cert since
+	// startup; this only keeps it fresh across cert-manager rotations.
+	if pmClientCertReloader != nil {
+		go func() {
+			if startErr := pmClientCertReloader.Start(ctx); startErr != nil {
+				log.Error("policy-manager client-cert reloader stopped with error", zap.Error(startErr))
+			}
+		}()
+	}
 
 	// Setup metrics server. When --metrics-tls is set (CRY-WU-08), the :9090
 	// listener serves TLS 1.3 (reusing the same hot-reload serving cert) and

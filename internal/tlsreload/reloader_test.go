@@ -93,6 +93,36 @@ func TestNew_InitialLoadAndGetCertificate(t *testing.T) {
 	}
 }
 
+// TestGetClientCertificate proves the IAM-WU-03 client-side callback serves the
+// same cached pair as GetCertificate, so a caller presenting a client cert for
+// mutual TLS benefits from the same hot-reload behavior.
+func TestGetClientCertificate(t *testing.T) {
+	dir := t.TempDir()
+	cp, kp := filepath.Join(dir, "tls.crt"), filepath.Join(dir, "tls.key")
+	writePair(t, cp, kp, 7, "client-A")
+
+	r, err := New(cp, kp, zap.NewNop())
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	cert, err := r.GetClientCertificate(nil)
+	if err != nil {
+		t.Fatalf("GetClientCertificate: %v", err)
+	}
+	leaf, err := x509.ParseCertificate(cert.Certificate[0])
+	if err != nil {
+		t.Fatalf("parse leaf: %v", err)
+	}
+	if leaf.SerialNumber.Int64() != 7 {
+		t.Fatalf("client cert serial = %d, want 7", leaf.SerialNumber.Int64())
+	}
+	// Both callbacks must return the identical cached pointer (one source of truth).
+	srv, _ := r.GetCertificate(nil)
+	if srv != cert {
+		t.Fatal("GetClientCertificate and GetCertificate must serve the same cached *tls.Certificate")
+	}
+}
+
 // TestWithOnReload proves the onReload hook fires on initial load and on
 // rotation with the loaded cert (whose Leaf carries NotAfter), backing the
 // cert-expiry metric (CRY-WU-12).

@@ -62,6 +62,16 @@ type Config struct {
 	// plaintext metrics scrape.
 	MetricsToken string
 
+	// PolicyManagerClientCertPath / PolicyManagerClientKeyPath, when BOTH set,
+	// make the dashboard PRESENT a client certificate to the policy-manager for
+	// mutual TLS (IAM-WU-03) on the reverse-proxied API and the SSE stream —
+	// authenticating the dashboard as a service caller when the policy-manager
+	// enforces --require-client-cert. Empty disables client-cert presentation. The
+	// metrics scraper does not present a client cert (the metrics listeners use
+	// bearer auth, not mTLS).
+	PolicyManagerClientCertPath string
+	PolicyManagerClientKeyPath  string
+
 	// TLSEnabled makes the dashboard serve its API (:8090) and metrics (:9092)
 	// over TLS 1.3 (CRY-WU-07). Default false: the common topology terminates
 	// TLS at the Ingress, where the pod sees plaintext. Set true to terminate
@@ -89,22 +99,24 @@ func LoadConfig() (*Config, error) {
 		// The policy-manager API/stream serve TLS 1.3 (CRY-WU-05); default to
 		// https. The metrics-URL defaults are http; the chart flips them to
 		// https when metrics.tls.enabled (CRY-WU-08) and supplies the scrape token.
-		PolicyManagerURL:           envOr("POLICY_MANAGER_URL", "https://policy-manager:8080"),
-		PolicyManagerMetricsURL:    envOr("POLICY_MANAGER_METRICS_URL", "http://policy-manager:9091/metrics"),
-		AdmissionWebhookMetricsURL: envOr("ADMISSION_WEBHOOK_METRICS_URL", "http://admission-webhook:9090/metrics"),
-		AllowWrites:                envBool("ALLOW_WRITES", false),
-		InternalToken:              os.Getenv("INTERNAL_TOKEN"),
-		InternalTokenPrevious:      os.Getenv("INTERNAL_TOKEN_PREVIOUS"),
-		CSPUnsafeInlineStyle:       envBool("DASHBOARD_CSP_UNSAFE_INLINE_STYLE", false),
-		PolicyManagerStreamURL:     envOr("POLICY_MANAGER_STREAM_URL", "https://policy-manager:8080/api/v1/decisions/stream"),
-		PolicyManagerCAPath:        os.Getenv("POLICY_MANAGER_CA_PATH"),
-		MetricsToken:               os.Getenv("POLICY_MANAGER_INTERNAL_TOKEN"),
-		TLSEnabled:                 envBool("DASHBOARD_TLS_ENABLED", false),
-		CertPath:                   envOr("DASHBOARD_CERT_PATH", "/etc/dashboard-certs/tls.crt"),
-		KeyPath:                    envOr("DASHBOARD_KEY_PATH", "/etc/dashboard-certs/tls.key"),
-		HSTSEnabled:                envBool("DASHBOARD_HSTS_ENABLED", false),
-		HSTSMaxAge:                 envIntOr("DASHBOARD_HSTS_MAX_AGE", 31536000),
-		HSTSIncludeSubdomains:      envBool("DASHBOARD_HSTS_INCLUDE_SUBDOMAINS", true),
+		PolicyManagerURL:            envOr("POLICY_MANAGER_URL", "https://policy-manager:8080"),
+		PolicyManagerMetricsURL:     envOr("POLICY_MANAGER_METRICS_URL", "http://policy-manager:9091/metrics"),
+		AdmissionWebhookMetricsURL:  envOr("ADMISSION_WEBHOOK_METRICS_URL", "http://admission-webhook:9090/metrics"),
+		AllowWrites:                 envBool("ALLOW_WRITES", false),
+		InternalToken:               os.Getenv("INTERNAL_TOKEN"),
+		InternalTokenPrevious:       os.Getenv("INTERNAL_TOKEN_PREVIOUS"),
+		CSPUnsafeInlineStyle:        envBool("DASHBOARD_CSP_UNSAFE_INLINE_STYLE", false),
+		PolicyManagerStreamURL:      envOr("POLICY_MANAGER_STREAM_URL", "https://policy-manager:8080/api/v1/decisions/stream"),
+		PolicyManagerCAPath:         os.Getenv("POLICY_MANAGER_CA_PATH"),
+		MetricsToken:                os.Getenv("POLICY_MANAGER_INTERNAL_TOKEN"),
+		PolicyManagerClientCertPath: os.Getenv("POLICY_MANAGER_CLIENT_CERT_PATH"),
+		PolicyManagerClientKeyPath:  os.Getenv("POLICY_MANAGER_CLIENT_KEY_PATH"),
+		TLSEnabled:                  envBool("DASHBOARD_TLS_ENABLED", false),
+		CertPath:                    envOr("DASHBOARD_CERT_PATH", "/etc/dashboard-certs/tls.crt"),
+		KeyPath:                     envOr("DASHBOARD_KEY_PATH", "/etc/dashboard-certs/tls.key"),
+		HSTSEnabled:                 envBool("DASHBOARD_HSTS_ENABLED", false),
+		HSTSMaxAge:                  envIntOr("DASHBOARD_HSTS_MAX_AGE", 31536000),
+		HSTSIncludeSubdomains:       envBool("DASHBOARD_HSTS_INCLUDE_SUBDOMAINS", true),
 	}, nil
 }
 

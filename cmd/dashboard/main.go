@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"flag"
 	"fmt"
 	"net/http"
@@ -176,7 +177,27 @@ func newAPIServer(ctx context.Context, cfg *Config, log *zap.Logger) (*http.Serv
 	// fall back to system roots — verification still applies (no
 	// InsecureSkipVerify), so an unverifiable upstream fails the request rather
 	// than silently downgrading.
-	upstreamTLS, err := config.BuildClientTLSConfig(cfg.PolicyManagerCAPath)
+	// Optionally present a client certificate to the policy-manager for mutual
+	// TLS (IAM-WU-03) on the reverse-proxied API and the SSE stream. The
+	// reloader's initial load is synchronous (so the proxy/SSE clients have a cert
+	// immediately); its rotation watcher runs under ctx. A failed load is fatal —
+	// an operator who configured a client cert intends mTLS, and an enforcing
+	// policy-manager would reject an un-certed dashboard anyway.
+	var pmClientGetCert func(*tls.CertificateRequestInfo) (*tls.Certificate, error)
+	if cfg.PolicyManagerClientCertPath != "" && cfg.PolicyManagerClientKeyPath != "" {
+		clientCertReloader, cerr := tlsreload.New(cfg.PolicyManagerClientCertPath, cfg.PolicyManagerClientKeyPath, log.Named("pm-client-cert"))
+		if cerr != nil {
+			return nil, fmt.Errorf("load policy-manager client certificate: %w", cerr)
+		}
+		go func() {
+			if rerr := clientCertReloader.Start(ctx); rerr != nil {
+				log.Error("policy-manager client-cert reloader stopped with error", zap.Error(rerr))
+			}
+		}()
+		pmClientGetCert = clientCertReloader.GetClientCertificate
+	}
+
+	upstreamTLS, err := config.BuildClientTLSConfig(cfg.PolicyManagerCAPath, pmClientGetCert)
 	if err != nil {
 		log.Warn("policy-manager CA bundle unavailable; upstream clients fall back to system roots",
 			zap.String("policy_manager_ca_path", cfg.PolicyManagerCAPath),

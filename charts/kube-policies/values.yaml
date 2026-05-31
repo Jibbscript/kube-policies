@@ -227,6 +227,15 @@ policyManager:
     caCert: ""
     cert: ""
     key: ""
+    # Mutual TLS on the :8080 API (IAM-WU-03). Optional; default off. When
+    # enabled the policy-manager REQUIRES + VERIFIES a client certificate from
+    # the admission-webhook and dashboard (defense-in-depth on top of the
+    # OIDC/bearer authN layers), and cert-manager issues client certs for them.
+    # REQUIRES certManager.enabled=true — demo self-signed certs are each signed
+    # by their own CA and cannot share a client-CA trust chain, so the chart
+    # fails the render when mtls.enabled is set without cert-manager.
+    mtls:
+      enabled: false
 
 # Management API authentication & authorization (P3 Increment 1).
 # Controls the policy-manager management API (:8080). These keys are rendered

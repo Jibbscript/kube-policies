@@ -41,6 +41,11 @@ admissionWebhook:
 policyManager:
   tls:
     autoGenerate: false
+    # Enforce mutual TLS on the :8080 API (IAM-WU-03): the policy-manager
+    # requires + verifies a client certificate from the webhook and dashboard,
+    # and cert-manager issues those client certs (certManager.enabled=true above).
+    mtls:
+      enabled: true
 
 # Protect the webhook/policy-manager /metrics endpoints with TLS + bearer auth
 # (CRY-WU-08). Requires the Prometheus scrape config to use https + ca_file +
