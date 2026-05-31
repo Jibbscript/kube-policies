@@ -217,15 +217,10 @@ data:
         enabled: true
         provider: "kubernetes"
         default_role: "viewer"
-      encryption:
-        at_rest:
-          enabled: true
-          algorithm: "AES-256-GCM"
-          key_source: "kubernetes-secret"
-        in_transit:
-          enabled: true
-          mode: "strict"
-    
+      # NOTE: no security.encryption stanza — at-rest protection is a cluster
+      # EncryptionConfiguration + KMS concern, not an in-app control (CRY-WU-15;
+      # see deployments/kubernetes/encryption/ and docs/compliance/secrets-at-rest.md).
+
     storage:
       type: "memory"
       config: {}

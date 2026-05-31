@@ -52,10 +52,15 @@ type MetricsConfig struct {
 
 // SecurityConfig represents security configuration
 type SecurityConfig struct {
-	TLS            TLSConfig        `mapstructure:"tls"`
-	RBAC           RBACConfig       `mapstructure:"rbac"`
-	Encryption     EncryptionConfig `mapstructure:"encryption"`
-	Authentication AuthConfig       `mapstructure:"authentication"`
+	TLS            TLSConfig  `mapstructure:"tls"`
+	RBAC           RBACConfig `mapstructure:"rbac"`
+	Authentication AuthConfig `mapstructure:"authentication"`
+	// NOTE: encryption-at-rest is intentionally NOT a field here. The webhook
+	// does not encrypt at rest in-process; secret/etcd at-rest protection is a
+	// cluster concern provided by a Kubernetes EncryptionConfiguration + KMS
+	// (CRY-WU-15). A previously-declared, never-consumed security.encryption
+	// stanza was removed to avoid implying an in-app control that did not exist.
+	// See deployments/kubernetes/encryption/ and docs/compliance/secrets-at-rest.md.
 }
 
 // TLSConfig represents TLS configuration
@@ -77,25 +82,6 @@ type RBACConfig struct {
 	Provider    string            `mapstructure:"provider"`
 	Config      map[string]string `mapstructure:"config"`
 	DefaultRole string            `mapstructure:"default_role"`
-}
-
-// EncryptionConfig represents encryption configuration
-type EncryptionConfig struct {
-	AtRest    EncryptionAtRestConfig    `mapstructure:"at_rest"`
-	InTransit EncryptionInTransitConfig `mapstructure:"in_transit"`
-}
-
-// EncryptionAtRestConfig represents encryption at rest configuration
-type EncryptionAtRestConfig struct {
-	Enabled   bool   `mapstructure:"enabled"`
-	Algorithm string `mapstructure:"algorithm"`
-	KeySource string `mapstructure:"key_source"`
-}
-
-// EncryptionInTransitConfig represents encryption in transit configuration
-type EncryptionInTransitConfig struct {
-	Enabled bool   `mapstructure:"enabled"`
-	Mode    string `mapstructure:"mode"` // "strict", "permissive"
 }
 
 // AuthConfig represents authentication configuration
@@ -181,10 +167,9 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("security.tls.min_version", "1.3")
 	v.SetDefault("security.tls.client_auth", "require")
 	v.SetDefault("security.rbac.enabled", true)
-	v.SetDefault("security.encryption.at_rest.enabled", true)
-	v.SetDefault("security.encryption.at_rest.algorithm", "AES-256-GCM")
-	v.SetDefault("security.encryption.in_transit.enabled", true)
-	v.SetDefault("security.encryption.in_transit.mode", "strict")
+	// security.encryption.* defaults removed with the inert EncryptionConfig
+	// (CRY-WU-15): at-rest protection is a cluster EncryptionConfiguration + KMS
+	// concern, not an in-app control.
 
 	// Storage defaults
 	v.SetDefault("storage.type", "memory")

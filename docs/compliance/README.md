@@ -29,6 +29,7 @@ This index is reviewed at least **annually** (next review **2027-05-29**) and on
 | [secure-configuration-baseline.md](secure-configuration-baseline.md) | Secure configuration baseline (CM-2 / CM-6): security-relevant defaults and hardening settings. |
 | [crypto-module.md](crypto-module.md) | FIPS 140-3 cryptographic module (SC-13): selected module, CMVP reference, and the build/CI/runtime evidence that shipped binaries run validated crypto. |
 | [crypto-standards.md](crypto-standards.md) | Approved cryptographic key strengths and signature algorithms (SC-12/SC-13/SC-17): the algorithm/key-length matrix for TLS server/client keys and certificate signing, tied to the FIPS module. |
+| [secrets-at-rest.md](secrets-at-rest.md) | Secrets-at-rest inventory and protection (SC-28 / CIS 1.2.31-33): every stored secret mapped to its at-rest protection, plus the cluster EncryptionConfiguration + KMS guidance. |
 
 ## Boundary & Inventory
 

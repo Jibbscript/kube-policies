@@ -17,6 +17,7 @@ func TestTLSConfig_Validate(t *testing.T) {
 	}{
 		{"tls13 no ciphers", TLSConfig{MinVersion: "1.3", ClientAuth: "require"}, false},
 		{"tls13 approved cipher", TLSConfig{MinVersion: "1.3", CipherSuites: []string{"TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384"}, ClientAuth: "none"}, false},
+		{"tls13 native suite names accepted", TLSConfig{MinVersion: "1.3", CipherSuites: []string{"TLS_AES_256_GCM_SHA384", "TLS_CHACHA20_POLY1305_SHA256", "TLS_AES_128_GCM_SHA256"}, ClientAuth: "none"}, false},
 		{"empty client_auth ok", TLSConfig{MinVersion: "1.3", ClientAuth: ""}, false},
 		{"tls12 below floor", TLSConfig{MinVersion: "1.2", ClientAuth: "require"}, true},
 		{"bad min_version 1.1", TLSConfig{MinVersion: "1.1", ClientAuth: "require"}, true},

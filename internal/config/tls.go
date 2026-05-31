@@ -25,6 +25,13 @@ var tlsVersions = map[string]uint16{
 // rejected at load, which excludes all CBC, RC4, 3DES, and non-PFS suites
 // (SC-8, SC-13).
 var approvedCipherSuites = map[string]uint16{
+	// TLS 1.3 AEAD suites. Go selects these automatically for 1.3 and ignores
+	// tls.Config.CipherSuites, but they are accepted here so a config that names
+	// the secure 1.3 suites validates rather than failing at load.
+	"TLS_AES_128_GCM_SHA256":       tls.TLS_AES_128_GCM_SHA256,
+	"TLS_AES_256_GCM_SHA384":       tls.TLS_AES_256_GCM_SHA384,
+	"TLS_CHACHA20_POLY1305_SHA256": tls.TLS_CHACHA20_POLY1305_SHA256,
+	// TLS 1.2 AEAD/PFS suites (apply when min_version permits 1.2).
 	"TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256": tls.TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,
 	"TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256":   tls.TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,
 	"TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384": tls.TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384,

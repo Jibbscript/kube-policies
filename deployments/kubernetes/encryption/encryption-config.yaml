@@ -1,0 +1,52 @@
+# Kubernetes secret encryption-at-rest configuration (CRY-WU-15).
+# Controls: NIST SC-28, SC-28(1), SC-12; CIS 1.2.31 / 1.2.32 / 1.2.33.
+#
+# This is the CLUSTER/control-plane control that protects kube-policies' stored
+# secrets at rest (the internal token, TLS keys, the audit HMAC key, and any
+# Policy/PolicyException data in etcd). kube-policies does NOT encrypt at rest
+# in-process; it inherits this from the apiserver.
+#
+# Install (control-plane operator step):
+#   1. Place this file on each control-plane node, e.g.
+#      /etc/kubernetes/encryption/encryption-config.yaml (mode 0600, root-owned).
+#   2. Add to the kube-apiserver manifest/flags:
+#        --encryption-provider-config=/etc/kubernetes/encryption/encryption-config.yaml
+#        --encryption-provider-config-automatic-reload=true
+#   3. Re-encrypt existing secrets after rollout:
+#        kubectl get secrets -A -o json | kubectl replace -f -
+#   4. Verify a stored secret is no longer plaintext in etcd:
+#        ETCDCTL_API=3 etcdctl get /registry/secrets/<ns>/<name> | hexdump -C | head
+#      (the value must be prefixed k8s:enc:kms:v2: ... , not readable JSON).
+#
+# Provider order = decryption attempt order; the FIRST provider encrypts new
+# writes. A KMS v2 provider is the FedRAMP-preferred choice (keys live in an
+# external HSM/KMS, not on disk). secretbox is shown as a no-external-dependency
+# fallback for environments without a KMS; `identity` last allows reading any
+# still-unencrypted values during migration (remove it once migration is done).
+apiVersion: apiserver.config.k8s.io/v1
+kind: EncryptionConfiguration
+resources:
+  - resources:
+      - secrets
+      - configmaps
+      # CRD data backing kube-policies (defense-in-depth; optional).
+      - policies.kube-policies.io
+      - policyexceptions.kube-policies.io
+    providers:
+      # PREFERRED: external KMS v2 (keys never on the API server's disk).
+      - kms:
+          apiVersion: v2
+          name: kube-policies-kms
+          endpoint: unix:///var/run/kmsplugin/socket.sock
+          timeout: 3s
+      # FALLBACK (no external KMS): AEAD with a 32-byte key held in this file.
+      # Rotate by prepending a new key; keep the old key for decryption.
+      - secretbox:
+          keys:
+            - name: key1
+              # REPLACE with: head -c 32 /dev/urandom | base64
+              secret: "REPLACE_WITH_BASE64_32_BYTE_KEY"
+      # Allows reading values written before encryption was enabled. Remove
+      # after the one-time re-encryption (step 3) so plaintext writes are
+      # impossible.
+      - identity: {}
