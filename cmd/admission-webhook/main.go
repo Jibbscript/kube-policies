@@ -9,7 +9,6 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"strings"
 	"syscall"
 	"time"
 
@@ -47,6 +46,18 @@ var (
 	// empty, client-certificate verification is disabled even if
 	// client_auth=require. Flag value overrides the config-file value.
 	clientCAPath = flag.String("client-ca-path", "", "Path to PEM client-CA bundle for webhook mTLS; empty disables client-cert verification")
+
+	// requireClientCert is the secure-by-default mTLS enforcement switch
+	// (IAM-WU-06). When true (the default), the webhook FAILS CLOSED at startup
+	// unless a client-CA bundle is supplied (--client-ca-path /
+	// security.tls.client_ca_path), and the resulting listener requires + verifies
+	// the apiserver client certificate (RequireAndVerifyClientCert) regardless of
+	// the config's client_auth string. Set false ONLY as a documented break-glass
+	// for clusters that cannot supply an apiserver client cert; the binary then
+	// loudly warns that mTLS is OFF. NOTE: the shipped DEV artifacts (Helm dev
+	// values, kustomize base) explicitly opt into break-glass — the webhook is
+	// enforce-by-default in the binary but NOT in those dev manifests.
+	requireClientCert = flag.Bool("require-client-cert", true, "Require and verify the apiserver client certificate (mTLS). Default true (fail closed). Set false ONLY as a documented break-glass for clusters that cannot supply an apiserver client cert.")
 
 	// policyManagerCAPath is the PEM bundle trusted when the webhook connects to
 	// the policy-manager API over TLS (CRY-WU-06). Empty (default) falls back to
@@ -190,7 +201,7 @@ func main() {
 	// client auth) are driven by cfg.Security.TLS rather than hardcoded
 	// literals (CRY-WU-03). A startup failure here is fatal — serving on a
 	// misconfigured TLS stack would be worse than not serving.
-	webhookServer, err := setupWebhookServer(admissionController, &cfg.Security.TLS, log)
+	webhookServer, err := setupWebhookServer(admissionController, &cfg.Security.TLS, *requireClientCert, log)
 	if err != nil {
 		log.Fatal("Failed to build webhook TLS server", zap.Error(err))
 	}
@@ -217,8 +228,8 @@ func main() {
 	}
 	webhookServer.TLSConfig.GetCertificate = certReloader.GetCertificate
 	go func() {
-		if err := certReloader.Start(ctx); err != nil {
-			log.Error("TLS certificate reloader stopped with error", zap.Error(err))
+		if startErr := certReloader.Start(ctx); startErr != nil {
+			log.Error("TLS certificate reloader stopped with error", zap.Error(startErr))
 		}
 	}()
 
@@ -350,7 +361,7 @@ func main() {
 	log.Info("Servers stopped")
 }
 
-func setupWebhookServer(controller *admission.Controller, tlsCfg *config.TLSConfig, log *zap.Logger) (*http.Server, error) {
+func setupWebhookServer(controller *admission.Controller, tlsCfg *config.TLSConfig, requireClientCert bool, log *zap.Logger) (*http.Server, error) {
 	gin.SetMode(gin.ReleaseMode)
 	router := gin.New()
 	router.Use(gin.Recovery())
@@ -369,27 +380,57 @@ func setupWebhookServer(controller *admission.Controller, tlsCfg *config.TLSConf
 	router.POST("/mutate", controller.MutateHandler)
 
 	// Build the TLS config from configuration rather than hardcoded literals
-	// (CRY-WU-03). Client-certificate verification (mTLS, CRY-WU-04) is enabled
-	// when a client-CA bundle path is configured; otherwise the listener stays
-	// server-auth-only (permissive) so non-mTLS environments still work.
+	// (CRY-WU-03). Apiserver client-certificate verification (mTLS, CRY-WU-04 /
+	// IAM-WU-06) is ENFORCE-BY-DEFAULT: requireClientCert defaults true, so the
+	// webhook fails closed unless a client-CA bundle is supplied and the listener
+	// requires + verifies the apiserver client cert. requireClientCert=false is a
+	// documented break-glass that restores the permissive (server-auth-only) path.
 	clientCAs, err := config.LoadClientCAPool(tlsCfg.ClientCAPath)
 	if err != nil {
 		return nil, fmt.Errorf("load client CA bundle: %w", err)
 	}
+
+	// Fail-closed boundary (IAM-WU-06): enforcement is requested but no client-CA
+	// bundle exists to verify against. Refuse to serve rather than silently
+	// downgrading to a permissive listener — an enforce-intent webhook that
+	// accepts uncerted callers is a security regression.
+	if requireClientCert && clientCAs == nil {
+		return nil, fmt.Errorf("client certificate verification is required (--require-client-cert=true) but no client-CA bundle was provided via --client-ca-path / security.tls.client_ca_path; supply the apiserver client-CA bundle, or set --require-client-cert=false as a documented break-glass")
+	}
+
 	tlsConf, err := config.BuildServerTLSConfig(*tlsCfg, clientCAs)
 	if err != nil {
 		return nil, err
 	}
-	mtlsEnforced := clientCAs != nil && tlsConf.ClientAuth == tls.RequireAndVerifyClientCert
-	log.Info("webhook TLS configured",
-		zap.String("min_version", tlsCfg.MinVersion),
-		zap.Strings("cipher_suites", tlsCfg.CipherSuites),
-		zap.String("client_auth", tlsCfg.ClientAuth),
-		zap.String("client_ca_path", tlsCfg.ClientCAPath),
-		zap.Bool("mtls_enforced", mtlsEnforced),
-	)
-	if tlsCfg.ClientCAPath == "" && tlsConf.ClientAuth == tls.NoClientCert && strings.EqualFold(tlsCfg.ClientAuth, "require") {
-		log.Warn("client-ca-path unset: client certificate verification DISABLED (permissive mode) despite client_auth=require")
+
+	if requireClientCert {
+		// Honor enforcement regardless of the config's client_auth string: even if
+		// tlsCfg.ClientAuth is not "require" (so BuildServerTLSConfig left ClientAuth
+		// at request/none), FORCE RequireAndVerifyClientCert + the loaded pool so
+		// --require-client-cert=true is authoritative. clientCAs is guaranteed
+		// non-nil here (the fail-closed check above returned otherwise).
+		tlsConf.ClientCAs = clientCAs
+		tlsConf.ClientAuth = tls.RequireAndVerifyClientCert
+		log.Info("webhook TLS configured (apiserver mTLS ENFORCED)",
+			zap.String("min_version", tlsCfg.MinVersion),
+			zap.Strings("cipher_suites", tlsCfg.CipherSuites),
+			zap.String("client_auth", tlsCfg.ClientAuth),
+			zap.String("client_ca_path", tlsCfg.ClientCAPath),
+			zap.Bool("mtls_enforced", true),
+		)
+	} else {
+		// Break-glass: apiserver client-certificate verification is DISABLED. Keep
+		// the permissive (server-auth-only) listener and warn LOUDLY so an operator
+		// cannot miss that mTLS is off. If a CA bundle happens to be supplied, still
+		// stay permissive (NoClientCert) — break-glass means "do not require a
+		// client cert". BuildServerTLSConfig already left ClientAuth permissive when
+		// no pool was loaded; force NoClientCert to be explicit even if a pool was.
+		tlsConf.ClientAuth = tls.NoClientCert
+		tlsConf.ClientCAs = nil
+		log.Warn("BREAK-GLASS: apiserver client-certificate verification is DISABLED (--require-client-cert=false); the webhook will accept admission calls from ANY in-cluster client able to reach :8443. Set --require-client-cert=true and supply a client-CA bundle to fail closed.",
+			zap.String("client_ca_path", tlsCfg.ClientCAPath),
+			zap.Bool("mtls_enforced", false),
+		)
 	}
 
 	server := &http.Server{
@@ -411,7 +452,7 @@ func setupWebhookServer(controller *admission.Controller, tlsCfg *config.TLSConf
 // plain-HTTP, unauthenticated server.
 func setupMetricsServer(tlsConf *tls.Config, verifier *auth.TokenVerifier) *http.Server {
 	mux := http.NewServeMux()
-	var metricsHandler http.Handler = promhttp.Handler()
+	metricsHandler := promhttp.Handler()
 	if verifier != nil {
 		metricsHandler = auth.RequireBearer(verifier, metricsHandler)
 	}

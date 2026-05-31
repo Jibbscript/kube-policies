@@ -27,9 +27,16 @@ certManager:
 
 # Disable the demo sprig autoGenerate path so a missing cert-manager setup fails
 # loudly rather than silently falling back to a fixed RSA-2048 self-signed cert.
+#
+# Enforce apiserver mutual TLS on the webhook listener (IAM-WU-06): the webhook
+# requires + verifies the kube-apiserver's client certificate. requireClientCert
+# makes the render fail closed unless admissionWebhook.tls.clientCA (the apiserver
+# client-CA bundle) is also supplied — set it via an additional -f override or
+# --set admissionWebhook.tls.clientCA=... for your cluster.
 admissionWebhook:
   tls:
     autoGenerate: false
+    requireClientCert: true
 
 policyManager:
   tls:

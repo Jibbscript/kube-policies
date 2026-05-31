@@ -1,4 +1,14 @@
 {{- if .Values.admissionWebhook.enabled -}}
+{{- /* Fail-closed guard for apiserver mutual-TLS enforcement (IAM-WU-06). When
+       admissionWebhook.tls.requireClientCert=true the webhook requires + verifies
+       the apiserver client certificate, which is impossible without a client-CA
+       bundle to verify against — the binary fails closed at startup. Refuse to
+       render rather than ship a crash-looping deployment. Evaluated regardless of
+       certManager state. Mirrors the auth.enabled / metrics.tls render-fail
+       guards. */ -}}
+{{- if and .Values.admissionWebhook.tls.requireClientCert (empty .Values.admissionWebhook.tls.clientCA) -}}
+{{- fail "admissionWebhook.tls.requireClientCert=true requires admissionWebhook.tls.clientCA (the apiserver client-CA bundle)" -}}
+{{- end -}}
 {{- if not .Values.certManager.enabled -}}
 {{- /* cert-manager DISABLED (default): chart provisions the serving cert and an
        inline caBundle via the 3-branch logic below. When certManager.enabled=true

@@ -83,6 +83,13 @@ spec:
         - --port=8443
         - --metrics-port=9090
         - --config=/etc/config/config.yaml
+        # IAM-WU-06: this base/example manifest runs the webhook WITHOUT
+        # apiserver-client-cert verification (dev only; tracked gap). The binary
+        # defaults --require-client-cert=true (fail closed); we explicitly set it
+        # false here because this base ships no apiserver client-CA bundle and the
+        # webhook would otherwise refuse to start. PRODUCTION uses the Helm chart
+        # with admissionWebhook.tls.requireClientCert=true + a clientCA bundle.
+        - --require-client-cert=false
         securityContext:
           allowPrivilegeEscalation: false
           readOnlyRootFilesystem: true

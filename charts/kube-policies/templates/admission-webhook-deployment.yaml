@@ -64,6 +64,12 @@ spec:
             - --key-path=/etc/certs/tls.key
             - --config=/etc/config/config.yaml
             - --disable-default-policies={{ or .Values.admissionWebhook.disableDefaultPolicies (not .Values.policies.enableDefaults) }}
+            # Apiserver mutual-TLS enforcement (IAM-WU-06). The render-fail guard
+            # in admission-webhook-tls.yaml ensures requireClientCert=true is paired
+            # with a clientCA bundle, so true never reaches a CA-less listener (the
+            # binary would otherwise fail closed at startup). Dev default is false
+            # (tracked gap); production sets true + clientCA.
+            - --require-client-cert={{ .Values.admissionWebhook.tls.requireClientCert }}
             {{- if .Values.admissionWebhook.tls.clientCA }}
             # Mutual TLS (CRY-WU-04): enforce RequireAndVerifyClientCert against
             # the operator-supplied apiserver client-cert CA.

@@ -141,6 +141,16 @@ admissionWebhook:
     # Empty (default) leaves the webhook server-auth-only (permissive) so the
     # kind/dev demo works without apiserver client certs.
     clientCA: ""
+    # requireClientCert toggles apiserver mTLS enforcement on the webhook
+    # listener (IAM-WU-06). The BINARY defaults this true (fail closed); this
+    # chart value defaults it FALSE so the dev/turnkey install (kind / ct / demo
+    # clusters, which do not supply an apiserver client cert) runs WITHOUT
+    # apiserver-client-cert verification — a tracked, honest gap. PRODUCTION MUST
+    # set this true AND provide clientCA above (see values-production.yaml); the
+    # render then fails closed unless clientCA is supplied. When true, the chart
+    # passes --require-client-cert=true and the webhook requires + verifies the
+    # apiserver client certificate.
+    requireClientCert: false
 
   # Set to true to skip loading bundled default policies at startup.
   # Useful in e2e / integration test environments where test-authored
