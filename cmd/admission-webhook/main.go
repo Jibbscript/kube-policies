@@ -20,6 +20,7 @@ import (
 
 	"github.com/Jibbscript/kube-policies/internal/admission"
 	"github.com/Jibbscript/kube-policies/internal/audit"
+	"github.com/Jibbscript/kube-policies/internal/auth"
 	"github.com/Jibbscript/kube-policies/internal/config"
 	"github.com/Jibbscript/kube-policies/internal/cryptofips"
 	"github.com/Jibbscript/kube-policies/internal/metrics"
@@ -52,6 +53,11 @@ var (
 	// the system root pool; the chart sets this and mounts the policy-manager
 	// serving CA so the in-cluster self-signed / cert-manager cert verifies.
 	policyManagerCAPath = flag.String("policy-manager-ca-path", "", "Path to PEM CA bundle trusted for the policy-manager TLS connection; empty uses system roots")
+
+	// metricsTLS, when set, serves the :9090 metrics endpoint over TLS 1.3 and
+	// requires a bearer token on /metrics (CRY-WU-08). /healthz stays open for
+	// probes. Default off so plain-HTTP scraping/probing keeps working.
+	metricsTLS = flag.Bool("metrics-tls", false, "Serve /metrics over TLS 1.3 with bearer-token auth (CRY-WU-08)")
 
 	// disableControllers turns off CRD watching. Off by default: the webhook
 	// loads bundled defaults AND watches Policy CRDs so kubectl apply changes
@@ -189,9 +195,6 @@ func main() {
 		log.Fatal("Failed to build webhook TLS server", zap.Error(err))
 	}
 
-	// Setup metrics server
-	metricsServer := setupMetricsServer()
-
 	// Background-process context. Canceled on SIGINT/SIGTERM below; the CRD
 	// controllers and the TLS cert reloader stop when this is canceled.
 	ctx, cancel := context.WithCancel(context.Background())
@@ -200,7 +203,9 @@ func main() {
 	// Hot TLS certificate reload (CRY-WU-10): serve the cert via a
 	// GetCertificate callback backed by a watcher so cert-manager / Secret
 	// rotations are picked up without a pod restart. A failed initial load is
-	// fatal — serving with no certificate is worse than not serving.
+	// fatal — serving with no certificate is worse than not serving. Built
+	// before the metrics server so its GetCertificate can back the metrics
+	// listener too (CRY-WU-08) — one reloader, two listeners.
 	certReloader, err := tlsreload.New(*certPath, *keyPath, log.Named("tls-reload"))
 	if err != nil {
 		log.Fatal("Failed to load webhook TLS certificate", zap.Error(err))
@@ -212,11 +217,37 @@ func main() {
 		}
 	}()
 
+	// Setup metrics server. When --metrics-tls is set (CRY-WU-08), the :9090
+	// listener serves TLS 1.3 (reusing the same hot-reload serving cert) and
+	// requires a bearer token on /metrics; /healthz stays open for probes.
+	var (
+		metricsTLSConf  *tls.Config
+		metricsVerifier *auth.TokenVerifier
+	)
+	if *metricsTLS {
+		metricsTLSConf, err = config.BuildServerTLSConfig(cfg.Security.TLS, nil)
+		if err != nil {
+			log.Fatal("Failed to build metrics TLS config", zap.Error(err))
+		}
+		metricsTLSConf.GetCertificate = certReloader.GetCertificate
+		metricsVerifier = auth.NewTokenVerifier(
+			os.Getenv("POLICY_MANAGER_INTERNAL_TOKEN"),
+			os.Getenv("POLICY_MANAGER_INTERNAL_TOKEN_PREVIOUS"),
+		)
+	}
+	metricsServer := setupMetricsServer(metricsTLSConf, metricsVerifier)
+
 	// Start servers
 	go func() {
-		log.Info("Starting metrics server", zap.Int("port", *metricsPort))
-		if err := metricsServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Fatal("Failed to start metrics server", zap.Error(err))
+		log.Info("Starting metrics server", zap.Int("port", *metricsPort), zap.Bool("tls", *metricsTLS))
+		var serr error
+		if *metricsTLS {
+			serr = metricsServer.ListenAndServeTLS("", "")
+		} else {
+			serr = metricsServer.ListenAndServe()
+		}
+		if serr != nil && serr != http.ErrServerClosed {
+			log.Fatal("Failed to start metrics server", zap.Error(serr))
 		}
 	}()
 
@@ -368,9 +399,18 @@ func setupWebhookServer(controller *admission.Controller, tlsCfg *config.TLSConf
 	return server, nil
 }
 
-func setupMetricsServer() *http.Server {
+// setupMetricsServer builds the :9090 metrics server. When tlsConf is non-nil
+// the server serves TLS and /metrics is wrapped with bearer-token auth
+// (CRY-WU-08); /healthz is always left open so kubelet probes (which send no
+// Authorization header) keep working. A nil tlsConf/verifier yields the legacy
+// plain-HTTP, unauthenticated server.
+func setupMetricsServer(tlsConf *tls.Config, verifier *auth.TokenVerifier) *http.Server {
 	mux := http.NewServeMux()
-	mux.Handle("/metrics", promhttp.Handler())
+	var metricsHandler http.Handler = promhttp.Handler()
+	if verifier != nil {
+		metricsHandler = auth.RequireBearer(verifier, metricsHandler)
+	}
+	mux.Handle("/metrics", metricsHandler)
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("OK"))
@@ -379,6 +419,7 @@ func setupMetricsServer() *http.Server {
 	server := &http.Server{
 		Addr:         fmt.Sprintf(":%d", *metricsPort),
 		Handler:      mux,
+		TLSConfig:    tlsConf,
 		ReadTimeout:  10 * time.Second,
 		WriteTimeout: 10 * time.Second,
 		IdleTimeout:  30 * time.Second,

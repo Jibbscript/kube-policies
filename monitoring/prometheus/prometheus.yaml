@@ -16,6 +16,17 @@ alerting:
 
 scrape_configs:
   # Kube-Policies Admission Webhook
+  #
+  # Default (demo): metrics is plain HTTP. When the chart is deployed with
+  # metrics.tls.enabled=true (CRY-WU-08), /metrics serves TLS 1.3 and requires a
+  # bearer token. To scrape it, mount the serving CA + the internal token into
+  # this Prometheus pod (cross-namespace: copy the <release>-internal-token and
+  # serving-cert Secrets into this namespace) and add:
+  #     scheme: https
+  #     tls_config:
+  #       ca_file: /etc/prometheus/kp-tls/ca.crt
+  #       server_name: kube-policies-admission-webhook.kube-policies-system.svc
+  #     bearer_token_file: /etc/prometheus/kp-token/token
   - job_name: 'kube-policies-admission-webhook'
     static_configs:
       - targets: ['kube-policies-admission-webhook:9090']
@@ -24,6 +35,9 @@ scrape_configs:
     scrape_timeout: 5s
 
   # Kube-Policies Policy Manager
+  # See the admission-webhook job above for the metrics.tls.enabled=true
+  # (https + ca_file + bearer_token_file) scrape shape; server_name is then
+  # kube-policies-policy-manager.kube-policies-system.svc.
   - job_name: 'kube-policies-policy-manager'
     static_configs:
       - targets: ['kube-policies-policy-manager:9091']

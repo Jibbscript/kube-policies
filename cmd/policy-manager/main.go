@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"flag"
 	"fmt"
@@ -14,6 +15,7 @@ import (
 	"go.uber.org/zap"
 	ctrl "sigs.k8s.io/controller-runtime"
 
+	"github.com/Jibbscript/kube-policies/internal/auth"
 	"github.com/Jibbscript/kube-policies/internal/config"
 	"github.com/Jibbscript/kube-policies/internal/cryptofips"
 	"github.com/Jibbscript/kube-policies/internal/metrics"
@@ -33,6 +35,9 @@ var (
 	configPath  = flag.String("config", "/etc/config/config.yaml", "Path to configuration file")
 	certPath    = flag.String("cert-path", "/etc/certs/tls.crt", "Path to TLS certificate for the API server")
 	keyPath     = flag.String("key-path", "/etc/certs/tls.key", "Path to TLS private key for the API server")
+	// metricsTLS serves the :9091 metrics endpoint over TLS 1.3 with bearer-token
+	// auth on /metrics (CRY-WU-08); /healthz + /readyz stay open. Default off.
+	metricsTLS = flag.Bool("metrics-tls", false, "Serve /metrics over TLS 1.3 with bearer-token auth (CRY-WU-08)")
 
 	// disableControllers disables the CRD reconcilers. Off by default — the
 	// whole point of the policy-manager is to reconcile Policy and
@@ -127,9 +132,28 @@ func main() {
 		WriteTimeout: 30 * time.Second,
 		IdleTimeout:  60 * time.Second,
 	}
+	// When --metrics-tls is set (CRY-WU-08), the :9091 metrics endpoint serves
+	// TLS 1.3 (reusing the same hot-reload serving cert) and requires a bearer
+	// token on /metrics; /healthz + /readyz stay open for probes.
+	var (
+		metricsTLSConf  *tls.Config
+		metricsVerifier *auth.TokenVerifier
+	)
+	if *metricsTLS {
+		metricsTLSConf, err = config.BuildServerTLSConfig(cfg.Security.TLS, nil)
+		if err != nil {
+			log.Fatal("Failed to build metrics TLS config", zap.Error(err))
+		}
+		metricsTLSConf.GetCertificate = certReloader.GetCertificate
+		metricsVerifier = auth.NewTokenVerifier(
+			os.Getenv("POLICY_MANAGER_INTERNAL_TOKEN"),
+			os.Getenv("POLICY_MANAGER_INTERNAL_TOKEN_PREVIOUS"),
+		)
+	}
 	metricsServer := &http.Server{
 		Addr:         fmt.Sprintf(":%d", *metricsPort),
-		Handler:      policymanager.NewMetricsRouter(),
+		Handler:      policymanager.NewMetricsRouter(metricsVerifier),
+		TLSConfig:    metricsTLSConf,
 		ReadTimeout:  10 * time.Second,
 		WriteTimeout: 10 * time.Second,
 		IdleTimeout:  30 * time.Second,
@@ -137,9 +161,15 @@ func main() {
 
 	// Start servers
 	go func() {
-		log.Info("Starting metrics server", zap.Int("port", *metricsPort))
-		if err := metricsServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Fatal("Failed to start metrics server", zap.Error(err))
+		log.Info("Starting metrics server", zap.Int("port", *metricsPort), zap.Bool("tls", *metricsTLS))
+		var serr error
+		if *metricsTLS {
+			serr = metricsServer.ListenAndServeTLS("", "")
+		} else {
+			serr = metricsServer.ListenAndServe()
+		}
+		if serr != nil && serr != http.ErrServerClosed {
+			log.Fatal("Failed to start metrics server", zap.Error(serr))
 		}
 	}()
 

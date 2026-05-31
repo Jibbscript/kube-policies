@@ -77,8 +77,11 @@ web/node_modules/
 web/playwright-report/
 web/test-results/
 
-# Stray `go build ./cmd/dashboard` output left in the repo root.
+# Stray `go build ./cmd/<binary>` output left in the repo root (root-anchored
+# so the cmd/<binary> source dirs are NOT ignored).
 /dashboard
+/admission-webhook
+/policy-manager
 
 # demo pipeline outputs
 demo/remotion/node_modules/

@@ -51,8 +51,16 @@ type Config struct {
 	// PolicyManagerCAPath is the PEM CA bundle trusted when the dashboard
 	// connects to the (TLS 1.3) policy-manager API and SSE stream (CRY-WU-07).
 	// Empty falls back to system roots; the chart mounts the policy-manager
-	// serving CA here.
+	// serving CA here. It also verifies the webhook/policy-manager metrics
+	// endpoints when those serve TLS (CRY-WU-08; in cert-manager mode all three
+	// share one issuer CA).
 	PolicyManagerCAPath string
+
+	// MetricsToken is the bearer token presented when scraping the webhook /
+	// policy-manager /metrics endpoints if they require auth (CRY-WU-08). It is
+	// the shared internal token; sent only over https so it never crosses a
+	// plaintext metrics scrape.
+	MetricsToken string
 
 	// TLSEnabled makes the dashboard serve its API (:8090) and metrics (:9092)
 	// over TLS 1.3 (CRY-WU-07). Default false: the common topology terminates
@@ -79,7 +87,8 @@ type Config struct {
 func LoadConfig() (*Config, error) {
 	return &Config{
 		// The policy-manager API/stream serve TLS 1.3 (CRY-WU-05); default to
-		// https. The metrics endpoints stay http until CRY-WU-08.
+		// https. The metrics-URL defaults are http; the chart flips them to
+		// https when metrics.tls.enabled (CRY-WU-08) and supplies the scrape token.
 		PolicyManagerURL:           envOr("POLICY_MANAGER_URL", "https://policy-manager:8080"),
 		PolicyManagerMetricsURL:    envOr("POLICY_MANAGER_METRICS_URL", "http://policy-manager:9091/metrics"),
 		AdmissionWebhookMetricsURL: envOr("ADMISSION_WEBHOOK_METRICS_URL", "http://admission-webhook:9090/metrics"),
@@ -89,6 +98,7 @@ func LoadConfig() (*Config, error) {
 		CSPUnsafeInlineStyle:       envBool("DASHBOARD_CSP_UNSAFE_INLINE_STYLE", false),
 		PolicyManagerStreamURL:     envOr("POLICY_MANAGER_STREAM_URL", "https://policy-manager:8080/api/v1/decisions/stream"),
 		PolicyManagerCAPath:        os.Getenv("POLICY_MANAGER_CA_PATH"),
+		MetricsToken:               os.Getenv("POLICY_MANAGER_INTERNAL_TOKEN"),
 		TLSEnabled:                 envBool("DASHBOARD_TLS_ENABLED", false),
 		CertPath:                   envOr("DASHBOARD_CERT_PATH", "/etc/dashboard-certs/tls.crt"),
 		KeyPath:                    envOr("DASHBOARD_KEY_PATH", "/etc/dashboard-certs/tls.key"),

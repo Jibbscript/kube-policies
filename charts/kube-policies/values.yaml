@@ -237,6 +237,16 @@ rbac:
     # Service account annotations
     annotations: {}
 
+# Metrics endpoint protection (CRY-WU-08). When enabled, the webhook (:9090)
+# and policy-manager (:9091) /metrics endpoints serve TLS 1.3 and require a
+# bearer token (the shared internal token); /healthz + /readyz stay open for
+# probes. Default OFF so plain-HTTP scraping/probing works on kind/ct/demo; the
+# production overlay turns it on. Enabling it requires the Prometheus scrape
+# config to use https + ca_file + bearer_token_file (see monitoring/).
+metrics:
+  tls:
+    enabled: false
+
 # Monitoring Configuration
 monitoring:
   # Enable monitoring stack

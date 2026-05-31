@@ -35,6 +35,14 @@ policyManager:
   tls:
     autoGenerate: false
 
+# Protect the webhook/policy-manager /metrics endpoints with TLS + bearer auth
+# (CRY-WU-08). Requires the Prometheus scrape config to use https + ca_file +
+# bearer_token_file (see monitoring/prometheus/prometheus.yaml). /healthz +
+# /readyz stay open for probes.
+metrics:
+  tls:
+    enabled: true
+
 # If the dashboard is enabled in production, terminate TLS in-pod and emit HSTS
 # (CRY-WU-07). Harmless when dashboard.enabled stays false. Operators who
 # terminate TLS at the Ingress instead can leave dashboard.tls.enabled false and

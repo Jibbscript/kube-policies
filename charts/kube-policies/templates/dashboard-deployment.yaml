@@ -52,13 +52,25 @@ spec:
             {{- include "kube-policies.fipsEnv" . | nindent 12 }}
             # The policy-manager API + SSE stream serve TLS 1.3 (CRY-WU-05) →
             # https; verified via the mounted policy-manager CA (CRY-WU-07). The
-            # metrics endpoints stay http until CRY-WU-08.
+            # metrics URLs follow metrics.tls.enabled (CRY-WU-08): http by
+            # default, https + bearer token when metrics TLS is on.
             - name: POLICY_MANAGER_URL
               value: "https://{{ include "kube-policies.fullname" . }}-policy-manager:8080"
+            {{- $metricsScheme := ternary "https" "http" .Values.metrics.tls.enabled }}
             - name: POLICY_MANAGER_METRICS_URL
-              value: "http://{{ include "kube-policies.fullname" . }}-policy-manager:9091/metrics"
+              value: "{{ $metricsScheme }}://{{ include "kube-policies.fullname" . }}-policy-manager:9091/metrics"
             - name: ADMISSION_WEBHOOK_METRICS_URL
-              value: "http://{{ include "kube-policies.fullname" . }}-admission-webhook:9090/metrics"
+              value: "{{ $metricsScheme }}://{{ include "kube-policies.fullname" . }}-admission-webhook:9090/metrics"
+            {{- if .Values.metrics.tls.enabled }}
+            # Bearer token presented when scraping the TLS-protected /metrics
+            # endpoints (CRY-WU-08); sent only over https by the scraper.
+            - name: POLICY_MANAGER_INTERNAL_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "kube-policies.fullname" . }}-internal-token
+                  key: token
+                  optional: true
+            {{- end }}
             - name: ALLOW_WRITES
               value: {{ .Values.dashboard.allowWrites | default false | quote }}
             - name: POLICY_MANAGER_STREAM_URL

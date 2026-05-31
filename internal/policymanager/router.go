@@ -5,6 +5,8 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+
+	"github.com/Jibbscript/kube-policies/internal/auth"
 )
 
 // NewAPIRouter returns the gin.Engine that backs the policy-manager API on
@@ -75,12 +77,21 @@ func NewAPIRouter(m *Manager) *gin.Engine {
 // populates, so the metrics text format reflects whatever was registered in
 // the current process. /healthz is included so a liveness probe can target
 // the metrics port directly.
-func NewMetricsRouter() http.Handler {
+// NewMetricsRouter builds the :9091 metrics handler. When verifier is non-nil,
+// /metrics is wrapped with bearer-token auth (CRY-WU-08); /healthz and /readyz
+// are always left open so kubelet probes (which send no Authorization header)
+// keep working. A nil verifier yields unauthenticated /metrics (the plain-HTTP
+// default).
+func NewMetricsRouter(verifier *auth.TokenVerifier) http.Handler {
 	mux := http.NewServeMux()
-	mux.Handle("/metrics", promhttp.Handler())
-	// /healthz and /readyz are served on the plain-HTTP metrics port so the
-	// kubelet liveness/readiness probes can target it instead of the
-	// TLS-only :8080 API listener (CRY-WU-05).
+	var metricsHandler http.Handler = promhttp.Handler()
+	if verifier != nil {
+		metricsHandler = auth.RequireBearer(verifier, metricsHandler)
+	}
+	mux.Handle("/metrics", metricsHandler)
+	// /healthz and /readyz are served on the metrics port so the kubelet
+	// liveness/readiness probes can target it instead of the TLS-only :8080 API
+	// listener (CRY-WU-05). They stay unauthenticated.
 	healthHandler := func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("OK"))

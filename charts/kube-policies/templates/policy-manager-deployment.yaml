@@ -47,6 +47,10 @@ spec:
             - --port=8080
             - --metrics-port=9091
             - --config=/etc/config/config.yaml
+            {{- if .Values.metrics.tls.enabled }}
+            # Serve /metrics over TLS 1.3 with bearer-token auth (CRY-WU-08).
+            - --metrics-tls
+            {{- end }}
           ports:
             - name: http
               containerPort: 8080
@@ -76,7 +80,9 @@ spec:
             httpGet:
               path: /healthz
               port: 9091
-              scheme: HTTP
+              # HTTPS when /metrics serves TLS (CRY-WU-08); /healthz + /readyz
+              # stay token-exempt and the kubelet HTTPS probe skips cert verify.
+              scheme: {{ if .Values.metrics.tls.enabled }}HTTPS{{ else }}HTTP{{ end }}
             initialDelaySeconds: 30
             periodSeconds: 10
             timeoutSeconds: 5
@@ -85,7 +91,7 @@ spec:
             httpGet:
               path: /readyz
               port: 9091
-              scheme: HTTP
+              scheme: {{ if .Values.metrics.tls.enabled }}HTTPS{{ else }}HTTP{{ end }}
             initialDelaySeconds: 5
             periodSeconds: 5
             timeoutSeconds: 3
