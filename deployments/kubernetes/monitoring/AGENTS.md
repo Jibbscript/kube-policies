@@ -10,7 +10,7 @@ Kubernetes Deployments, Services, and ConfigMaps to bring up the observability s
 
 | File | Description |
 |------|-------------|
-| `prometheus-deployment.yaml` | Prometheus Deployment + Service + ConfigMap (consumes `monitoring/prometheus/prometheus.yaml`) |
+| `prometheus-deployment.yaml` | Prometheus Deployment + Service + an INLINE `prometheus.yml` config ConfigMap and an INLINE `prometheus-rules` ConfigMap. It does NOT mount the standalone `monitoring/prometheus/*` files — those are the canonical, promtool-validated source; keep the two in sync (e.g. the TLS cert-expiry rules live in both). |
 | `grafana-deployment.yaml` | Grafana Deployment + Service + dashboards provisioning ConfigMap |
 | `alertmanager-deployment.yaml` | Alertmanager Deployment + Service + ConfigMap (consumes `monitoring/alertmanager/alertmanager.yaml`) |
 

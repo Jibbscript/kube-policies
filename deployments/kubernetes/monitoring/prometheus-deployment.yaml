@@ -229,6 +229,29 @@ data:
         annotations:
           summary: "Kube-Policies high memory usage"
           description: "{{ $labels.pod }} memory usage is {{ $value | humanizePercentage }} of limit."
+    # TLS certificate-expiry alerts (CRY-WU-12). Keep in sync with the
+    # canonical source monitoring/prometheus/rules/kube-policies-tls.yml
+    # (which has a promtool unit test).
+    - name: kube-policies-tls
+      rules:
+      - alert: KubePoliciesCertExpiringSoon
+        expr: (kube_policies_tls_cert_expiry_seconds - time()) < (7 * 24 * 3600)
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "kube-policies {{ $labels.component }} TLS certificate expires in under 7 days"
+          description: "Rotate the serving certificate for {{ $labels.component }} (cert-manager renews automatically; regenerate the Secret for the demo/self-signed path)."
+          runbook_url: "https://github.com/Jibbscript/kube-policies/blob/main/docs/runbooks/cert-rotation.md"
+      - alert: KubePoliciesCertExpired
+        expr: (kube_policies_tls_cert_expiry_seconds - time()) <= 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "kube-policies {{ $labels.component }} TLS certificate has EXPIRED"
+          description: "The serving certificate for {{ $labels.component }} is expired; TLS handshakes (and, for the webhook, admission) will fail. Rotate immediately."
+          runbook_url: "https://github.com/Jibbscript/kube-policies/blob/main/docs/runbooks/cert-rotation.md"
 ---
 apiVersion: apps/v1
 kind: Deployment

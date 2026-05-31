@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -90,6 +91,53 @@ func TestNew_InitialLoadAndGetCertificate(t *testing.T) {
 	if got := servedSerial(t, r); got != 1 {
 		t.Fatalf("served serial = %d, want 1", got)
 	}
+}
+
+// TestWithOnReload proves the onReload hook fires on initial load and on
+// rotation with the loaded cert (whose Leaf carries NotAfter), backing the
+// cert-expiry metric (CRY-WU-12).
+func TestWithOnReload(t *testing.T) {
+	dir := t.TempDir()
+	cp, kp := filepath.Join(dir, "tls.crt"), filepath.Join(dir, "tls.key")
+	writePair(t, cp, kp, 1, "cert-A")
+
+	var mu sync.Mutex
+	var calls []int64 // captured NotAfter unix times
+	onReload := func(cert *tls.Certificate) {
+		mu.Lock()
+		defer mu.Unlock()
+		if cert != nil && cert.Leaf != nil {
+			calls = append(calls, cert.Leaf.NotAfter.Unix())
+		}
+	}
+
+	r, err := New(cp, kp, zap.NewNop(), WithReloadInterval(50*time.Millisecond), WithOnReload(onReload))
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	mu.Lock()
+	initial := len(calls)
+	mu.Unlock()
+	if initial < 1 {
+		t.Fatal("onReload must fire on initial load with a non-nil Leaf")
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	go func() { _ = r.Start(ctx) }()
+	writePair(t, cp, kp, 2, "cert-B")
+
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		mu.Lock()
+		n := len(calls)
+		mu.Unlock()
+		if n > initial {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatal("onReload must fire again after rotation")
 }
 
 func TestNew_FailsWhenMissing(t *testing.T) {

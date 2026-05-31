@@ -79,7 +79,7 @@ func main() {
 	}
 
 	// Initialize metrics (registers collectors against the global Prometheus registry).
-	_ = metrics.NewCollector()
+	metricsCollector := metrics.NewCollector()
 
 	// Initialize policy manager
 	policyManager, err := policymanager.NewManager(cfg, log)
@@ -113,7 +113,12 @@ func main() {
 	if err != nil {
 		log.Fatal("Failed to build API TLS config", zap.Error(err))
 	}
-	certReloader, err := tlsreload.New(*certPath, *keyPath, log.Named("tls-reload"))
+	certReloader, err := tlsreload.New(*certPath, *keyPath, log.Named("tls-reload"),
+		tlsreload.WithOnReload(func(cert *tls.Certificate) {
+			if cert != nil && cert.Leaf != nil {
+				metricsCollector.SetCertExpiry("policy-manager", cert.Leaf.NotAfter)
+			}
+		}))
 	if err != nil {
 		log.Fatal("Failed to load API TLS certificate", zap.Error(err))
 	}

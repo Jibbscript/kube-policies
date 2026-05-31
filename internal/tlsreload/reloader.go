@@ -48,6 +48,11 @@ type Reloader struct {
 	// handshake (GetCertificate), so an atomic pointer keeps that path
 	// lock-free; writes are rare (only on rotation).
 	cached atomic.Pointer[tls.Certificate]
+
+	// onReload, if set, is invoked with the freshly loaded certificate on the
+	// initial load and after each successful reload. Used to update the
+	// cert-expiry metric (CRY-WU-12) without coupling this package to metrics.
+	onReload func(*tls.Certificate)
 }
 
 // Option customizes a Reloader.
@@ -60,6 +65,15 @@ func WithReloadInterval(d time.Duration) Option {
 		if d > 0 {
 			r.interval = d
 		}
+	}
+}
+
+// WithOnReload registers a callback invoked with each newly loaded certificate
+// (initial load and every successful reload). Typically wired to publish the
+// certificate's expiry as a metric (CRY-WU-12).
+func WithOnReload(fn func(*tls.Certificate)) Option {
+	return func(r *Reloader) {
+		r.onReload = fn
 	}
 }
 
@@ -85,7 +99,15 @@ func New(certPath, keyPath string, log *zap.Logger, opts ...Option) (*Reloader, 
 	}
 	r.cached.Store(cert)
 	r.logLoaded("initial certificate loaded", cert)
+	r.notify(cert)
 	return r, nil
+}
+
+// notify invokes the onReload callback (if any) with the loaded certificate.
+func (r *Reloader) notify(cert *tls.Certificate) {
+	if r.onReload != nil {
+		r.onReload(cert)
+	}
 }
 
 // load reads the key pair from disk. tls.LoadX509KeyPair reads BOTH files and
@@ -118,6 +140,7 @@ func (r *Reloader) reload() {
 	}
 	r.cached.Store(cert)
 	r.logLoaded("certificate reloaded", cert)
+	r.notify(cert)
 }
 
 // logLoaded emits the leaf subject and expiry of a freshly loaded certificate.

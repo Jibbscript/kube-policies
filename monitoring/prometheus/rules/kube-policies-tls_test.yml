@@ -1,0 +1,50 @@
+# promtool unit tests for the TLS cert-expiry alerts (CRY-WU-12).
+# Run: promtool test rules monitoring/prometheus/rules/kube-policies-tls_test.yml
+rule_files:
+  - kube-policies-tls.yml
+
+evaluation_interval: 1m
+
+tests:
+  # A cert with ~1 day of validity left must fire KubePoliciesCertExpiringSoon
+  # (warning) but NOT KubePoliciesCertExpired.
+  - interval: 1m
+    input_series:
+      # 1893456000 = 2030-01-01T00:00:00Z (far future, fixed). The eval time
+      # below is set ~1 day before it via the series being constant and prom's
+      # time() — promtool starts at epoch 0, so instead encode "expires in 1 day"
+      # directly: value = (eval_time_seconds + 86400). With 20 1m steps eval is
+      # at t=1140s, so 1140+86400 = 87540.
+      - series: 'kube_policies_tls_cert_expiry_seconds{component="admission-webhook"}'
+        values: '87540x20'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: KubePoliciesCertExpiringSoon
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              component: admission-webhook
+            exp_annotations:
+              summary: "kube-policies admission-webhook TLS certificate expires in under 7 days"
+              description: "The serving certificate for admission-webhook expires soon. Rotate it (cert-manager renews automatically; for the demo/self-signed path, regenerate the Secret)."
+              runbook_url: "https://github.com/Jibbscript/kube-policies/blob/main/docs/runbooks/cert-rotation.md"
+      - eval_time: 20m
+        alertname: KubePoliciesCertExpired
+        exp_alerts: []
+
+  # An already-expired cert (expiry far in the past) must fire the critical alert.
+  - interval: 1m
+    input_series:
+      - series: 'kube_policies_tls_cert_expiry_seconds{component="policy-manager"}'
+        values: '100x20'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: KubePoliciesCertExpired
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              component: policy-manager
+            exp_annotations:
+              summary: "kube-policies policy-manager TLS certificate has EXPIRED"
+              description: "The serving certificate for policy-manager is expired; TLS handshakes (and, for the webhook, admission) will fail. Rotate immediately."
+              runbook_url: "https://github.com/Jibbscript/kube-policies/blob/main/docs/runbooks/cert-rotation.md"

@@ -206,7 +206,12 @@ func main() {
 	// fatal — serving with no certificate is worse than not serving. Built
 	// before the metrics server so its GetCertificate can back the metrics
 	// listener too (CRY-WU-08) — one reloader, two listeners.
-	certReloader, err := tlsreload.New(*certPath, *keyPath, log.Named("tls-reload"))
+	certReloader, err := tlsreload.New(*certPath, *keyPath, log.Named("tls-reload"),
+		tlsreload.WithOnReload(func(cert *tls.Certificate) {
+			if cert != nil && cert.Leaf != nil {
+				metricsCollector.SetCertExpiry("admission-webhook", cert.Leaf.NotAfter)
+			}
+		}))
 	if err != nil {
 		log.Fatal("Failed to load webhook TLS certificate", zap.Error(err))
 	}

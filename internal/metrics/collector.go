@@ -35,6 +35,10 @@ type Collector struct {
 
 	// Exception suppression metrics
 	exceptionSuppressions *prometheus.CounterVec
+
+	// TLS certificate expiry (CRY-WU-12): Unix expiry time of the served cert,
+	// updated on each hot reload. An Alertmanager rule fires as it approaches.
+	certExpiry *prometheus.GaugeVec
 }
 
 // NewCollector creates a new metrics collector
@@ -172,7 +176,23 @@ func NewCollector() *Collector {
 			},
 			[]string{"policy_id", "rule_id"},
 		),
+
+		certExpiry: promauto.NewGaugeVec(
+			prometheus.GaugeOpts{
+				Namespace: "kube_policies",
+				Subsystem: "tls",
+				Name:      "cert_expiry_seconds",
+				Help:      "Unix timestamp (seconds) at which the served TLS certificate expires, per component",
+			},
+			[]string{"component"},
+		),
 	}
+}
+
+// SetCertExpiry records the served TLS certificate's expiry for component as a
+// Unix-seconds gauge (CRY-WU-12). Alert on (cert_expiry_seconds - time()).
+func (c *Collector) SetCertExpiry(component string, notAfter time.Time) {
+	c.certExpiry.WithLabelValues(component).Set(float64(notAfter.Unix()))
 }
 
 // IncAdmissionRequests increments the admission requests counter

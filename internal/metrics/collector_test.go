@@ -37,6 +37,20 @@ func collectCounterValue(t *testing.T, c prometheus.Collector) (float64, []strin
 	return dtm.Counter.GetValue(), names
 }
 
+// collectGaugeValue returns the float value of a single Gauge child series.
+func collectGaugeValue(t *testing.T, c prometheus.Collector) float64 {
+	t.Helper()
+	ch := make(chan prometheus.Metric, 1)
+	c.Collect(ch)
+	close(ch)
+	m, ok := <-ch
+	require.True(t, ok, "expected one Metric sample from the gauge")
+	var dtm dto.Metric
+	require.NoError(t, m.Write(&dtm))
+	require.NotNil(t, dtm.Gauge, "expected a Gauge sample")
+	return dtm.Gauge.GetValue()
+}
+
 var testCollector *Collector
 
 func init() {
@@ -169,6 +183,16 @@ func TestCollector_ExceptionSuppression_LabelSetIsBounded(t *testing.T) {
 	_, names := collectCounterValue(t, vec.WithLabelValues(policyID, ruleID))
 	assert.Equal(t, []string{"policy_id", "rule_id"}, names,
 		"label set must be EXACTLY {policy_id, rule_id} — no exception_id, no other high-cardinality labels (plan §5.9.a / OQ-4)")
+}
+
+// TestMetricsCollector_SetCertExpiry asserts the cert-expiry gauge (CRY-WU-12)
+// records the certificate's NotAfter as Unix seconds, per component.
+func TestMetricsCollector_SetCertExpiry(t *testing.T) {
+	exp := time.Now().Add(72 * time.Hour).Truncate(time.Second)
+	testCollector.SetCertExpiry("admission-webhook", exp)
+	g, err := testCollector.certExpiry.GetMetricWithLabelValues("admission-webhook")
+	require.NoError(t, err)
+	assert.InDelta(t, float64(exp.Unix()), collectGaugeValue(t, g), 1e-9)
 }
 
 func TestMetricsCollector_GetMetrics(t *testing.T) {
