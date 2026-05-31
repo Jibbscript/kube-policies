@@ -270,7 +270,20 @@ audit:
     # /var/log/kube-policies). The audit logger appends `/audit.log`.
     file:
       path: "/var/log/kube-policies"
-    
+
+  # Tamper-evidence for the audit log (AUD-WU-04/05, NIST AU-9). When enabled,
+  # each record carries a sequence + HMAC-SHA256 hash chain keyed by a mounted
+  # Secret; audit.VerifyChain detects any mutation/reorder/deletion. Default off;
+  # the production overlay enables it.
+  integrity:
+    enabled: false
+    # In-pod path of the mounted HMAC key.
+    keyPath: "/etc/audit-integrity/key"
+    # Operator-supplied HMAC key (recommended). If empty and enabled, the chart
+    # generates a demo key (template-time RNG — DEMO-ONLY, like internalToken);
+    # production should supply a CSPRNG-generated key or an external secret.
+    key: ""
+
 # Persistence Configuration
 persistence:
   enabled: true

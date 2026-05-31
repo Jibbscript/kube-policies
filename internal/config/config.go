@@ -219,6 +219,12 @@ func validateConfig(config *Config) error {
 		if !valid {
 			return fmt.Errorf("invalid audit backend: %s (supported: file, stdout)", config.Audit.Backend)
 		}
+		// Audit integrity (AUD-WU-04/05): if integrity_key_path is present it must
+		// be non-empty — an empty path means the HMAC chain would be silently
+		// disabled, so fail fast rather than ship un-chained "tamper-evident" logs.
+		if v, ok := config.Audit.Config["integrity_key_path"]; ok && strings.TrimSpace(v) == "" {
+			return fmt.Errorf("audit integrity_key_path is set but empty; provide the mounted HMAC key path or remove the key")
+		}
 	}
 
 	// Validate the TLS stanza (min_version, cipher_suites, client_auth) so a

@@ -43,6 +43,13 @@ metrics:
   tls:
     enabled: true
 
+# Tamper-evident audit log (AUD-WU-04/05, AU-9). Supply audit.integrity.key
+# (a CSPRNG-generated HMAC key) or an external secret rather than relying on the
+# chart's demo key generation.
+audit:
+  integrity:
+    enabled: true
+
 # If the dashboard is enabled in production, terminate TLS in-pod and emit HSTS
 # (CRY-WU-07). Harmless when dashboard.enabled stays false. Operators who
 # terminate TLS at the Ingress instead can leave dashboard.tls.enabled false and

@@ -42,11 +42,18 @@ type Logger struct {
 	logger  *zap.Logger
 	metrics Metrics
 	wg      sync.WaitGroup
+	// chainer adds the tamper-evidence HMAC chain to each persisted event when
+	// audit integrity is enabled (AUD-WU-04); nil disables chaining.
+	chainer *Chainer
 }
 
 // Backend represents an audit backend
 type Backend interface {
 	Write(event *Event) error
+	// WriteRaw persists pre-serialized bytes verbatim (one record per call).
+	// Used for the sealed integrity envelope so the HMAC covers exactly the
+	// bytes on disk (AUD-WU-04).
+	WriteRaw(data []byte) error
 	Close() error
 }
 
@@ -76,6 +83,15 @@ type Event struct {
 	// (plan §5.9.a / OQ-4); operators correlating a metric spike with a specific
 	// exception query this audit field, not the metric.
 	SuppressedBy []policy.ExceptionRef `json:"suppressed_by,omitempty"`
+
+	// Tamper-evidence chain fields (AUD-WU-04, AU-9). Populated only when audit
+	// integrity is enabled; omitempty keeps integrity-off logs byte-identical to
+	// before. Sequence is strictly increasing (>=1); PrevHash is the prior
+	// record's HMAC. The HMAC itself lives in the sealing envelope written to
+	// disk (see integrity.go sealedRecord / Chainer.Seal / VerifyChain), not on
+	// the event, so it is never part of the bytes it signs.
+	Sequence uint64 `json:"sequence,omitempty"`
+	PrevHash string `json:"prev_hash,omitempty"`
 }
 
 // Context represents the context for audit logging
@@ -130,6 +146,23 @@ func NewLogger(cfg *config.AuditConfig, opts ...Option) (*Logger, error) {
 		cancel:  cancel,
 		logger:  o.logger,
 		metrics: o.metrics,
+	}
+
+	// Audit integrity (AUD-WU-04/05, AU-9): when integrity_key_path is set, load
+	// the HMAC key from the mounted Secret and chain every persisted record.
+	if keyPath := cfg.Config["integrity_key_path"]; keyPath != "" {
+		key, err := LoadKeyFromFile(keyPath)
+		if err != nil {
+			cancel()
+			return nil, fmt.Errorf("audit integrity: %w", err)
+		}
+		chainer, err := NewChainer(key)
+		if err != nil {
+			cancel()
+			return nil, err
+		}
+		l.chainer = chainer
+		o.logger.Info("audit integrity enabled (tamper-evident HMAC chain)")
 	}
 
 	// Start background processor
@@ -303,6 +336,28 @@ func (l *Logger) flushEvents(events []*Event) {
 	}
 
 	for _, event := range events {
+		// When integrity is enabled (AUD-WU-04), seal the event into the hash
+		// chain and persist the verbatim sealed bytes. Done here
+		// (single-threaded flush) so Sequence is gap-free and ordered. On a
+		// sealing error we do NOT fall back to an unchained Write — that would
+		// insert a gap an auditor would read as tampering.
+		if l.chainer != nil {
+			sealed, err := l.chainer.Seal(event)
+			if err != nil {
+				l.logger.Error("failed to seal audit event for integrity",
+					zap.String("request_id", event.RequestID), zap.Error(err))
+				l.metrics.IncAuditEvents(event.EventType, "chain_error")
+				continue
+			}
+			if err := l.backend.WriteRaw(sealed); err != nil {
+				l.logger.Error("failed to write sealed audit event",
+					zap.String("request_id", event.RequestID), zap.Error(err))
+				l.metrics.IncAuditEvents(event.EventType, "write_error")
+			} else {
+				l.metrics.IncAuditEvents(event.EventType, "written")
+			}
+			continue
+		}
 		if err := l.backend.Write(event); err != nil {
 			l.logger.Error("failed to write audit event",
 				zap.String("event_type", event.EventType),
@@ -381,6 +436,13 @@ func (b *FileBackend) Write(event *Event) error {
 	return err
 }
 
+// WriteRaw appends pre-serialized bytes (a sealed integrity envelope) followed
+// by a newline, verbatim.
+func (b *FileBackend) WriteRaw(data []byte) error {
+	_, err := b.file.Write(append(data, '\n'))
+	return err
+}
+
 // Close closes the file backend
 func (b *FileBackend) Close() error {
 	return b.file.Close()
@@ -401,6 +463,12 @@ func (b *StdoutBackend) Write(event *Event) error {
 		return fmt.Errorf("failed to marshal audit event: %w", err)
 	}
 
+	fmt.Println(string(data))
+	return nil
+}
+
+// WriteRaw prints pre-serialized bytes (a sealed integrity envelope) verbatim.
+func (b *StdoutBackend) WriteRaw(data []byte) error {
 	fmt.Println(string(data))
 	return nil
 }

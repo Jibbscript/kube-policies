@@ -20,10 +20,16 @@ data:
       buffer_size: {{ .Values.audit.bufferSize | default 1024 }}
       flush_interval: {{ .Values.audit.flushInterval | default "10s" | quote }}
       retention: {{ .Values.audit.retention | default "90d" | quote }}
-      {{- if eq $auditBackendType "file" }}
-      # Map the YAML directory `audit.backend.file.path` to a concrete
-      # filename. The audit logger's createBackend reads
-      # `config.filename` for the file backend.
+      {{- if or (eq $auditBackendType "file") .Values.audit.integrity.enabled }}
       config:
+        {{- if eq $auditBackendType "file" }}
+        # Map the YAML directory `audit.backend.file.path` to a concrete
+        # filename. The audit logger's createBackend reads `config.filename`.
         filename: {{ printf "%s/audit.log" (.Values.audit.backend.file.path | default "/var/log/kube-policies") | quote }}
+        {{- end }}
+        {{- if .Values.audit.integrity.enabled }}
+        # Tamper-evidence HMAC key path (AUD-WU-04/05). Its presence enables the
+        # integrity chain; the key Secret is mounted at this path.
+        integrity_key_path: {{ .Values.audit.integrity.keyPath | default "/etc/audit-integrity/key" | quote }}
+        {{- end }}
       {{- end }}

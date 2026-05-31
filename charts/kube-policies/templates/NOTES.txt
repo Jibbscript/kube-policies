@@ -13,6 +13,14 @@ module is not active.
 To rotate the shared internal bearer token with no downtime, follow
 docs/runbooks/internal-token-rotation.md (two-token window: current + previous).
 
+Tamper-evident audit log (AU-9): set audit.integrity.enabled=true and supply a
+CSPRNG-generated audit.integrity.key (or pre-create the {{ include "kube-policies.fullname" . }}-audit-integrity
+Secret). Each record then carries a sequence + HMAC chain; verify a log offline
+with audit.VerifyChain. To rotate the HMAC key, update the Secret/value and
+helm upgrade — the checksum/audit-integrity annotation rolls the pod so the new
+key is loaded. NOTE: records written under the old key still verify only with the
+old key; archive the retiring key alongside the segment it signed.
+
 ## TLS Configuration — Admission Webhook
 
 Four modes are supported for webhook TLS bootstrap (evaluated in order):

@@ -28,6 +28,11 @@ spec:
         # One-time cost: an extra rolling restart immediately after first install
         # (lookup empty → stable hash transition). Operationally acceptable.
         checksum/webhook-certs: {{ (lookup "v1" "Secret" .Release.Namespace (printf "%s-admission-webhook-certs" (include "kube-policies.fullname" .))).data | toYaml | sha256sum | default "initial-install" }}
+        {{- if and .Values.audit.enabled .Values.audit.integrity.enabled }}
+        # Roll the pod when the audit HMAC key rotates — the chainer loads the
+        # key once at startup (AUD-WU-05).
+        checksum/audit-integrity: {{ include (print $.Template.BasePath "/audit-integrity-secret.yaml") . | sha256sum }}
+        {{- end }}
         {{- with .Values.admissionWebhook.podAnnotations }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
@@ -137,6 +142,13 @@ spec:
               mountPath: /etc/policy-manager-ca
               readOnly: true
             {{- end }}
+            {{- if and .Values.audit.enabled .Values.audit.integrity.enabled }}
+            - name: audit-integrity-key
+              # Mount dir derived from keyPath so it always matches the
+              # integrity_key_path the configmap renders (AUD-WU-05).
+              mountPath: {{ dir (.Values.audit.integrity.keyPath | default "/etc/audit-integrity/key") | quote }}
+              readOnly: true
+            {{- end }}
             - name: config
               mountPath: /etc/config
               readOnly: true
@@ -165,6 +177,18 @@ spec:
               - key: ca.crt
                 path: ca.crt
             optional: true
+        {{- end }}
+        {{- if and .Values.audit.enabled .Values.audit.integrity.enabled }}
+        # Audit-integrity HMAC key (AUD-WU-05), projected to the file the audit
+        # logger reads (audit.integrity.keyPath default /etc/audit-integrity/key).
+        - name: audit-integrity-key
+          secret:
+            secretName: {{ include "kube-policies.fullname" . }}-audit-integrity
+            items:
+              # Filename derived from keyPath so the key lands exactly at the
+              # integrity_key_path the configmap renders (AUD-WU-05).
+              - key: key
+                path: {{ base (.Values.audit.integrity.keyPath | default "/etc/audit-integrity/key") | quote }}
         {{- end }}
         - name: config
           configMap:
