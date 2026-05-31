@@ -1,0 +1,57 @@
+# CIS Kubernetes Benchmark conformance check (CRY-WU-19).
+# Runs kube-bench to evaluate the cluster-level controls kube-policies depends
+# on but does not control — notably the kubelet TLS controls (CIS 4.2.x) and
+# apiserver TLS (CIS 1.2.x). Results are ATO evidence for CA-2 / SC-8 / SC-12.
+# See docs/compliance/cluster-tls-prereqs.md for the expected results checklist.
+#
+# Run:
+#   kubectl apply -f deployments/kubernetes/conformance/kube-bench-job.yaml
+#   kubectl -n kube-policies-system wait --for=condition=complete job/kube-bench --timeout=120s
+#   kubectl -n kube-policies-system logs job/kube-bench > kube-bench-results.txt
+# Focus on the node (kubelet 4.2.x) and master (apiserver 1.2.x TLS) sections.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: kube-bench
+  namespace: kube-policies-system
+  labels:
+    app.kubernetes.io/name: kube-policies
+    app.kubernetes.io/component: conformance
+spec:
+  # Keep the result accessible for a day, then GC.
+  ttlSecondsAfterFinished: 86400
+  backoffLimit: 1
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: kube-policies
+        app.kubernetes.io/component: conformance
+    spec:
+      # kube-bench inspects host kubelet/apiserver config, so it runs on the host
+      # namespaces. Restrict scheduling/serviceaccount as your policy requires.
+      hostPID: true
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      containers:
+        - name: kube-bench
+          # Pin to a digest in production (CRY-WU-01/supply-chain); tag shown for clarity.
+          image: docker.io/aquasec/kube-bench:v0.10.7
+          command: ["kube-bench"]
+          # Run the kubelet (4.2.x) and apiserver TLS (1.2.x) checks; drop
+          # --targets to run the full benchmark.
+          args: ["run", "--targets", "node,master"]
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 65534
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - { name: var-lib-kubelet, mountPath: /var/lib/kubelet, readOnly: true }
+            - { name: etc-systemd, mountPath: /etc/systemd, readOnly: true }
+            - { name: etc-kubernetes, mountPath: /etc/kubernetes, readOnly: true }
+      volumes:
+        - { name: var-lib-kubelet, hostPath: { path: /var/lib/kubelet } }
+        - { name: etc-systemd, hostPath: { path: /etc/systemd } }
+        - { name: etc-kubernetes, hostPath: { path: /etc/kubernetes } }

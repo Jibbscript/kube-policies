@@ -30,6 +30,10 @@ This index is reviewed at least **annually** (next review **2027-05-29**) and on
 | [crypto-module.md](crypto-module.md) | FIPS 140-3 cryptographic module (SC-13): selected module, CMVP reference, and the build/CI/runtime evidence that shipped binaries run validated crypto. |
 | [crypto-standards.md](crypto-standards.md) | Approved cryptographic key strengths and signature algorithms (SC-12/SC-13/SC-17): the algorithm/key-length matrix for TLS server/client keys and certificate signing, tied to the FIPS module. |
 | [secrets-at-rest.md](secrets-at-rest.md) | Secrets-at-rest inventory and protection (SC-28 / CIS 1.2.31-33): every stored secret mapped to its at-rest protection, plus the cluster EncryptionConfiguration + KMS guidance. |
+| [crypto-inventory.md](crypto-inventory.md) | Cryptographic inventory (SC-12/SC-13/SC-17/SC-28): every key/secret with algorithm, length, validated-module reference, storage, owner, and rotation interval. |
+| [key-management-plan.md](key-management-plan.md) | Key-management plan (SC-12/SC-13/SC-17/SC-28/CM-6): key generation, distribution, storage, rotation schedule, and key-compromise response. |
+| [cluster-tls-prereqs.md](cluster-tls-prereqs.md) | Cluster TLS prerequisites + CIS 4.2.x kubelet/apiserver TLS conformance checklist (CA-2/SC-8/SC-12); the controls KP depends on but does not own. |
+| [e-authentication.md](e-authentication.md) | FedRAMP e-authentication determination (IA-2/IA-8): authenticator-assurance posture per interactive interface. |
 
 ## Boundary & Inventory
 
@@ -69,6 +73,10 @@ This index is reviewed at least **annually** (next review **2027-05-29**) and on
 | [policies/PS-policy.md](policies/PS-policy.md) | Personnel security policy (PS). |
 | [policies/MP-policy.md](policies/MP-policy.md) | Media protection policy (MP). |
 | [policies/PE-policy.md](policies/PE-policy.md) | Physical and environmental protection policy (PE). |
+| [policies/IA-policy.md](policies/IA-policy.md) | Identification & authentication policy (IA-1/IA-2/IA-5). |
+| [policies/SC-policy.md](policies/SC-policy.md) | System & communications protection policy (SC-1/SC-7/SC-8/SC-12/SC-13). |
+| [procedures/IA-procedures.md](procedures/IA-procedures.md) | IA operational procedures (token rotation, mTLS/CA management). |
+| [procedures/SC-procedures.md](procedures/SC-procedures.md) | SC operational procedures (TLS enforcement verification, certificate management). |
 | [roles-raci.md](roles-raci.md) | ATO roles and RACI matrix (System Owner, ISSO, AO, Independent Assessor — all TBD, assign before assessment). |
 
 ## Repository-root security documents

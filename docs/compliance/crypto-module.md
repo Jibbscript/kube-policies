@@ -90,7 +90,7 @@ runtime.
 ## Scope and boundaries
 
 - **In scope:** TLS server/client handshakes, the internal bearer-token CSPRNG
-  (`internal/auth`), audit-record HMAC (planned, AUD-WU-04), and any X.509 / key
+  (`internal/auth`), audit-record HMAC (`internal/audit/integrity.go`, AUD-WU-04), and any X.509 / key
   generation performed in-process.
 - **Out of scope (inherited):** Kubernetes apiserver↔etcd encryption, the
   kubelet/apiserver TLS stack, and cert-manager's own crypto are cluster/CSP
