@@ -24,6 +24,7 @@ func newTestRouter(t *testing.T, cfg *Config) *gin.Engine {
 	r := gin.New()
 	r.Use(gin.Recovery())
 	r.Use(cspMiddleware(cfg.CSPUnsafeInlineStyle))
+	r.Use(secureHeadersMiddleware(cfg))
 	r.GET("/healthz", func(c *gin.Context) { c.JSON(http.StatusOK, gin.H{"status": "healthy"}) })
 	r.GET("/readyz", func(c *gin.Context) { c.JSON(http.StatusOK, gin.H{"status": "ready"}) })
 	ring := NewRing(8)
@@ -66,6 +67,55 @@ func TestCSPHeader_DefaultExcludesUnsafeInline(t *testing.T) {
 	if !strings.Contains(csp, "style-src 'self'") {
 		t.Errorf("CSP missing style-src 'self'; got %q", csp)
 	}
+}
+
+func TestSecureHeaders_AlwaysSet(t *testing.T) {
+	r := newTestRouter(t, &Config{})
+	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	cases := map[string]string{
+		"X-Content-Type-Options": "nosniff",
+		"X-Frame-Options":        "DENY",
+		"Referrer-Policy":        "no-referrer",
+	}
+	for h, want := range cases {
+		if got := w.Header().Get(h); got != want {
+			t.Errorf("%s = %q, want %q", h, got, want)
+		}
+	}
+}
+
+func TestCSP_IncludesFrameAncestorsNone(t *testing.T) {
+	r := newTestRouter(t, &Config{})
+	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if csp := w.Header().Get("Content-Security-Policy"); !strings.Contains(csp, "frame-ancestors 'none'") {
+		t.Errorf("CSP missing frame-ancestors 'none'; got %q", csp)
+	}
+}
+
+func TestHSTS_OnlyWhenEnabled(t *testing.T) {
+	t.Run("disabled (default)", func(t *testing.T) {
+		r := newTestRouter(t, &Config{})
+		req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+		if got := w.Header().Get("Strict-Transport-Security"); got != "" {
+			t.Errorf("HSTS must be absent when disabled; got %q", got)
+		}
+	})
+	t.Run("enabled", func(t *testing.T) {
+		r := newTestRouter(t, &Config{HSTSEnabled: true, HSTSMaxAge: 31536000, HSTSIncludeSubdomains: true})
+		req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+		got := w.Header().Get("Strict-Transport-Security")
+		if got != "max-age=31536000; includeSubDomains" {
+			t.Errorf("HSTS = %q, want max-age=31536000; includeSubDomains", got)
+		}
+	})
 }
 
 func TestCSPHeader_UnsafeInlineWhenConfigured(t *testing.T) {

@@ -1,11 +1,12 @@
-{{- if and (or .Values.admissionWebhook.enabled .Values.policyManager.enabled) .Values.certManager.enabled (ne .Values.certManager.issuerType "existing") }}
+{{- if and (or .Values.admissionWebhook.enabled .Values.policyManager.enabled .Values.dashboard.enabled) .Values.certManager.enabled (ne .Values.certManager.issuerType "existing") }}
 {{- /*
-  Shared cert-manager Issuer for webhook AND policy-manager TLS (CRY-WU-09).
-  Rendered when certManager.enabled=true, issuerType is selfsigned or ca, and at
-  least one component that consumes it is enabled — so the policy-manager
-  Certificate's issuerRef (policy-manager-tls.yaml) never dangles when the
-  webhook is disabled. When issuerType=existing the operator supplies
-  certManager.issuerRef and no Issuer is rendered here.
+  Shared cert-manager Issuer for webhook, policy-manager, AND dashboard TLS
+  (CRY-WU-09/07). Rendered when certManager.enabled=true, issuerType is
+  selfsigned or ca, and at least one component that consumes it is enabled — so
+  no component's Certificate issuerRef (policy-manager-tls.yaml /
+  dashboard-tls.yaml) dangles when another component is disabled. When
+  issuerType=existing the operator supplies certManager.issuerRef and no Issuer
+  is rendered here.
 */ -}}
 apiVersion: cert-manager.io/v1
 kind: Issuer

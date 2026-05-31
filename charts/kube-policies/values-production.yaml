@@ -34,3 +34,14 @@ admissionWebhook:
 policyManager:
   tls:
     autoGenerate: false
+
+# If the dashboard is enabled in production, terminate TLS in-pod and emit HSTS
+# (CRY-WU-07). Harmless when dashboard.enabled stays false. Operators who
+# terminate TLS at the Ingress instead can leave dashboard.tls.enabled false and
+# emit HSTS at the Ingress.
+dashboard:
+  tls:
+    enabled: true
+    autoGenerate: false
+    hsts:
+      enabled: true

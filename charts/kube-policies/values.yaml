@@ -369,6 +369,26 @@ dashboard:
   # deployment env.
   streamURL: ""
 
+  # In-pod TLS serving + HSTS for the dashboard (CRY-WU-07). Default OFF: the
+  # common topology terminates TLS at the Ingress (see .ingress.tls), where the
+  # pod sees plaintext. Set enabled=true to terminate TLS inside the pod
+  # (cert provisioned by cert-manager when certManager.enabled, else the demo
+  # self-signed path — which is fixed RSA-2048, DEMO-ONLY per CRY-WU-11).
+  tls:
+    enabled: false
+    autoGenerate: true
+    caCert: ""
+    cert: ""
+    key: ""
+    # HSTS is gated independently: it is correct whenever the browser-facing hop
+    # is HTTPS (typically the Ingress), regardless of in-pod TLS. Leave off if
+    # the Ingress already emits Strict-Transport-Security to avoid a conflicting
+    # max-age.
+    hsts:
+      enabled: false
+      maxAge: 31536000
+      includeSubdomains: true
+
 # Shared bearer secret used by admission-webhook → policy-manager
 # /api/v1/decisions/internal POSTs and as the trust anchor for the
 # /api/v1/decisions/stream SSE fan-out (see svelte-dashboard plan §7).

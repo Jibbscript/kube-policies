@@ -18,9 +18,14 @@ spec:
       labels:
         {{- include "kube-policies.selectorLabels" . | nindent 8 }}
         app.kubernetes.io/component: dashboard
-      {{- with .Values.dashboard.podAnnotations }}
+      {{- if or .Values.dashboard.tls.enabled .Values.dashboard.podAnnotations }}
       annotations:
+        {{- if .Values.dashboard.tls.enabled }}
+        checksum/dashboard-certs: {{ include (print $.Template.BasePath "/dashboard-tls.yaml") . | sha256sum }}
+        {{- end }}
+        {{- with .Values.dashboard.podAnnotations }}
         {{- toYaml . | nindent 8 }}
+        {{- end }}
       {{- end }}
     spec:
       {{- with .Values.global.imagePullSecrets }}
@@ -62,11 +67,30 @@ spec:
             - name: POLICY_MANAGER_CA_PATH
               value: "/etc/policy-manager-ca/ca.crt"
             {{- end }}
+            # In-pod TLS serving + HSTS (CRY-WU-07). Default off (Ingress
+            # terminates TLS); the production overlay turns these on.
+            - name: DASHBOARD_TLS_ENABLED
+              value: {{ .Values.dashboard.tls.enabled | default false | quote }}
+            - name: DASHBOARD_HSTS_ENABLED
+              value: {{ .Values.dashboard.tls.hsts.enabled | default false | quote }}
+            - name: DASHBOARD_HSTS_MAX_AGE
+              # `| int` before `| quote`: Helm parses YAML numbers as float64 and
+              # sprig `quote` would render a large int in scientific notation
+              # (e.g. 3.1536e+07), which Go's strconv.Atoi cannot parse.
+              value: {{ .Values.dashboard.tls.hsts.maxAge | default 31536000 | int | quote }}
+            - name: DASHBOARD_HSTS_INCLUDE_SUBDOMAINS
+              # No `| default true`: sprig `default` treats boolean false as empty
+              # and would coerce an explicit false back to true, making the
+              # opt-out non-functional. values.yaml always defines this key.
+              value: {{ .Values.dashboard.tls.hsts.includeSubdomains | quote }}
+          # Probe scheme follows in-pod TLS: when the dashboard terminates TLS,
+          # the kubelet httpGet probe must use HTTPS (it skips cert verification
+          # and presents no client cert; server-auth-only TLS handshakes succeed).
           livenessProbe:
             httpGet:
               path: /healthz
               port: http
-              scheme: HTTP
+              scheme: {{ if .Values.dashboard.tls.enabled }}HTTPS{{ else }}HTTP{{ end }}
             initialDelaySeconds: 10
             periodSeconds: 15
             timeoutSeconds: 5
@@ -75,7 +99,7 @@ spec:
             httpGet:
               path: /readyz
               port: http
-              scheme: HTTP
+              scheme: {{ if .Values.dashboard.tls.enabled }}HTTPS{{ else }}HTTP{{ end }}
             initialDelaySeconds: 5
             periodSeconds: 10
             timeoutSeconds: 3
@@ -93,6 +117,11 @@ spec:
           volumeMounts:
             - name: tmp
               mountPath: /tmp
+            {{- if .Values.dashboard.tls.enabled }}
+            - name: dashboard-certs
+              mountPath: /etc/dashboard-certs
+              readOnly: true
+            {{- end }}
             {{- if .Values.policyManager.enabled }}
             - name: policy-manager-ca
               mountPath: /etc/policy-manager-ca
@@ -101,6 +130,11 @@ spec:
       volumes:
         - name: tmp
           emptyDir: {}
+        {{- if .Values.dashboard.tls.enabled }}
+        - name: dashboard-certs
+          secret:
+            secretName: {{ include "kube-policies.dashboardCertSecretName" . }}
+        {{- end }}
         {{- if .Values.policyManager.enabled }}
         # Project ONLY ca.crt from the policy-manager serving Secret (CRY-WU-07);
         # optional so a not-yet-issued cert-manager Secret does not block startup.

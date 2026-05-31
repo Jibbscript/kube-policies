@@ -17,6 +17,7 @@ import (
 
 	"github.com/Jibbscript/kube-policies/internal/config"
 	"github.com/Jibbscript/kube-policies/internal/cryptofips"
+	"github.com/Jibbscript/kube-policies/internal/tlsreload"
 	"github.com/Jibbscript/kube-policies/pkg/logger"
 )
 
@@ -60,7 +61,8 @@ func main() {
 		zap.Bool("csp_unsafe_inline_style", cfg.CSPUnsafeInlineStyle),
 	)
 
-	// svcCtx is canceled on SIGTERM/SIGINT to stop the upstream SSE subscriber.
+	// svcCtx is canceled on SIGTERM/SIGINT to stop the upstream SSE subscriber
+	// and the TLS cert reloader.
 	svcCtx, svcCancel := context.WithCancel(context.Background())
 	defer svcCancel()
 
@@ -70,19 +72,44 @@ func main() {
 	}
 	metricsServer := newMetricsServer(*metricsPort)
 
-	go func() {
-		log.Info("starting dashboard API server", zap.Int("port", *port))
-		if err := apiServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Fatal("API server failed", zap.Error(err))
+	// In-pod TLS serving (CRY-WU-07), gated on DASHBOARD_TLS_ENABLED. One shared
+	// hot-reload cert source backs BOTH listeners (no double watcher). When TLS
+	// is off, the listeners stay plaintext (Ingress-terminated topology).
+	if cfg.TLSEnabled {
+		certReloader, rerr := tlsreload.New(cfg.CertPath, cfg.KeyPath, log.Named("tls-reload"))
+		if rerr != nil {
+			log.Fatal("failed to load dashboard TLS certificate", zap.Error(rerr))
 		}
-	}()
+		go func() {
+			if err := certReloader.Start(svcCtx); err != nil {
+				log.Error("TLS certificate reloader stopped with error", zap.Error(err))
+			}
+		}()
+		for _, srv := range []*http.Server{apiServer, metricsServer} {
+			tc, berr := config.BuildServerTLSConfig(config.TLSConfig{MinVersion: "1.3"}, nil)
+			if berr != nil {
+				log.Fatal("failed to build dashboard TLS config", zap.Error(berr))
+			}
+			tc.GetCertificate = certReloader.GetCertificate
+			srv.TLSConfig = tc
+		}
+	}
 
-	go func() {
-		log.Info("starting dashboard metrics server", zap.Int("port", *metricsPort))
-		if err := metricsServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Fatal("metrics server failed", zap.Error(err))
+	serve := func(name string, srv *http.Server, port int) {
+		log.Info("starting dashboard "+name+" server", zap.Int("port", port), zap.Bool("tls", cfg.TLSEnabled))
+		var serr error
+		if cfg.TLSEnabled {
+			// Cert served via TLSConfig.GetCertificate (the reloader); empty paths.
+			serr = srv.ListenAndServeTLS("", "")
+		} else {
+			serr = srv.ListenAndServe()
 		}
-	}()
+		if serr != nil && serr != http.ErrServerClosed {
+			log.Fatal("dashboard "+name+" server failed", zap.Error(serr))
+		}
+	}
+	go serve("API", apiServer, *port)
+	go serve("metrics", metricsServer, *metricsPort)
 
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
@@ -107,6 +134,7 @@ func newAPIServer(ctx context.Context, cfg *Config, log *zap.Logger) (*http.Serv
 	router := gin.New()
 	router.Use(gin.Recovery())
 	router.Use(cspMiddleware(cfg.CSPUnsafeInlineStyle))
+	router.Use(secureHeadersMiddleware(cfg))
 
 	router.GET("/healthz", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"status": "healthy"})
@@ -213,10 +241,47 @@ func cspMiddleware(unsafeInline bool) gin.HandlerFunc {
 		"script-src 'self'",
 		"object-src 'none'",
 		"base-uri 'self'",
+		// frame-ancestors 'none' is the modern, CSP-level clickjacking control
+		// (complements the legacy X-Frame-Options header set in
+		// secureHeadersMiddleware) (CRY-WU-07).
+		"frame-ancestors 'none'",
 	}
 	header := strings.Join(parts, "; ")
 	return func(c *gin.Context) {
 		c.Header("Content-Security-Policy", header)
+		c.Next()
+	}
+}
+
+// secureHeadersMiddleware emits defense-in-depth response security headers on
+// every response (CRY-WU-07):
+//   - X-Content-Type-Options: nosniff   (block MIME sniffing)
+//   - X-Frame-Options: DENY             (legacy clickjacking control)
+//   - Referrer-Policy: no-referrer      (do not leak URLs cross-origin)
+//
+// Strict-Transport-Security is emitted ONLY when cfg.HSTSEnabled. HSTS is gated
+// independently of in-pod TLS because the browser-facing hop is usually the
+// Ingress (HTTPS) even when the pod sees plaintext; operators whose Ingress
+// already emits HSTS should leave this off to avoid a conflicting max-age.
+func secureHeadersMiddleware(cfg *Config) gin.HandlerFunc {
+	hsts := ""
+	if cfg.HSTSEnabled {
+		maxAge := cfg.HSTSMaxAge
+		if maxAge <= 0 {
+			maxAge = 31536000
+		}
+		hsts = fmt.Sprintf("max-age=%d", maxAge)
+		if cfg.HSTSIncludeSubdomains {
+			hsts += "; includeSubDomains"
+		}
+	}
+	return func(c *gin.Context) {
+		c.Header("X-Content-Type-Options", "nosniff")
+		c.Header("X-Frame-Options", "DENY")
+		c.Header("Referrer-Policy", "no-referrer")
+		if hsts != "" {
+			c.Header("Strict-Transport-Security", hsts)
+		}
 		c.Next()
 	}
 }

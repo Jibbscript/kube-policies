@@ -104,6 +104,13 @@ Create the policy-manager TLS certificate secret name (CRY-WU-05)
 {{- end }}
 
 {{/*
+Create the dashboard TLS certificate secret name (CRY-WU-07)
+*/}}
+{{- define "kube-policies.dashboardCertSecretName" -}}
+{{- printf "%s-dashboard-certs" (include "kube-policies.fullname" .) }}
+{{- end }}
+
+{{/*
 Create the config map name
 */}}
 {{- define "kube-policies.configMapName" -}}

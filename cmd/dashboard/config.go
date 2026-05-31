@@ -53,6 +53,24 @@ type Config struct {
 	// Empty falls back to system roots; the chart mounts the policy-manager
 	// serving CA here.
 	PolicyManagerCAPath string
+
+	// TLSEnabled makes the dashboard serve its API (:8090) and metrics (:9092)
+	// over TLS 1.3 (CRY-WU-07). Default false: the common topology terminates
+	// TLS at the Ingress, where the pod sees plaintext. Set true to terminate
+	// TLS in-pod.
+	TLSEnabled bool
+	// CertPath / KeyPath are the in-pod TLS cert/key (used only when TLSEnabled).
+	CertPath string
+	KeyPath  string
+
+	// HSTSEnabled emits a Strict-Transport-Security header (CRY-WU-07). Gated
+	// independently of TLSEnabled because HSTS is correct whenever the
+	// browser-facing hop is HTTPS (typically the Ingress), regardless of whether
+	// the pod itself terminates TLS. Leave off if the Ingress already emits HSTS
+	// to avoid a conflicting max-age.
+	HSTSEnabled           bool
+	HSTSMaxAge            int
+	HSTSIncludeSubdomains bool
 }
 
 // LoadConfig reads dashboard configuration from environment variables.
@@ -71,7 +89,26 @@ func LoadConfig() (*Config, error) {
 		CSPUnsafeInlineStyle:       envBool("DASHBOARD_CSP_UNSAFE_INLINE_STYLE", false),
 		PolicyManagerStreamURL:     envOr("POLICY_MANAGER_STREAM_URL", "https://policy-manager:8080/api/v1/decisions/stream"),
 		PolicyManagerCAPath:        os.Getenv("POLICY_MANAGER_CA_PATH"),
+		TLSEnabled:                 envBool("DASHBOARD_TLS_ENABLED", false),
+		CertPath:                   envOr("DASHBOARD_CERT_PATH", "/etc/dashboard-certs/tls.crt"),
+		KeyPath:                    envOr("DASHBOARD_KEY_PATH", "/etc/dashboard-certs/tls.key"),
+		HSTSEnabled:                envBool("DASHBOARD_HSTS_ENABLED", false),
+		HSTSMaxAge:                 envIntOr("DASHBOARD_HSTS_MAX_AGE", 31536000),
+		HSTSIncludeSubdomains:      envBool("DASHBOARD_HSTS_INCLUDE_SUBDOMAINS", true),
 	}, nil
+}
+
+// envIntOr returns the integer value of key, or fallback when unset/invalid.
+func envIntOr(key string, fallback int) int {
+	v, ok := os.LookupEnv(key)
+	if !ok || v == "" {
+		return fallback
+	}
+	n, err := strconv.Atoi(strings.TrimSpace(v))
+	if err != nil {
+		return fallback
+	}
+	return n
 }
 
 func envOr(key, fallback string) string {
