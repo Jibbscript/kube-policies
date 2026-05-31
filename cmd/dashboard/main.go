@@ -15,6 +15,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"go.uber.org/zap"
 
+	"github.com/Jibbscript/kube-policies/internal/cryptofips"
 	"github.com/Jibbscript/kube-policies/pkg/logger"
 )
 
@@ -42,6 +43,10 @@ func main() {
 		zap.String("commit", commit),
 		zap.String("date", date),
 	)
+
+	// FIPS 140-3 startup self-test (CRY-WU-02): abort before opening any
+	// listener when REQUIRE_FIPS=true but the validated module is not active.
+	cryptofips.MustEnforce(log)
 
 	cfg, err := LoadConfig()
 	if err != nil {

@@ -1,4 +1,9 @@
 {{- if .Values.admissionWebhook.enabled -}}
+{{- if not .Values.certManager.enabled -}}
+{{- /* cert-manager DISABLED (default): chart provisions the serving cert and an
+       inline caBundle via the 3-branch logic below. When certManager.enabled=true
+       this whole block is skipped — cert-manager owns the Secret and ca-injector
+       populates the caBundle (see the else branch). */ -}}
 {{- $secretName := printf "%s-admission-webhook-certs" (include "kube-policies.fullname" .) -}}
 {{- $existingSecret := lookup "v1" "Secret" .Release.Namespace $secretName -}}
 {{- $tlsCrt := "" -}}
@@ -24,6 +29,11 @@
   {{- $tlsKey = .Values.admissionWebhook.tls.key | b64enc -}}
   {{- $caBundle = .Values.admissionWebhook.tls.caCert | b64enc -}}
 {{- else if .Values.admissionWebhook.tls.autoGenerate -}}
+  {{- /* DEMO-ONLY (CRY-WU-11): sprig genCA/genSignedCert emit a FIXED RSA-2048 /
+         SHA-256 key pair with no algorithm/size knob, which is below the
+         FedRAMP-Moderate bar. Production must use cert-manager
+         (certManager.enabled=true → ECDSA P-256) or supply an approved-strength
+         cert via tls.caCert/cert/key. See docs/compliance/crypto-standards.md. */ -}}
   {{- $svc := printf "%s-admission-webhook" (include "kube-policies.fullname" .) -}}
   {{- $ns := .Release.Namespace -}}
   {{- /* Per A2/C3 — five DNS names + one IP, matching scripts/gen-webhook-cert.sh:53-58 verbatim. */ -}}
@@ -94,4 +104,51 @@ webhooks:
             - kube-node-lease
             - local-path-storage
             - {{ .Release.Namespace }}
+{{- else -}}
+{{- /* cert-manager ENABLED (CRY-WU-09): no inline Secret and no inline
+       caBundle. cert-manager issues the serving cert (see certificate.yaml /
+       issuer.yaml) into the same Secret the deployment mounts, and the
+       cert-manager.io/inject-ca-from annotation makes ca-injector populate the
+       caBundle from the Certificate's resulting CA. The annotation value MUST be
+       <namespace>/<certificate-name> (the Certificate is named
+       <fullname>-admission-webhook), NOT the Secret name. */ -}}
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingWebhookConfiguration
+metadata:
+  name: {{ include "kube-policies.fullname" . }}-validating-webhook
+  annotations:
+    cert-manager.io/inject-ca-from: {{ printf "%s/%s-admission-webhook" .Release.Namespace (include "kube-policies.fullname" .) | quote }}
+  labels:
+    {{- include "kube-policies.labels" . | nindent 4 }}
+webhooks:
+  - name: validate.kube-policies.io
+    admissionReviewVersions: ["v1"]
+    sideEffects: None
+    failurePolicy: {{ .Values.admissionWebhook.webhook.failurePolicy | default "Fail" }}
+    timeoutSeconds: {{ .Values.admissionWebhook.webhook.timeoutSeconds | default 10 }}
+    clientConfig:
+      service:
+        name: {{ include "kube-policies.fullname" . }}-admission-webhook
+        namespace: {{ .Release.Namespace }}
+        path: /validate
+        port: 8443
+      # caBundle intentionally omitted; cert-manager ca-injector populates it.
+    rules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["pods"]
+        scope: "Namespaced"
+    namespaceSelector:
+      matchExpressions:
+        - key: kubernetes.io/metadata.name
+          operator: NotIn
+          values:
+            - kube-system
+            - kube-public
+            - kube-node-lease
+            - local-path-storage
+            - {{ .Release.Namespace }}
+{{- end }}
 {{- end }}

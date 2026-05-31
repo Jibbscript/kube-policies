@@ -101,20 +101,26 @@ spec:
           limits:
             cpu: 500m
             memory: 512Mi
+        # Probes target the metrics server (port 9090) over plain HTTP. The
+        # webhook TLS port (8443) cannot serve a plain-HTTP probe, and once
+        # mutual TLS is enforced (client_auth=require + a client CA) an HTTPS
+        # probe without a client cert would fail the handshake and kill the pod.
+        # /healthz is registered on the metrics server; /readyz is not, so both
+        # probes use /healthz (matches the Helm chart).
         livenessProbe:
           httpGet:
             path: /healthz
-            port: webhook
-            scheme: HTTPS
+            port: metrics
+            scheme: HTTP
           initialDelaySeconds: 30
           periodSeconds: 10
           timeoutSeconds: 5
           failureThreshold: 3
         readinessProbe:
           httpGet:
-            path: /readyz
-            port: webhook
-            scheme: HTTPS
+            path: /healthz
+            port: metrics
+            scheme: HTTP
           initialDelaySeconds: 5
           periodSeconds: 5
           timeoutSeconds: 3

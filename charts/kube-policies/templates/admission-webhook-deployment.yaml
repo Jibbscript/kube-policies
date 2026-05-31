@@ -59,6 +59,11 @@ spec:
             - --key-path=/etc/certs/tls.key
             - --config=/etc/config/config.yaml
             - --disable-default-policies={{ or .Values.admissionWebhook.disableDefaultPolicies (not .Values.policies.enableDefaults) }}
+            {{- if .Values.admissionWebhook.tls.clientCA }}
+            # Mutual TLS (CRY-WU-04): enforce RequireAndVerifyClientCert against
+            # the operator-supplied apiserver client-cert CA.
+            - --client-ca-path=/etc/client-ca/ca.crt
+            {{- end }}
           ports:
             - name: webhook
               containerPort: 8443
@@ -69,6 +74,7 @@ spec:
           env:
             - name: LOG_LEVEL
               value: "info"
+            {{- include "kube-policies.fipsEnv" . | nindent 12 }}
             - name: POD_NAMESPACE
               valueFrom:
                 fieldRef:
@@ -112,6 +118,11 @@ spec:
             - name: certs
               mountPath: /etc/certs
               readOnly: true
+            {{- if .Values.admissionWebhook.tls.clientCA }}
+            - name: client-ca
+              mountPath: /etc/client-ca
+              readOnly: true
+            {{- end }}
             - name: config
               mountPath: /etc/config
               readOnly: true
@@ -123,6 +134,11 @@ spec:
         - name: certs
           secret:
             secretName: {{ include "kube-policies.fullname" . }}-admission-webhook-certs
+        {{- if .Values.admissionWebhook.tls.clientCA }}
+        - name: client-ca
+          secret:
+            secretName: {{ include "kube-policies.fullname" . }}-admission-webhook-client-ca
+        {{- end }}
         - name: config
           configMap:
             name: {{ include "kube-policies.fullname" . }}-config

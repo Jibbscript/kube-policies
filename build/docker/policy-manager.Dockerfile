@@ -23,13 +23,18 @@ ARG COMMIT=unknown
 ARG DATE=unknown
 ARG TARGETOS=linux
 ARG TARGETARCH=amd64
+# GOFIPS140 selects the Go native FIPS 140-3 cryptographic module (CRY-WU-01).
+ARG GOFIPS140=v1.0.0
 
-# Build the binary
-RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build \
+# Build the binary with the FIPS 140-3 module, then fail the build if the
+# resulting binary does not record the GOFIPS140 marker.
+RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} GOFIPS140=${GOFIPS140} go build \
     -ldflags="-w -s -X main.version=${VERSION} -X main.commit=${COMMIT} -X main.date=${DATE}" \
     -trimpath \
     -o policy-manager \
-    ./cmd/policy-manager
+    ./cmd/policy-manager && \
+    go version -m policy-manager | grep -q "GOFIPS140=${GOFIPS140}" \
+      || (echo "FATAL: policy-manager binary is missing the GOFIPS140 marker" >&2 && exit 1)
 
 # Final stage
 FROM gcr.io/distroless/static:nonroot@sha256:963fa6c544fe5ce420f1f54fb88b6fb01479f054c8056d0f74cc2c6000df5240
@@ -45,6 +50,9 @@ COPY --from=builder /workspace/policy-manager /usr/local/bin/policy-manager
 
 # Use nonroot user
 USER 65534:65534
+
+# Run the cryptographic libraries in FIPS 140-3 mode (CRY-WU-01).
+ENV GODEBUG=fips140=on
 
 # Set entrypoint
 ENTRYPOINT ["/usr/local/bin/policy-manager"]

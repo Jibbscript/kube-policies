@@ -32,6 +32,11 @@ type Config struct {
 	// /api/decisions/internal. If empty, the endpoint always returns 401.
 	InternalToken string
 
+	// InternalTokenPrevious is the prior internal token, accepted alongside
+	// InternalToken during a zero-downtime rotation window (CRY-WU-14). Empty
+	// outside of a rotation.
+	InternalTokenPrevious string
+
 	// CSPUnsafeInlineStyle appends 'unsafe-inline' to the CSP style-src
 	// directive. Set this only if your built SPA injects inline styles
 	// (e.g. some Tailwind v4 modes). The empirical verdict for the
@@ -54,6 +59,7 @@ func LoadConfig() (*Config, error) {
 		AdmissionWebhookMetricsURL: envOr("ADMISSION_WEBHOOK_METRICS_URL", "http://admission-webhook:9090/metrics"),
 		AllowWrites:                envBool("ALLOW_WRITES", false),
 		InternalToken:              os.Getenv("INTERNAL_TOKEN"),
+		InternalTokenPrevious:      os.Getenv("INTERNAL_TOKEN_PREVIOUS"),
 		CSPUnsafeInlineStyle:       envBool("DASHBOARD_CSP_UNSAFE_INLINE_STYLE", false),
 		PolicyManagerStreamURL:     envOr("POLICY_MANAGER_STREAM_URL", "http://policy-manager:8080/api/v1/decisions/stream"),
 	}, nil

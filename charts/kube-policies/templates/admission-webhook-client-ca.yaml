@@ -1,0 +1,21 @@
+{{- if and .Values.admissionWebhook.enabled .Values.admissionWebhook.tls.clientCA }}
+{{- /*
+  Mutual-TLS client-CA bundle (CRY-WU-04). Holds the CA that signs the
+  kube-apiserver's webhook client certificate, mounted read-only at
+  /etc/client-ca and passed to the webhook via --client-ca-path. This is a
+  PUBLIC CA certificate (not secret key material) but is shipped as a Secret to
+  match the existing certs-volume mount pattern. Kept SEPARATE from the
+  serving-cert Secret so the serving CA and the client-cert CA are never
+  conflated.
+*/ -}}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ include "kube-policies.fullname" . }}-admission-webhook-client-ca
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kube-policies.labels" . | nindent 4 }}
+type: Opaque
+data:
+  ca.crt: {{ .Values.admissionWebhook.tls.clientCA | b64enc | quote }}
+{{- end }}

@@ -63,6 +63,12 @@ type TLSConfig struct {
 	MinVersion   string   `mapstructure:"min_version"`
 	CipherSuites []string `mapstructure:"cipher_suites"`
 	ClientAuth   string   `mapstructure:"client_auth"`
+	// ClientCAPath is the path to a PEM bundle of client-certificate CAs.
+	// When set, client_auth=require enforces mutual TLS (RequireAndVerifyClientCert)
+	// against this bundle; when empty, client-certificate verification is
+	// disabled even if client_auth=require (permissive mode for non-mTLS
+	// environments) — see internal/config/tls.go BuildServerTLSConfig (CRY-WU-04).
+	ClientCAPath string `mapstructure:"client_ca_path"`
 }
 
 // RBACConfig represents RBAC configuration
@@ -215,8 +221,11 @@ func validateConfig(config *Config) error {
 		}
 	}
 
-	if config.Security.TLS.MinVersion != "1.3" {
-		return fmt.Errorf("invalid TLS min version: %s (supported: 1.3)", config.Security.TLS.MinVersion)
+	// Validate the TLS stanza (min_version, cipher_suites, client_auth) so a
+	// weak floor or an unknown/non-approved cipher suite fails fast at load
+	// rather than at the first handshake (CRY-WU-03).
+	if err := config.Security.TLS.Validate(); err != nil {
+		return fmt.Errorf("invalid TLS configuration: %w", err)
 	}
 
 	return nil

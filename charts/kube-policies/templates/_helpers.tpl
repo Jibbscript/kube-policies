@@ -211,3 +211,20 @@ Validate required values
   {{- /* The render-time fail in admission-webhook-tls.yaml is the actual guard. This is a friendlier pre-render check. */ -}}
 {{- end -}}
 {{- end -}}
+
+{{/*
+FIPS 140-3 runtime environment (CRY-WU-01, CRY-WU-02).
+Emits GODEBUG so the validated module is active at runtime and, when
+fips.required is true, REQUIRE_FIPS=true so each binary's startup self-test
+aborts when the FIPS module is not active. Guarded with a default dict so the
+chart still renders if the fips block is omitted.
+*/}}
+{{- define "kube-policies.fipsEnv" -}}
+{{- $fips := .Values.fips | default dict -}}
+- name: GODEBUG
+  value: {{ $fips.godebug | default "fips140=on" | quote }}
+{{- if $fips.required }}
+- name: REQUIRE_FIPS
+  value: "true"
+{{- end }}
+{{- end -}}

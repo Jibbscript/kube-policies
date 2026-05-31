@@ -135,6 +135,23 @@ jobs:
           coverage.out
           coverage.html
 
+  # FIPS 140-3 build verification (CRY-WU-01): build every shipped binary with
+  # the Go native FIPS module and fail if the GOFIPS140 marker is absent.
+  fips-verify:
+    name: FIPS 140-3 Build Verification
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+
+    - name: Set up Go
+      uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff  # v5
+      with:
+        go-version: ${{ env.GO_VERSION }}
+
+    - name: Build with GOFIPS140 and assert the marker on every binary
+      run: make verify-fips GOFIPS140=v1.0.0
+
   # Build and test Docker images
   build-images:
     name: Build Docker Images
@@ -529,11 +546,11 @@ jobs:
     name: CI Gate
     runs-on: ubuntu-latest
     if: always()
-    needs: [lint, unit-tests, build-images, integration-tests, e2e-kind, e2e-k3s, security-scan, helm-tests, docs-tests]
+    needs: [lint, unit-tests, fips-verify, build-images, integration-tests, e2e-kind, e2e-k3s, security-scan, helm-tests, docs-tests]
     steps:
     - name: Verify all required jobs succeeded
       run: |
-        results="${{ needs.lint.result }} ${{ needs.unit-tests.result }} ${{ needs.build-images.result }} ${{ needs.integration-tests.result }} ${{ needs.e2e-kind.result }} ${{ needs.e2e-k3s.result }} ${{ needs.security-scan.result }} ${{ needs.helm-tests.result }} ${{ needs.docs-tests.result }}"
+        results="${{ needs.lint.result }} ${{ needs.unit-tests.result }} ${{ needs.fips-verify.result }} ${{ needs.build-images.result }} ${{ needs.integration-tests.result }} ${{ needs.e2e-kind.result }} ${{ needs.e2e-k3s.result }} ${{ needs.security-scan.result }} ${{ needs.helm-tests.result }} ${{ needs.docs-tests.result }}"
         echo "job results: ${results}"
         # shellcheck disable=SC2086
         for r in ${results}; do

@@ -44,6 +44,7 @@ spec:
               containerPort: 9092
               protocol: TCP
           env:
+            {{- include "kube-policies.fipsEnv" . | nindent 12 }}
             - name: POLICY_MANAGER_URL
               value: "http://{{ include "kube-policies.fullname" . }}-policy-manager:8080"
             - name: POLICY_MANAGER_METRICS_URL

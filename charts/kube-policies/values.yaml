@@ -10,6 +10,51 @@ global:
   # Global storage class
   storageClass: ""
 
+# FIPS 140-3 cryptographic posture (CRY-WU-01, CRY-WU-02).
+# Images are built with the Go FIPS 140-3 module (GOFIPS140) and default to
+# fips140=on at runtime. These values surface the runtime controls:
+#   - required: when true, REQUIRE_FIPS=true is injected and each binary aborts
+#     at startup if the FIPS module is not active. Default false so the chart
+#     installs on non-FIPS dev clusters; production overlays set it true
+#     (see values-production.yaml).
+#   - godebug: the GODEBUG value selecting FIPS runtime mode ("fips140=on" or
+#     "fips140=only" to additionally reject non-approved algorithms).
+fips:
+  required: false
+  godebug: "fips140=on"
+
+# cert-manager integration for webhook TLS (CRY-WU-09). Default OFF so the
+# chart installs on clusters without cert-manager CRDs (kind / ct / demo).
+# Enable in production (see values-production.yaml), where cert-manager is
+# pre-installed: the chart then renders an Issuer + Certificate to provision the
+# webhook TLS Secret and annotates the ValidatingWebhookConfiguration with
+# cert-manager.io/inject-ca-from so ca-injector populates the caBundle (no
+# inline self-signed Secret or caBundle is rendered).
+certManager:
+  enabled: false
+  # issuerType selects how the issuing Issuer is provided:
+  #   selfsigned — chart renders a selfSigned Issuer (turnkey; per-release root)
+  #   ca         — chart renders a CA Issuer referencing caSecretName
+  #   existing   — no Issuer rendered; use the operator-supplied issuerRef
+  issuerType: selfsigned
+  # Used when issuerType=existing.
+  issuerRef:
+    name: ""
+    kind: Issuer            # Issuer or ClusterIssuer
+    group: cert-manager.io
+  # Secret (tls.crt/tls.key) backing a CA Issuer when issuerType=ca.
+  caSecretName: ""
+  duration: 8760h0m0s       # 1 year
+  renewBefore: 720h0m0s     # 30 days
+  # Approved key strength for the issued cert (CRY-WU-11). cert-manager defaults
+  # to RSA-2048 if omitted, which is below the FedRAMP-Moderate bar — so this
+  # block is mandatory. ECDSA size is the curve bit-length (256=P-256,
+  # 384=P-384); RSA size is the modulus (>=3072).
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+    rotationPolicy: Always
+
 # Admission Webhook Configuration
 admissionWebhook:
   enabled: true
@@ -77,12 +122,24 @@ admissionWebhook:
   
   # TLS configuration
   tls:
-    # Auto-generate certificates
+    # Auto-generate certificates.
+    # NOTE: the autoGenerate path uses Helm/sprig genCA/genSignedCert, which
+    # emit a FIXED RSA-2048 / SHA-256 key pair and is DEMO-ONLY (CRY-WU-11).
+    # Production must use cert-manager (certManager.enabled=true) or supply an
+    # approved-strength cert via the inline caCert/cert/key fields.
     autoGenerate: true
     # Custom certificate (if autoGenerate is false)
     caCert: ""
     cert: ""
     key: ""
+    # clientCA is the PEM bundle of the CA that signs the kube-apiserver's
+    # webhook client certificate. When set, mutual TLS is ENFORCED on the
+    # webhook listener (RequireAndVerifyClientCert) via --client-ca-path
+    # (CRY-WU-04). This is the apiserver client-cert CA — distinct from the
+    # serving-cert CA above — and is cluster-specific / operator-supplied.
+    # Empty (default) leaves the webhook server-auth-only (permissive) so the
+    # kind/dev demo works without apiserver client certs.
+    clientCA: ""
 
   # Set to true to skip loading bundled default policies at startup.
   # Useful in e2e / integration test environments where test-authored

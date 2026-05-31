@@ -1,0 +1,22 @@
+{{- if and .Values.admissionWebhook.enabled .Values.certManager.enabled (ne .Values.certManager.issuerType "existing") }}
+{{- /*
+  cert-manager Issuer for webhook TLS (CRY-WU-09). Rendered only when
+  certManager.enabled=true and issuerType is selfsigned or ca. When
+  issuerType=existing the operator supplies certManager.issuerRef and no Issuer
+  is rendered here.
+*/ -}}
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: {{ include "kube-policies.fullname" . }}-webhook-issuer
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kube-policies.labels" . | nindent 4 }}
+spec:
+{{- if eq .Values.certManager.issuerType "ca" }}
+  ca:
+    secretName: {{ required "certManager.caSecretName is required when certManager.issuerType=ca" .Values.certManager.caSecretName }}
+{{- else }}
+  selfSigned: {}
+{{- end }}
+{{- end }}

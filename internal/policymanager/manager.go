@@ -12,6 +12,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/Jibbscript/kube-policies/internal/audit"
+	"github.com/Jibbscript/kube-policies/internal/auth"
 	"github.com/Jibbscript/kube-policies/internal/config"
 	"github.com/Jibbscript/kube-policies/internal/policy"
 )
@@ -28,10 +29,11 @@ type Manager struct {
 	cancel     context.CancelFunc
 
 	// M2 live-ticker: fan-out pub-sub bus, bounded recent-event ring, and the
-	// shared bearer secret that guards POST /api/v1/decisions/internal.
+	// constant-time verifier for the shared bearer secret that guards
+	// POST /api/v1/decisions/internal.
 	bus           *audit.Bus
 	recentRing    *Ring
-	internalToken string
+	internalToken *auth.TokenVerifier
 }
 
 // PolicyBundle represents a collection of policies
@@ -146,7 +148,15 @@ func NewManager(config *config.Config, logger *zap.Logger) (*Manager, error) {
 // POST /api/v1/decisions/internal requests from the admission webhook.
 // An empty token disables the endpoint (every request returns 401).
 func (m *Manager) SetInternalToken(token string) {
-	m.internalToken = token
+	m.internalToken = auth.NewTokenVerifier(token)
+}
+
+// SetInternalTokens configures the internal-token verifier with a current and
+// an optional previous token, supporting a zero-downtime rotation window in
+// which both are accepted (CRY-WU-14). An empty previous token is ignored; an
+// empty current token disables the endpoint.
+func (m *Manager) SetInternalTokens(current, previous string) {
+	m.internalToken = auth.NewTokenVerifier(current, previous)
 }
 
 // Start starts the policy manager background processes

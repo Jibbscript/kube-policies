@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -20,9 +21,11 @@ import (
 	"github.com/Jibbscript/kube-policies/internal/admission"
 	"github.com/Jibbscript/kube-policies/internal/audit"
 	"github.com/Jibbscript/kube-policies/internal/config"
+	"github.com/Jibbscript/kube-policies/internal/cryptofips"
 	"github.com/Jibbscript/kube-policies/internal/metrics"
 	"github.com/Jibbscript/kube-policies/internal/policy"
 	"github.com/Jibbscript/kube-policies/internal/policymanager"
+	"github.com/Jibbscript/kube-policies/internal/tlsreload"
 	"github.com/Jibbscript/kube-policies/pkg/logger"
 )
 
@@ -37,6 +40,12 @@ var (
 	port        = flag.Int("port", 8443, "Webhook server port")
 	metricsPort = flag.Int("metrics-port", 9090, "Metrics server port")
 	configPath  = flag.String("config", "/etc/config/config.yaml", "Path to configuration file")
+
+	// clientCAPath, when set, makes client_auth=require enforce mutual TLS
+	// (RequireAndVerifyClientCert) against this PEM bundle (CRY-WU-04). When
+	// empty, client-certificate verification is disabled even if
+	// client_auth=require. Flag value overrides the config-file value.
+	clientCAPath = flag.String("client-ca-path", "", "Path to PEM client-CA bundle for webhook mTLS; empty disables client-cert verification")
 
 	// disableControllers turns off CRD watching. Off by default: the webhook
 	// loads bundled defaults AND watches Policy CRDs so kubectl apply changes
@@ -70,6 +79,10 @@ func main() {
 		zap.String("date", date),
 	)
 
+	// FIPS 140-3 startup self-test (CRY-WU-02): abort before opening any
+	// listener when REQUIRE_FIPS=true but the validated module is not active.
+	cryptofips.MustEnforce(log)
+
 	// Load configuration
 	cfg, err := config.LoadConfig(*configPath)
 	if err != nil {
@@ -91,6 +104,12 @@ func main() {
 	// Apply flag overrides to policy config before engine construction
 	log.Info("disable-default-policies flag", zap.Bool("disable_default_policies", *disableDefaults))
 	cfg.Policy.DisableDefaults = *disableDefaults
+
+	// Flag overrides config for the client-CA bundle path (CRY-WU-04): an
+	// explicit --client-ca-path wins over any config-file value.
+	if *clientCAPath != "" {
+		cfg.Security.TLS.ClientCAPath = *clientCAPath
+	}
 
 	// Initialize policy engine.
 	//
@@ -134,11 +153,37 @@ func main() {
 	// Initialize admission controller
 	admissionController := admission.NewController(policyEngine, auditLogger, metricsCollector, log, publisher)
 
-	// Setup webhook server
-	webhookServer := setupWebhookServer(admissionController, log)
+	// Setup webhook server. TLS parameters (min version, cipher suites,
+	// client auth) are driven by cfg.Security.TLS rather than hardcoded
+	// literals (CRY-WU-03). A startup failure here is fatal — serving on a
+	// misconfigured TLS stack would be worse than not serving.
+	webhookServer, err := setupWebhookServer(admissionController, &cfg.Security.TLS, log)
+	if err != nil {
+		log.Fatal("Failed to build webhook TLS server", zap.Error(err))
+	}
 
 	// Setup metrics server
 	metricsServer := setupMetricsServer()
+
+	// Background-process context. Canceled on SIGINT/SIGTERM below; the CRD
+	// controllers and the TLS cert reloader stop when this is canceled.
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Hot TLS certificate reload (CRY-WU-10): serve the cert via a
+	// GetCertificate callback backed by a watcher so cert-manager / Secret
+	// rotations are picked up without a pod restart. A failed initial load is
+	// fatal — serving with no certificate is worse than not serving.
+	certReloader, err := tlsreload.New(*certPath, *keyPath, log.Named("tls-reload"))
+	if err != nil {
+		log.Fatal("Failed to load webhook TLS certificate", zap.Error(err))
+	}
+	webhookServer.TLSConfig.GetCertificate = certReloader.GetCertificate
+	go func() {
+		if err := certReloader.Start(ctx); err != nil {
+			log.Error("TLS certificate reloader stopped with error", zap.Error(err))
+		}
+	}()
 
 	// Start servers
 	go func() {
@@ -150,15 +195,12 @@ func main() {
 
 	go func() {
 		log.Info("Starting webhook server", zap.Int("port", *port))
-		if err := webhookServer.ListenAndServeTLS(*certPath, *keyPath); err != nil && err != http.ErrServerClosed {
+		// Empty cert/key paths: the certificate is served via
+		// TLSConfig.GetCertificate (the reloader), not a one-shot file read.
+		if err := webhookServer.ListenAndServeTLS("", ""); err != nil && err != http.ErrServerClosed {
 			log.Fatal("Failed to start webhook server", zap.Error(err))
 		}
 	}()
-
-	// Background-process context. Canceled on SIGINT/SIGTERM below; the CRD
-	// controllers stop when this is canceled.
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
 
 	// Start CRD controllers so kubectl-applied Policy resources change real
 	// admission decisions. Kubeconfig resolution failures are fatal by
@@ -245,7 +287,7 @@ func main() {
 	log.Info("Servers stopped")
 }
 
-func setupWebhookServer(controller *admission.Controller, log *zap.Logger) *http.Server {
+func setupWebhookServer(controller *admission.Controller, tlsCfg *config.TLSConfig, log *zap.Logger) (*http.Server, error) {
 	gin.SetMode(gin.ReleaseMode)
 	router := gin.New()
 	router.Use(gin.Recovery())
@@ -263,23 +305,40 @@ func setupWebhookServer(controller *admission.Controller, log *zap.Logger) *http
 	router.POST("/validate", controller.ValidateHandler)
 	router.POST("/mutate", controller.MutateHandler)
 
+	// Build the TLS config from configuration rather than hardcoded literals
+	// (CRY-WU-03). Client-certificate verification (mTLS, CRY-WU-04) is enabled
+	// when a client-CA bundle path is configured; otherwise the listener stays
+	// server-auth-only (permissive) so non-mTLS environments still work.
+	clientCAs, err := config.LoadClientCAPool(tlsCfg.ClientCAPath)
+	if err != nil {
+		return nil, fmt.Errorf("load client CA bundle: %w", err)
+	}
+	tlsConf, err := config.BuildServerTLSConfig(*tlsCfg, clientCAs)
+	if err != nil {
+		return nil, err
+	}
+	mtlsEnforced := clientCAs != nil && tlsConf.ClientAuth == tls.RequireAndVerifyClientCert
+	log.Info("webhook TLS configured",
+		zap.String("min_version", tlsCfg.MinVersion),
+		zap.Strings("cipher_suites", tlsCfg.CipherSuites),
+		zap.String("client_auth", tlsCfg.ClientAuth),
+		zap.String("client_ca_path", tlsCfg.ClientCAPath),
+		zap.Bool("mtls_enforced", mtlsEnforced),
+	)
+	if tlsCfg.ClientCAPath == "" && tlsConf.ClientAuth == tls.NoClientCert && strings.EqualFold(tlsCfg.ClientAuth, "require") {
+		log.Warn("client-ca-path unset: client certificate verification DISABLED (permissive mode) despite client_auth=require")
+	}
+
 	server := &http.Server{
-		Addr:    fmt.Sprintf(":%d", *port),
-		Handler: router,
-		TLSConfig: &tls.Config{
-			MinVersion: tls.VersionTLS13,
-			CipherSuites: []uint16{
-				tls.TLS_AES_256_GCM_SHA384,
-				tls.TLS_CHACHA20_POLY1305_SHA256,
-				tls.TLS_AES_128_GCM_SHA256,
-			},
-		},
+		Addr:         fmt.Sprintf(":%d", *port),
+		Handler:      router,
+		TLSConfig:    tlsConf,
 		ReadTimeout:  15 * time.Second,
 		WriteTimeout: 15 * time.Second,
 		IdleTimeout:  60 * time.Second,
 	}
 
-	return server
+	return server, nil
 }
 
 func setupMetricsServer() *http.Server {

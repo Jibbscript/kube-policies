@@ -1,0 +1,32 @@
+# Production overlay for kube-policies.
+#
+# Apply on top of values.yaml for production / ATO-relevant deployments:
+#   helm upgrade --install kube-policies charts/kube-policies \
+#     -f charts/kube-policies/values.yaml \
+#     -f charts/kube-policies/values-production.yaml
+#
+# This overlay tightens the cryptographic posture to the FedRAMP-Moderate
+# baseline. It is intentionally additive — only the values that must differ
+# from the dev defaults are set here.
+
+# FIPS 140-3 is mandatory in production: each binary runs the startup self-test
+# and aborts if the validated module is not active (CRY-WU-02). Images are
+# already built with GOFIPS140 and default to fips140=on.
+fips:
+  required: true
+  godebug: "fips140=on"
+
+# cert-manager provisions webhook TLS in production (CRY-WU-09), replacing the
+# demo-only sprig self-signed path (which is fixed RSA-2048). Requires
+# cert-manager to be pre-installed in the cluster. The issued cert uses the
+# approved key strength (ECDSA P-256, CRY-WU-11). For a real PKI chain set
+# issuerType=ca (with caSecretName) or issuerType=existing (with issuerRef).
+certManager:
+  enabled: true
+  issuerType: selfsigned
+
+# Disable the demo sprig autoGenerate path so a missing cert-manager setup fails
+# loudly rather than silently falling back to a fixed RSA-2048 self-signed cert.
+admissionWebhook:
+  tls:
+    autoGenerate: false

@@ -37,16 +37,22 @@ COPY --from=web-builder /src/web/dist/. /src/cmd/dashboard/web_dist/
 
 ARG TARGETOS=linux
 ARG TARGETARCH=amd64
-RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build \
+# GOFIPS140 selects the Go native FIPS 140-3 cryptographic module (CRY-WU-01).
+ARG GOFIPS140=v1.0.0
+RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} GOFIPS140=${GOFIPS140} go build \
     -trimpath \
     -ldflags="-s -w" \
     -o /out/dashboard \
-    ./cmd/dashboard
+    ./cmd/dashboard && \
+    go version -m /out/dashboard | grep -q "GOFIPS140=${GOFIPS140}" \
+      || (echo "FATAL: dashboard binary is missing the GOFIPS140 marker" >&2 && exit 1)
 
 # Stage 3: Minimal runtime image ----------------------------------------------
 FROM scratch
 COPY --from=go-builder /out/dashboard /dashboard
 COPY --from=go-builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
 USER 65532:65532
+# Run the cryptographic libraries in FIPS 140-3 mode (CRY-WU-01).
+ENV GODEBUG=fips140=on
 EXPOSE 8090 9092
 ENTRYPOINT ["/dashboard"]

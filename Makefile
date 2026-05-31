@@ -13,6 +13,10 @@ GO_VERSION := 1.25
 GOOS ?= $(shell go env GOOS)
 GOARCH ?= $(shell go env GOARCH)
 CGO_ENABLED ?= 0
+# GOFIPS140 selects the Go native FIPS 140-3 cryptographic module (CRY-WU-01).
+# Default to the validated version; override with `make build GOFIPS140=off`
+# on toolchains without the module.
+GOFIPS140 ?= v1.0.0
 
 # Build configuration
 LDFLAGS := -s -w -X main.version=$(VERSION) -X main.commit=$(COMMIT) -X main.date=$(DATE)
@@ -84,7 +88,7 @@ build: build-admission-webhook build-policy-manager $(if $(WITH_UI),build-dashbo
 build-admission-webhook: ## Build admission webhook binary
 	@echo "$(BLUE)Building admission webhook...$(NC)"
 	mkdir -p $(DIST_DIR)
-	CGO_ENABLED=$(CGO_ENABLED) GOOS=$(GOOS) GOARCH=$(GOARCH) go build \
+	CGO_ENABLED=$(CGO_ENABLED) GOOS=$(GOOS) GOARCH=$(GOARCH) GOFIPS140=$(GOFIPS140) go build \
 		$(BUILD_FLAGS) \
 		-o $(DIST_DIR)/admission-webhook-$(GOOS)-$(GOARCH) \
 		./cmd/admission-webhook
@@ -94,7 +98,7 @@ build-admission-webhook: ## Build admission webhook binary
 build-policy-manager: ## Build policy manager binary
 	@echo "$(BLUE)Building policy manager...$(NC)"
 	mkdir -p $(DIST_DIR)
-	CGO_ENABLED=$(CGO_ENABLED) GOOS=$(GOOS) GOARCH=$(GOARCH) go build \
+	CGO_ENABLED=$(CGO_ENABLED) GOOS=$(GOOS) GOARCH=$(GOARCH) GOFIPS140=$(GOFIPS140) go build \
 		$(BUILD_FLAGS) \
 		-o $(DIST_DIR)/policy-manager-$(GOOS)-$(GOARCH) \
 		./cmd/policy-manager
@@ -442,12 +446,30 @@ build-dashboard: ## Build cmd/dashboard binary (requires ui-build first unless N
 	fi
 	@echo "$(BLUE)Building dashboard binary...$(NC)"
 	mkdir -p $(DIST_DIR)
-	CGO_ENABLED=$(CGO_ENABLED) GOOS=$(GOOS) GOARCH=$(GOARCH) go build \
+	CGO_ENABLED=$(CGO_ENABLED) GOOS=$(GOOS) GOARCH=$(GOARCH) GOFIPS140=$(GOFIPS140) go build \
 		$(BUILD_FLAGS) \
 		$(if $(NO_UI),-tags=no_ui,) \
 		-o $(DIST_DIR)/dashboard-$(GOOS)-$(GOARCH) \
 		./cmd/dashboard
 	@echo "$(GREEN)Dashboard built: $(DIST_DIR)/dashboard-$(GOOS)-$(GOARCH)$(NC)"
+
+.PHONY: verify-fips
+verify-fips: ## Build all binaries with the FIPS 140-3 module and assert the GOFIPS140 marker (CRY-WU-01)
+	@echo "$(BLUE)Verifying FIPS 140-3 build markers (GOFIPS140=$(GOFIPS140))...$(NC)"
+	@if [ "$(GOFIPS140)" = "off" ] || [ -z "$(GOFIPS140)" ]; then \
+		echo "$(RED)verify-fips requires GOFIPS140 to be set to a validated version (got '$(GOFIPS140)')$(NC)"; exit 1; \
+	fi
+	$(MAKE) build-admission-webhook build-policy-manager GOFIPS140=$(GOFIPS140)
+	$(MAKE) build-dashboard GOFIPS140=$(GOFIPS140) NO_UI=1
+	@for bin in admission-webhook policy-manager dashboard; do \
+		f="$(DIST_DIR)/$$bin-$(GOOS)-$(GOARCH)"; \
+		if go version -m "$$f" | grep -q "GOFIPS140=$(GOFIPS140)"; then \
+			echo "$(GREEN)OK: $$bin records GOFIPS140=$(GOFIPS140)$(NC)"; \
+		else \
+			echo "$(RED)FATAL: $$bin is missing the GOFIPS140 marker$(NC)"; exit 1; \
+		fi; \
+	done
+	@echo "$(GREEN)All shipped binaries record the FIPS 140-3 marker$(NC)"
 
 .PHONY: docker-dashboard
 docker-dashboard: build-dashboard ## Build dashboard Docker image

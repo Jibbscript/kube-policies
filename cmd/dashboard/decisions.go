@@ -15,6 +15,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/Jibbscript/kube-policies/internal/audit"
+	"github.com/Jibbscript/kube-policies/internal/auth"
 )
 
 // PublicEvent is the strict-whitelist DTO defined in internal/audit. The
@@ -98,16 +99,19 @@ func (r *Ring) Len() int {
 // empty (unconfigured) the endpoint is closed — it returns 401 on every
 // request. This is deliberate: an empty token must not act as a wildcard.
 func NewIngestHandler(cfg *Config, ring *Ring, log *zap.Logger) gin.HandlerFunc {
+	// Build the constant-time verifier once at handler construction. Both the
+	// current and (during rotation) the previous token are accepted; the
+	// comparison runs over fixed-length digests so token contents and length
+	// do not leak via timing (CRY-WU-13, IAM-WU-07, CRY-WU-14).
+	verifier := auth.NewTokenVerifier(cfg.InternalToken, cfg.InternalTokenPrevious)
 	return func(c *gin.Context) {
-		if cfg.InternalToken == "" {
+		if !verifier.Configured() {
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{
 				"error": "internal token not configured",
 			})
 			return
 		}
-		auth := c.GetHeader("Authorization")
-		const prefix = "Bearer "
-		if !strings.HasPrefix(auth, prefix) || strings.TrimPrefix(auth, prefix) != cfg.InternalToken {
+		if !verifier.VerifyHeader(c.GetHeader("Authorization")) {
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{
 				"error": "invalid bearer token",
 			})

@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -18,15 +17,16 @@ import (
 // (unconfigured) the endpoint returns 401 on every request — an empty token
 // must not act as a wildcard.
 func (m *Manager) IngestInternal(c *gin.Context) {
-	if m.internalToken == "" {
+	if !m.internalToken.Configured() {
 		c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{
 			"error": "internal token not configured",
 		})
 		return
 	}
-	auth := c.GetHeader("Authorization")
-	const prefix = "Bearer "
-	if !strings.HasPrefix(auth, prefix) || strings.TrimPrefix(auth, prefix) != m.internalToken {
+	// Constant-time bearer-token verification (CRY-WU-13, IAM-WU-07): the
+	// presented token is compared against the configured token(s) over
+	// fixed-length digests so neither token contents nor length leak via timing.
+	if !m.internalToken.VerifyHeader(c.GetHeader("Authorization")) {
 		c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{
 			"error": "invalid bearer token",
 		})

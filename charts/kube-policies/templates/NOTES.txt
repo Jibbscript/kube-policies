@@ -1,5 +1,18 @@
 Thank you for installing {{ .Chart.Name }} {{ .Chart.Version }}.
 
+## FIPS 140-3 and the internal token
+
+Images are built with the Go FIPS 140-3 module and default to fips140=on. For
+production set FIPS as mandatory:
+
+    helm upgrade --install {{ .Release.Name }} <chart> -f values-production.yaml
+
+This injects REQUIRE_FIPS=true so each binary aborts at startup if the validated
+module is not active.
+
+To rotate the shared internal bearer token with no downtime, follow
+docs/runbooks/internal-token-rotation.md (two-token window: current + previous).
+
 ## TLS Configuration — Admission Webhook
 
 Four modes are supported for webhook TLS bootstrap (evaluated in order):
@@ -15,13 +28,25 @@ Four modes are supported for webhook TLS bootstrap (evaluated in order):
    and leaf certificate (365-day expiry, 5 DNS SANs + IP 127.0.0.1). On the first
    install a one-time extra rolling restart occurs as the checksum/webhook-certs
    annotation transitions from "initial-install" to the stable Secret hash.
+   DEMO-ONLY: this path uses sprig genCA/genSignedCert (fixed RSA-2048/SHA-256,
+   below the FedRAMP-Moderate bar — see docs/compliance/crypto-standards.md).
+   Do not use it in production.
 
-4. **cert-manager managed**: create a cert-manager Certificate CR targeting Secret
-   {{ include "kube-policies.fullname" . }}-admission-webhook-certs BEFORE helm install,
-   then set tls.autoGenerate=false. Branch 1 (lookup-preserve) picks up the Secret.
+4. **cert-manager (recommended for production, certManager.enabled=true)**: the chart
+   renders an Issuer + Certificate (ECDSA P-256, CRY-WU-09/11) that provisions Secret
+   {{ include "kube-policies.fullname" . }}-admission-webhook-certs, and annotates the
+   ValidatingWebhookConfiguration with cert-manager.io/inject-ca-from so ca-injector
+   populates the caBundle (no inline Secret or caBundle is rendered). cert-manager MUST
+   be pre-installed in the cluster; `helm template` renders the CRs without it, but a
+   real install/upgrade will hang until the Certificate goes Ready. See
+   values-production.yaml.
 
 If none of the above applies, the chart fails at render time with a remediation
 message pointing at scripts/gen-webhook-cert.sh (manual certificate generation).
+
+Mutual TLS (CRY-WU-04): set admissionWebhook.tls.clientCA to the PEM of the CA that
+signs the kube-apiserver's webhook client certificate to enforce RequireAndVerifyClientCert
+on the :8443 listener. Empty (default) leaves the listener server-auth-only.
 
 ## Cert Rotation
 

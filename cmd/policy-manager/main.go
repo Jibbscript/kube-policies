@@ -15,6 +15,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 
 	"github.com/Jibbscript/kube-policies/internal/config"
+	"github.com/Jibbscript/kube-policies/internal/cryptofips"
 	"github.com/Jibbscript/kube-policies/internal/metrics"
 	"github.com/Jibbscript/kube-policies/internal/policymanager"
 	"github.com/Jibbscript/kube-policies/pkg/logger"
@@ -59,6 +60,10 @@ func main() {
 		zap.String("date", date),
 	)
 
+	// FIPS 140-3 startup self-test (CRY-WU-02): abort before opening any
+	// listener when REQUIRE_FIPS=true but the validated module is not active.
+	cryptofips.MustEnforce(log)
+
 	// Load configuration
 	cfg, err := config.LoadConfig(*configPath)
 	if err != nil {
@@ -73,7 +78,12 @@ func main() {
 	if err != nil {
 		log.Fatal("Failed to initialize policy manager", zap.Error(err))
 	}
-	policyManager.SetInternalToken(os.Getenv("POLICY_MANAGER_INTERNAL_TOKEN"))
+	// Accept both the current and (during a rotation window) the previous
+	// internal token so secret rotation causes no downtime (CRY-WU-14).
+	policyManager.SetInternalTokens(
+		os.Getenv("POLICY_MANAGER_INTERNAL_TOKEN"),
+		os.Getenv("POLICY_MANAGER_INTERNAL_TOKEN_PREVIOUS"),
+	)
 
 	// Setup API server and metrics server. Router definitions live in
 	// internal/policymanager so integration tests can mount the same routes
