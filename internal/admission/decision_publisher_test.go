@@ -102,7 +102,7 @@ func TestDecisionPublisher_DropOnFullBuffer(t *testing.T) {
 
 	m := &fakePublisherMetrics{}
 	// Capacity = 1 so one event sits in the buffer while the dispatcher is stuck.
-	p := NewDecisionPublisher(srv.URL, "tok", zap.NewNop(), m, 1)
+	p := NewDecisionPublisher(srv.URL, "tok", zap.NewNop(), m, WithBufSize(1))
 	defer p.Stop()
 
 	// Prime the dispatcher: publish one event so it connects to the server and blocks.

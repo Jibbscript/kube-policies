@@ -15,6 +15,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"go.uber.org/zap"
 
+	"github.com/Jibbscript/kube-policies/internal/config"
 	"github.com/Jibbscript/kube-policies/internal/cryptofips"
 	"github.com/Jibbscript/kube-policies/pkg/logger"
 )
@@ -116,12 +117,28 @@ func newAPIServer(ctx context.Context, cfg *Config, log *zap.Logger) (*http.Serv
 
 	ring := NewRing(100)
 
+	// Verified-TLS config for the outbound connections to the (TLS 1.3)
+	// policy-manager API and SSE stream (CRY-WU-07). nil => system roots. Built
+	// once and shared by the SSE subscriber and the reverse proxy. Non-fatal on
+	// load error (the cert-manager CA may lag the dashboard's start): warn and
+	// fall back to system roots — verification still applies (no
+	// InsecureSkipVerify), so an unverifiable upstream fails the request rather
+	// than silently downgrading.
+	upstreamTLS, err := config.BuildClientTLSConfig(cfg.PolicyManagerCAPath)
+	if err != nil {
+		log.Warn("policy-manager CA bundle unavailable; upstream clients fall back to system roots",
+			zap.String("policy_manager_ca_path", cfg.PolicyManagerCAPath),
+			zap.Error(err),
+		)
+		upstreamTLS = nil
+	}
+
 	// Eagerly subscribe to the upstream policy-manager SSE stream so the ring
 	// fills as cluster admission events flow, regardless of whether any
 	// browser ever opens an SSE connection. The SPA polls
 	// /api/decisions/recent today, so the upstream stream is the ring's only
 	// data source under normal operation.
-	subscriber := NewStreamSubscriber(ctx, cfg, ring, log)
+	subscriber := NewStreamSubscriber(ctx, cfg, upstreamTLS, ring, log)
 	subscriber.Start()
 
 	router.GET("/api/metrics/summary", NewMetricsHandler(cfg, log))
@@ -129,7 +146,7 @@ func newAPIServer(ctx context.Context, cfg *Config, log *zap.Logger) (*http.Serv
 	router.GET("/api/decisions/stream", subscriber.Handler())
 	router.POST("/api/decisions/internal", NewIngestHandler(cfg, ring, log))
 
-	proxy, err := NewProxyHandler(cfg, log)
+	proxy, err := NewProxyHandler(cfg, upstreamTLS, log)
 	if err != nil {
 		return nil, fmt.Errorf("proxy init: %w", err)
 	}

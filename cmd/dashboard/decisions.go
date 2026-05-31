@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -251,11 +252,12 @@ func (h *streamHub) sendOne(ch chan PublicEvent, ev PublicEvent) {
 // upstream stream was the ring's only data source, so the ring stayed empty
 // forever. (.omc/plans/dashboard-500-fix.md root-cause section.)
 type StreamSubscriber struct {
-	cfg  *Config
-	log  *zap.Logger
-	hub  *streamHub
-	ring *Ring
-	ctx  context.Context
+	cfg    *Config
+	log    *zap.Logger
+	hub    *streamHub
+	ring   *Ring
+	ctx    context.Context
+	client *http.Client
 }
 
 // NewStreamSubscriber constructs a subscriber that, once Start() is called,
@@ -265,13 +267,22 @@ type StreamSubscriber struct {
 //
 // ctx is the process lifecycle context; cancel it to stop the upstream
 // goroutine on shutdown.
-func NewStreamSubscriber(ctx context.Context, cfg *Config, ring *Ring, log *zap.Logger) *StreamSubscriber {
+func NewStreamSubscriber(ctx context.Context, cfg *Config, clientTLS *tls.Config, ring *Ring, log *zap.Logger) *StreamSubscriber {
+	// Verify the policy-manager TLS cert on the upstream SSE connection
+	// (CRY-WU-07). A dedicated client (not http.DefaultClient, which is
+	// process-global) carries the verified TLS config; nil clientTLS keeps the
+	// default transport for non-TLS deployments.
+	client := &http.Client{}
+	if clientTLS != nil {
+		client.Transport = &http.Transport{TLSClientConfig: clientTLS}
+	}
 	return &StreamSubscriber{
-		cfg:  cfg,
-		log:  log,
-		hub:  newStreamHub(256, log),
-		ring: ring,
-		ctx:  ctx,
+		cfg:    cfg,
+		log:    log,
+		hub:    newStreamHub(256, log),
+		ring:   ring,
+		ctx:    ctx,
+		client: client,
 	}
 }
 
@@ -387,7 +398,7 @@ func (s *StreamSubscriber) fetchAndStream() (connected bool, err error) {
 	}
 	req.Header.Set("Accept", "text/event-stream")
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := s.client.Do(req)
 	if err != nil {
 		return false, fmt.Errorf("connect: %w", err)
 	}

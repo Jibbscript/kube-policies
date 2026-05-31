@@ -1,6 +1,7 @@
 package main
 
 import (
+	"crypto/tls"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
@@ -98,13 +99,22 @@ func newProxyResponseWriter(w gin.ResponseWriter) http.ResponseWriter {
 //
 // The handler expects to be mounted with a wildcard route capturing the
 // upstream subpath in the "proxyPath" parameter (e.g. /api/v1/*proxyPath).
-func NewProxyHandler(cfg *Config, log *zap.Logger) (gin.HandlerFunc, error) {
+func NewProxyHandler(cfg *Config, clientTLS *tls.Config, log *zap.Logger) (gin.HandlerFunc, error) {
 	target, err := url.Parse(cfg.PolicyManagerURL)
 	if err != nil {
 		return nil, err
 	}
 
 	proxy := httputil.NewSingleHostReverseProxy(target)
+
+	// When the policy-manager serves TLS (CRY-WU-05), reverse-proxy upstream
+	// connections must verify its certificate (CRY-WU-07). Use an explicit
+	// Transport with the verified TLS config; never mutate http.DefaultTransport
+	// (process-global). nil clientTLS keeps the default transport (system roots
+	// / plaintext upstream for non-TLS deployments).
+	if clientTLS != nil {
+		proxy.Transport = &http.Transport{TLSClientConfig: clientTLS}
+	}
 
 	// Customize Director: rewrite host header to the target and tag the
 	// request so upstream logs can attribute it to the dashboard.

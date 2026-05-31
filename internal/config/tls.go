@@ -78,6 +78,22 @@ func (c TLSConfig) ClientAuthType() tls.ClientAuthType {
 	return clientAuthTypes[strings.ToLower(c.ClientAuth)]
 }
 
+// BuildClientTLSConfig builds a *tls.Config for an outbound client that
+// verifies the server certificate against the CA bundle at caPath (CRY-WU-06,
+// CRY-WU-07). An empty caPath returns (nil, nil) so the caller falls back to
+// the system root pool. MinVersion is pinned to TLS 1.3; InsecureSkipVerify is
+// never set.
+func BuildClientTLSConfig(caPath string) (*tls.Config, error) {
+	pool, err := LoadClientCAPool(caPath)
+	if err != nil {
+		return nil, err
+	}
+	if pool == nil {
+		return nil, nil
+	}
+	return &tls.Config{MinVersion: tls.VersionTLS13, RootCAs: pool}, nil
+}
+
 // LoadClientCAPool loads a PEM bundle of client-certificate CAs from path
 // (CRY-WU-04). An empty path returns (nil, nil) so callers fall back to the
 // permissive (no client-cert verification) mode. A file that parses to zero

@@ -78,9 +78,14 @@ func NewAPIRouter(m *Manager) *gin.Engine {
 func NewMetricsRouter() http.Handler {
 	mux := http.NewServeMux()
 	mux.Handle("/metrics", promhttp.Handler())
-	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
+	// /healthz and /readyz are served on the plain-HTTP metrics port so the
+	// kubelet liveness/readiness probes can target it instead of the
+	// TLS-only :8080 API listener (CRY-WU-05).
+	healthHandler := func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("OK"))
-	})
+	}
+	mux.HandleFunc("/healthz", healthHandler)
+	mux.HandleFunc("/readyz", healthHandler)
 	return mux
 }

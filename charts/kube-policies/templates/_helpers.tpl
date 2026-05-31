@@ -97,6 +97,13 @@ Create the certificate secret name
 {{- end }}
 
 {{/*
+Create the policy-manager TLS certificate secret name (CRY-WU-05)
+*/}}
+{{- define "kube-policies.policyManagerCertSecretName" -}}
+{{- printf "%s-policy-manager-certs" (include "kube-policies.fullname" .) }}
+{{- end }}
+
+{{/*
 Create the config map name
 */}}
 {{- define "kube-policies.configMapName" -}}

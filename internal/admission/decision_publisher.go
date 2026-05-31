@@ -3,6 +3,7 @@ package admission
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -37,26 +38,58 @@ type DecisionPublisher struct {
 	once    sync.Once
 }
 
+// Option configures a DecisionPublisher.
+type Option func(*publisherOptions)
+
+type publisherOptions struct {
+	bufSize   int
+	tlsConfig *tls.Config
+}
+
+// WithBufSize overrides the internal channel capacity (default 256).
+func WithBufSize(n int) Option {
+	return func(o *publisherOptions) {
+		if n > 0 {
+			o.bufSize = n
+		}
+	}
+}
+
+// WithTLSConfig makes the publisher reach the policy-manager over verified TLS
+// (CRY-WU-06). The config's RootCAs must trust the policy-manager serving cert;
+// InsecureSkipVerify must never be set. A nil config leaves the default
+// transport (system roots), so an externally-managed PKI still works.
+func WithTLSConfig(c *tls.Config) Option {
+	return func(o *publisherOptions) {
+		o.tlsConfig = c
+	}
+}
+
 // NewDecisionPublisher creates a DecisionPublisher that POSTs events to url
 // with the given bearer token.
 //
 // If token is empty the publisher is disabled: a structured warning is logged
-// at construction time and Publish is always a no-op. Pass bufSize > 0 to
-// override the default channel capacity of 256. A nil metrics argument is safe.
-func NewDecisionPublisher(url, token string, log *zap.Logger, m publisherMetrics, bufSize ...int) *DecisionPublisher {
+// at construction time and Publish is always a no-op. A nil metrics argument is
+// safe. Use WithBufSize / WithTLSConfig to customize.
+func NewDecisionPublisher(url, token string, log *zap.Logger, m publisherMetrics, opts ...Option) *DecisionPublisher {
 	if log == nil {
 		log = zap.NewNop()
 	}
-	sz := defaultPublisherBufSize
-	if len(bufSize) > 0 && bufSize[0] > 0 {
-		sz = bufSize[0]
+	o := publisherOptions{bufSize: defaultPublisherBufSize}
+	for _, opt := range opts {
+		opt(&o)
+	}
+
+	client := &http.Client{Timeout: 5 * time.Second}
+	if o.tlsConfig != nil {
+		client.Transport = &http.Transport{TLSClientConfig: o.tlsConfig}
 	}
 
 	p := &DecisionPublisher{
 		url:     url,
 		token:   token,
-		client:  &http.Client{Timeout: 5 * time.Second},
-		buf:     make(chan audit.PublicEvent, sz),
+		client:  client,
+		buf:     make(chan audit.PublicEvent, o.bufSize),
 		logger:  log,
 		metrics: m,
 	}

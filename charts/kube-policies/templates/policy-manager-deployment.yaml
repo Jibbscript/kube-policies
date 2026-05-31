@@ -17,6 +17,7 @@ spec:
     metadata:
       annotations:
         checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        checksum/pm-certs: {{ include (print $.Template.BasePath "/policy-manager-tls.yaml") . | sha256sum }}
         {{- with .Values.policyManager.podAnnotations }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
@@ -67,10 +68,14 @@ spec:
                   name: {{ include "kube-policies.fullname" . }}-internal-token
                   key: token
                   optional: true
+          # Probes target the plain-HTTP metrics port (9091) where /healthz and
+          # /readyz are mounted (NewMetricsRouter). The :8080 API now serves
+          # TLS (CRY-WU-05), so an HTTP probe against it would fail the
+          # handshake — mirror the admission-webhook pattern and probe :9091.
           livenessProbe:
             httpGet:
               path: /healthz
-              port: 8080
+              port: 9091
               scheme: HTTP
             initialDelaySeconds: 30
             periodSeconds: 10
@@ -79,7 +84,7 @@ spec:
           readinessProbe:
             httpGet:
               path: /readyz
-              port: 8080
+              port: 9091
               scheme: HTTP
             initialDelaySeconds: 5
             periodSeconds: 5
@@ -88,6 +93,9 @@ spec:
           resources:
             {{- toYaml .Values.policyManager.resources | nindent 12 }}
           volumeMounts:
+            - name: certs
+              mountPath: /etc/certs
+              readOnly: true
             - name: config
               mountPath: /etc/config
               readOnly: true
@@ -98,6 +106,9 @@ spec:
               mountPath: /var/lib/kube-policies
             {{- end }}
       volumes:
+        - name: certs
+          secret:
+            secretName: {{ include "kube-policies.policyManagerCertSecretName" . }}
         - name: config
           configMap:
             name: {{ include "kube-policies.configMapName" . }}

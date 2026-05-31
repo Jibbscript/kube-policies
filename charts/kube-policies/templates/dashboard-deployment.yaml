@@ -45,8 +45,11 @@ spec:
               protocol: TCP
           env:
             {{- include "kube-policies.fipsEnv" . | nindent 12 }}
+            # The policy-manager API + SSE stream serve TLS 1.3 (CRY-WU-05) →
+            # https; verified via the mounted policy-manager CA (CRY-WU-07). The
+            # metrics endpoints stay http until CRY-WU-08.
             - name: POLICY_MANAGER_URL
-              value: "http://{{ include "kube-policies.fullname" . }}-policy-manager:8080"
+              value: "https://{{ include "kube-policies.fullname" . }}-policy-manager:8080"
             - name: POLICY_MANAGER_METRICS_URL
               value: "http://{{ include "kube-policies.fullname" . }}-policy-manager:9091/metrics"
             - name: ADMISSION_WEBHOOK_METRICS_URL
@@ -54,7 +57,11 @@ spec:
             - name: ALLOW_WRITES
               value: {{ .Values.dashboard.allowWrites | default false | quote }}
             - name: POLICY_MANAGER_STREAM_URL
-              value: "http://{{ include "kube-policies.fullname" . }}-policy-manager:8080/api/v1/decisions/stream"
+              value: "https://{{ include "kube-policies.fullname" . }}-policy-manager:8080/api/v1/decisions/stream"
+            {{- if .Values.policyManager.enabled }}
+            - name: POLICY_MANAGER_CA_PATH
+              value: "/etc/policy-manager-ca/ca.crt"
+            {{- end }}
           livenessProbe:
             httpGet:
               path: /healthz
@@ -86,9 +93,25 @@ spec:
           volumeMounts:
             - name: tmp
               mountPath: /tmp
+            {{- if .Values.policyManager.enabled }}
+            - name: policy-manager-ca
+              mountPath: /etc/policy-manager-ca
+              readOnly: true
+            {{- end }}
       volumes:
         - name: tmp
           emptyDir: {}
+        {{- if .Values.policyManager.enabled }}
+        # Project ONLY ca.crt from the policy-manager serving Secret (CRY-WU-07);
+        # optional so a not-yet-issued cert-manager Secret does not block startup.
+        - name: policy-manager-ca
+          secret:
+            secretName: {{ include "kube-policies.policyManagerCertSecretName" . }}
+            items:
+              - key: ca.crt
+                path: ca.crt
+            optional: true
+        {{- end }}
       {{- with .Values.dashboard.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}

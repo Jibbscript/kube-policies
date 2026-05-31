@@ -47,6 +47,12 @@ var (
 	// client_auth=require. Flag value overrides the config-file value.
 	clientCAPath = flag.String("client-ca-path", "", "Path to PEM client-CA bundle for webhook mTLS; empty disables client-cert verification")
 
+	// policyManagerCAPath is the PEM bundle trusted when the webhook connects to
+	// the policy-manager API over TLS (CRY-WU-06). Empty (default) falls back to
+	// the system root pool; the chart sets this and mounts the policy-manager
+	// serving CA so the in-cluster self-signed / cert-manager cert verifies.
+	policyManagerCAPath = flag.String("policy-manager-ca-path", "", "Path to PEM CA bundle trusted for the policy-manager TLS connection; empty uses system roots")
+
 	// disableControllers turns off CRD watching. Off by default: the webhook
 	// loads bundled defaults AND watches Policy CRDs so kubectl apply changes
 	// real admission decisions. Operators who run an explicitly bundled-only
@@ -142,12 +148,33 @@ func main() {
 
 	// Initialize decision publisher (fire-and-forget forwarding to policy-manager).
 	// If POLICY_MANAGER_INTERNAL_TOKEN is empty the publisher is a no-op.
+	//
+	// The policy-manager API now serves TLS 1.3 (CRY-WU-05), so the publisher
+	// connects over verified HTTPS (CRY-WU-06): the bearer token never crosses
+	// a plaintext connection. The policy-manager serving CA is loaded from
+	// --policy-manager-ca-path into RootCAs; an empty path falls back to the
+	// system root pool. InsecureSkipVerify is never used.
 	pmURL := os.Getenv("POLICY_MANAGER_INTERNAL_URL")
 	if pmURL == "" {
-		pmURL = "http://policy-manager:8080/api/v1/decisions/internal"
+		pmURL = "https://policy-manager:8080/api/v1/decisions/internal"
 	}
 	pmToken := os.Getenv("POLICY_MANAGER_INTERNAL_TOKEN")
-	publisher := admission.NewDecisionPublisher(pmURL, pmToken, log, metricsCollector)
+	// Non-fatal: the publisher is fire-and-forget telemetry, and the
+	// policy-manager CA (cert-manager path) may lag the webhook's start. If the
+	// CA cannot be loaded, fall back to system roots and warn — verification
+	// still applies (no InsecureSkipVerify), so an unverifiable connection just
+	// drops decisions; the token never crosses a plaintext connection. The
+	// webhook's own admission path is unaffected.
+	pmClientTLS, err := config.BuildClientTLSConfig(*policyManagerCAPath)
+	if err != nil {
+		log.Warn("policy-manager CA bundle unavailable; decision publisher falls back to system roots",
+			zap.String("policy_manager_ca_path", *policyManagerCAPath),
+			zap.Error(err),
+		)
+		pmClientTLS = nil
+	}
+	publisher := admission.NewDecisionPublisher(pmURL, pmToken, log, metricsCollector,
+		admission.WithTLSConfig(pmClientTLS))
 	defer publisher.Stop()
 
 	// Initialize admission controller

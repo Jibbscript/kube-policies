@@ -18,6 +18,7 @@ import (
 	"github.com/Jibbscript/kube-policies/internal/cryptofips"
 	"github.com/Jibbscript/kube-policies/internal/metrics"
 	"github.com/Jibbscript/kube-policies/internal/policymanager"
+	"github.com/Jibbscript/kube-policies/internal/tlsreload"
 	"github.com/Jibbscript/kube-policies/pkg/logger"
 )
 
@@ -30,6 +31,8 @@ var (
 	port        = flag.Int("port", 8080, "Policy manager server port")
 	metricsPort = flag.Int("metrics-port", 9091, "Metrics server port")
 	configPath  = flag.String("config", "/etc/config/config.yaml", "Path to configuration file")
+	certPath    = flag.String("cert-path", "/etc/certs/tls.crt", "Path to TLS certificate for the API server")
+	keyPath     = flag.String("key-path", "/etc/certs/tls.key", "Path to TLS private key for the API server")
 
 	// disableControllers disables the CRD reconcilers. Off by default — the
 	// whole point of the policy-manager is to reconcile Policy and
@@ -85,12 +88,41 @@ func main() {
 		os.Getenv("POLICY_MANAGER_INTERNAL_TOKEN_PREVIOUS"),
 	)
 
+	// Background-process context. Canceled on SIGINT/SIGTERM below; the CRD
+	// controllers, the policy manager, and the TLS cert reloader stop when this
+	// is canceled. Created BEFORE the servers start so the reloader shares it.
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
 	// Setup API server and metrics server. Router definitions live in
 	// internal/policymanager so integration tests can mount the same routes
 	// against an in-process Manager without duplicating the route table.
+	//
+	// The API server (:8080) serves TLS 1.3 (CRY-WU-05): the internal bearer
+	// token previously crossed this listener in plaintext. TLS parameters are
+	// config-driven (CRY-WU-03) and the certificate is served via a hot-reload
+	// callback (CRY-WU-10). The metrics server (:9091) stays plain HTTP — it
+	// carries no secret and is the target of the liveness/readiness probes and
+	// the Prometheus scrape.
+	tlsConf, err := config.BuildServerTLSConfig(cfg.Security.TLS, nil)
+	if err != nil {
+		log.Fatal("Failed to build API TLS config", zap.Error(err))
+	}
+	certReloader, err := tlsreload.New(*certPath, *keyPath, log.Named("tls-reload"))
+	if err != nil {
+		log.Fatal("Failed to load API TLS certificate", zap.Error(err))
+	}
+	tlsConf.GetCertificate = certReloader.GetCertificate
+	go func() {
+		if err := certReloader.Start(ctx); err != nil {
+			log.Error("TLS certificate reloader stopped with error", zap.Error(err))
+		}
+	}()
+
 	apiServer := &http.Server{
 		Addr:         fmt.Sprintf(":%d", *port),
 		Handler:      policymanager.NewAPIRouter(policyManager),
+		TLSConfig:    tlsConf,
 		ReadTimeout:  30 * time.Second,
 		WriteTimeout: 30 * time.Second,
 		IdleTimeout:  60 * time.Second,
@@ -112,15 +144,13 @@ func main() {
 	}()
 
 	go func() {
-		log.Info("Starting policy manager API server", zap.Int("port", *port))
-		if err := apiServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		log.Info("Starting policy manager API server (TLS)", zap.Int("port", *port))
+		// Empty cert/key paths: the certificate is served via
+		// TLSConfig.GetCertificate (the reloader), not a one-shot file read.
+		if err := apiServer.ListenAndServeTLS("", ""); err != nil && err != http.ErrServerClosed {
 			log.Fatal("Failed to start API server", zap.Error(err))
 		}
 	}()
-
-	// Start policy manager background processes
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
 
 	go policyManager.Start(ctx)
 

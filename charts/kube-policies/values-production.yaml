@@ -30,3 +30,7 @@ certManager:
 admissionWebhook:
   tls:
     autoGenerate: false
+
+policyManager:
+  tls:
+    autoGenerate: false

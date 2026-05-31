@@ -211,27 +211,31 @@ EOF
     # Test 3: Monitoring endpoints
     log "Test 3: Testing monitoring endpoints"
 
-    # Port forward to access metrics
-    kubectl port-forward -n kube-policies-system svc/kube-policies-policy-manager 8080:8080 &
+    # Port forward to the metrics port (9091, plain HTTP). The :8080 API now
+    # serves TLS 1.3 (CRY-WU-05) and never exposed /metrics; metrics and
+    # /healthz live on :9091 (NewMetricsRouter).
+    kubectl port-forward -n kube-policies-system svc/kube-policies-policy-manager 9091:9091 &
     PORT_FORWARD_PID=$!
     sleep 5
+    # Tear the port-forward down even if a check below returns early.
+    trap 'kill $PORT_FORWARD_PID 2>/dev/null || true' RETURN
 
-    # Test metrics endpoint
-    if curl -s http://localhost:8080/metrics | grep -q "kube_policies"; then
+    # Test metrics endpoint — hard-fail (return non-zero) so a broken endpoint
+    # cannot produce a false PASS.
+    if curl -s http://localhost:9091/metrics | grep -q "kube_policies"; then
         success "Metrics endpoint is working"
     else
         error "Metrics endpoint is not working"
+        return 1
     fi
 
-    # Test health endpoint
-    if curl -s http://localhost:8080/healthz | grep -q "ok"; then
+    # Test health endpoint — the metrics router returns plaintext "OK".
+    if curl -s http://localhost:9091/healthz | grep -q "OK"; then
         success "Health endpoint is working"
     else
         error "Health endpoint is not working"
+        return 1
     fi
-
-    # Clean up port forward
-    kill $PORT_FORWARD_PID 2>/dev/null || true
 
     success "All Kind-specific tests passed"
 }

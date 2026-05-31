@@ -106,10 +106,11 @@ admissionWebhook:
   # Affinity
   affinity: {}
   
-  # Pod annotations
+  # Pod annotations. Scrape the plain-HTTP metrics port (9090); :8443 is the
+  # TLS admission listener and does not serve /metrics.
   podAnnotations:
     prometheus.io/scrape: "true"
-    prometheus.io/port: "8443"
+    prometheus.io/port: "9090"
     prometheus.io/path: "/metrics"
   
   # Webhook configuration
@@ -197,11 +198,25 @@ policyManager:
   # Affinity
   affinity: {}
   
-  # Pod annotations
+  # Pod annotations. Scrape the plain-HTTP metrics port (9091); :8080 is the
+  # TLS 1.3 API listener (CRY-WU-05) and does not serve /metrics.
   podAnnotations:
     prometheus.io/scrape: "true"
-    prometheus.io/port: "8080"
+    prometheus.io/port: "9091"
     prometheus.io/path: "/metrics"
+
+  # TLS configuration for the :8080 API (CRY-WU-05). The API serves TLS 1.3;
+  # the internal bearer token never crosses it in plaintext. When
+  # certManager.enabled=true the cert is issued by cert-manager (ECDSA P-256);
+  # otherwise the chart provisions it.
+  # NOTE: the autoGenerate path uses sprig genCA/genSignedCert (fixed RSA-2048 /
+  # SHA-256) and is DEMO-ONLY (CRY-WU-11); production uses cert-manager or inline
+  # caCert/cert/key.
+  tls:
+    autoGenerate: true
+    caCert: ""
+    cert: ""
+    key: ""
 
 # Policy Configuration
 policies:

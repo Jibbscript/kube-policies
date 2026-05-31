@@ -64,6 +64,11 @@ spec:
             # the operator-supplied apiserver client-cert CA.
             - --client-ca-path=/etc/client-ca/ca.crt
             {{- end }}
+            {{- if .Values.policyManager.enabled }}
+            # Verify the policy-manager TLS cert on the decision-publisher
+            # connection (CRY-WU-06): trust the policy-manager serving CA.
+            - --policy-manager-ca-path=/etc/policy-manager-ca/ca.crt
+            {{- end }}
           ports:
             - name: webhook
               containerPort: 8443
@@ -79,10 +84,8 @@ spec:
               valueFrom:
                 fieldRef:
                   fieldPath: metadata.namespace
-            - name: POLICY_MANAGER_URL
-              value: "http://{{ include "kube-policies.fullname" . }}-policy-manager:8080"
             - name: POLICY_MANAGER_INTERNAL_URL
-              value: "http://{{ include "kube-policies.fullname" . }}-policy-manager:8080/api/v1/decisions/internal"
+              value: "https://{{ include "kube-policies.fullname" . }}-policy-manager:8080/api/v1/decisions/internal"
             - name: POLICY_MANAGER_INTERNAL_TOKEN
               valueFrom:
                 secretKeyRef:
@@ -123,6 +126,11 @@ spec:
               mountPath: /etc/client-ca
               readOnly: true
             {{- end }}
+            {{- if .Values.policyManager.enabled }}
+            - name: policy-manager-ca
+              mountPath: /etc/policy-manager-ca
+              readOnly: true
+            {{- end }}
             - name: config
               mountPath: /etc/config
               readOnly: true
@@ -138,6 +146,19 @@ spec:
         - name: client-ca
           secret:
             secretName: {{ include "kube-policies.fullname" . }}-admission-webhook-client-ca
+        {{- end }}
+        {{- if .Values.policyManager.enabled }}
+        # Project ONLY ca.crt (public) from the policy-manager serving Secret —
+        # never its tls.key. optional: the cert-manager-managed Secret may not
+        # exist yet on first install; the webhook degrades to system roots until
+        # it appears (CRY-WU-06).
+        - name: policy-manager-ca
+          secret:
+            secretName: {{ include "kube-policies.policyManagerCertSecretName" . }}
+            items:
+              - key: ca.crt
+                path: ca.crt
+            optional: true
         {{- end }}
         - name: config
           configMap:

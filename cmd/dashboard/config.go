@@ -47,6 +47,12 @@ type Config struct {
 	// subscribes to for live decision events. A single connection is
 	// maintained per dashboard process and fanned out to all browser clients.
 	PolicyManagerStreamURL string
+
+	// PolicyManagerCAPath is the PEM CA bundle trusted when the dashboard
+	// connects to the (TLS 1.3) policy-manager API and SSE stream (CRY-WU-07).
+	// Empty falls back to system roots; the chart mounts the policy-manager
+	// serving CA here.
+	PolicyManagerCAPath string
 }
 
 // LoadConfig reads dashboard configuration from environment variables.
@@ -54,14 +60,17 @@ type Config struct {
 // Defaults match the in-cluster service names produced by the Helm chart.
 func LoadConfig() (*Config, error) {
 	return &Config{
-		PolicyManagerURL:           envOr("POLICY_MANAGER_URL", "http://policy-manager:8080"),
+		// The policy-manager API/stream serve TLS 1.3 (CRY-WU-05); default to
+		// https. The metrics endpoints stay http until CRY-WU-08.
+		PolicyManagerURL:           envOr("POLICY_MANAGER_URL", "https://policy-manager:8080"),
 		PolicyManagerMetricsURL:    envOr("POLICY_MANAGER_METRICS_URL", "http://policy-manager:9091/metrics"),
 		AdmissionWebhookMetricsURL: envOr("ADMISSION_WEBHOOK_METRICS_URL", "http://admission-webhook:9090/metrics"),
 		AllowWrites:                envBool("ALLOW_WRITES", false),
 		InternalToken:              os.Getenv("INTERNAL_TOKEN"),
 		InternalTokenPrevious:      os.Getenv("INTERNAL_TOKEN_PREVIOUS"),
 		CSPUnsafeInlineStyle:       envBool("DASHBOARD_CSP_UNSAFE_INLINE_STYLE", false),
-		PolicyManagerStreamURL:     envOr("POLICY_MANAGER_STREAM_URL", "http://policy-manager:8080/api/v1/decisions/stream"),
+		PolicyManagerStreamURL:     envOr("POLICY_MANAGER_STREAM_URL", "https://policy-manager:8080/api/v1/decisions/stream"),
+		PolicyManagerCAPath:        os.Getenv("POLICY_MANAGER_CA_PATH"),
 	}, nil
 }
 
