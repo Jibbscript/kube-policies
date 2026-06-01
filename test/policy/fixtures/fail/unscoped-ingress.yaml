@@ -1,0 +1,24 @@
+# NET-WU-20 fail fixture (per-document, network.posture rule 2b).
+# An admission-webhook ingress NetworkPolicy that sets `ports` but no `from`.
+# In Kubernetes NetworkPolicy semantics this matches EVERY source on :8443
+# (allow-all-on-port), not fail-closed. conftest MUST deny this.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: kp-kube-policies-ingress-webhook
+  labels:
+    app.kubernetes.io/name: kube-policies
+    app.kubernetes.io/instance: kp
+    app.kubernetes.io/component: admission-webhook
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: kube-policies
+      app.kubernetes.io/instance: kp
+      app.kubernetes.io/component: admission-webhook
+  policyTypes:
+    - Ingress
+  ingress:
+    - ports:
+        - protocol: TCP
+          port: 8443

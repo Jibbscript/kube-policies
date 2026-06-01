@@ -82,3 +82,48 @@ func TestControllerOptions_ZeroValueEnablesLeaderElection(t *testing.T) {
 	// mgr.Start returns nil on context cancellation; StartControllers propagates nil.
 	assert.NoError(t, err)
 }
+
+// TestStartControllers_BoundedReconciles_ExplicitAndDefault verifies the
+// RES-WU-17 reconciler-concurrency bound is wired through SetupWithManager for
+// both an explicit MaxConcurrentReconciles and the unset (<=0 → default) case.
+// The reconciler is registered on a real manager built from a fake config; the
+// immediately-canceled context makes mgr.Start exit cleanly, so reaching nil
+// proves SetupWithManager accepted the bounded controller.Options without error.
+func TestStartControllers_BoundedReconciles_ExplicitAndDefault(t *testing.T) {
+	cases := []struct {
+		name string
+		max  int
+	}{
+		{name: "explicit bound", max: 4},
+		{name: "unset uses default", max: 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			cancel()
+			err := StartControllers(ctx, fakeRestConfig(), zap.NewNop(), ControllerOptions{
+				PolicySink:              &stubPolicySink{},
+				ExceptionSink:           &stubExceptionSink{},
+				DisableLeaderElection:   true,
+				MaxConcurrentReconciles: tc.max,
+			})
+			assert.NoError(t, err)
+		})
+	}
+}
+
+// TestDefaultMaxConcurrentReconciles pins the RES-WU-17 fallback bound so an
+// unset/non-positive MaxConcurrentReconciles never degrades to an unbounded
+// worker pool.
+func TestDefaultMaxConcurrentReconciles(t *testing.T) {
+	assert.Equal(t, 2, defaultMaxConcurrentReconciles)
+}
+
+// stubExceptionSink is a no-op ExceptionSink so the exception reconciler is also
+// exercised by the bounded-reconciles test above.
+type stubExceptionSink struct{}
+
+func (s *stubExceptionSink) UpsertExceptionFromCRD(_ *policiesv1.PolicyException) *Exception {
+	return nil
+}
+func (s *stubExceptionSink) RemoveExceptionByID(_ string) bool { return false }

@@ -10,6 +10,100 @@ global:
   # Global storage class
   storageClass: ""
 
+# Namespace lifecycle (NET-WU-19).
+# DEFAULT create=false: the common install path is `helm install --create-namespace`,
+# which provisions the target namespace BEFORE the release objects are applied.
+# Having the chart ALSO render a Namespace object that it then installs INTO is
+# order-sensitive (Helm has no guaranteed apply ordering for a namespace it is
+# simultaneously deploying resources into) and conflicts with --create-namespace.
+# Set create=true ONLY when you manage the namespace declaratively via this chart
+# and do NOT pass --create-namespace. When true, the chart renders a Namespace named
+# after .Release.Namespace carrying Pod Security Admission labels (restricted, the
+# FedRAMP/CIS baseline) so the namespace is hardened the moment it exists.
+namespace:
+  create: false
+  # Pod Security Admission labels applied to the rendered Namespace. Default
+  # "restricted" on all three modes (enforce/audit/warn) is the hardened baseline;
+  # loosen a single mode only with explicit justification.
+  podSecurity:
+    enforce: restricted
+    audit: restricted
+    warn: restricted
+
+# Network segmentation via NetworkPolicy (NET-WU-01..09, IAM-WU-15).
+# Secure-by-default: enabled=true ships a default-deny baseline plus the minimum
+# allow-list each component needs to function. Your CNI MUST enforce NetworkPolicy
+# (Calico, Cilium, Antrea, etc.) — on a CNI without NetworkPolicy support these
+# objects render but are inert. Set enabled=false to render NO NetworkPolicy
+# objects at all (e.g. when segmentation is owned by a cluster-wide policy layer).
+networkPolicy:
+  enabled: true
+
+  # Default-deny baseline (NET-WU-01): a podSelector:{} policy with empty
+  # Ingress+Egress rule sets, denying ALL traffic to/from every kube-policies pod
+  # unless explicitly allowed by one of the policies below. Keep true; the
+  # per-component allow policies are written assuming this baseline is present.
+  defaultDeny: true
+
+  # kube-apiserver egress (NET-WU-03). Kubernetes attaches NO label to the
+  # apiserver/control-plane endpoints, so an egress allow rule cannot select them
+  # via pod/namespace selectors — it must target IP CIDRs. Operators MUST set the
+  # control-plane address range(s) here (e.g. the CIDR of the kube-apiserver
+  # endpoint(s), commonly the first IP of the service CIDR for the in-cluster
+  # `kubernetes` Service, plus any external apiserver VIPs). When this list is
+  # EMPTY the apiserver-egress policy is STILL rendered but selects an empty
+  # ipBlock set, which DENIES apiserver egress (fail-closed) and a warning is
+  # emitted in NOTES.txt — we deliberately do NOT fall back to 0.0.0.0/0, which
+  # would defeat segmentation. The webhook (leader election, TokenReview) and the
+  # policy-manager (TokenReview) require this to reach the apiserver.
+  apiServerCIDRs: []
+  #   - 10.96.0.1/32
+  #   - 172.18.0.0/16
+  # Ports the apiserver is reached on. 443 is the in-cluster `kubernetes` Service
+  # port; 6443 is the typical node-local / external apiserver port.
+  apiServerPorts:
+    - 443
+    - 6443
+
+  # admission-webhook ingress (NET-WU-04). The kube-apiserver connects to the
+  # webhook :8443 from the control plane. K8s does not label apiserver source
+  # traffic, so this is expressed as ipBlock CIDRs and/or namespaceSelectors.
+  # Operators MUST set ingressFrom to the control-plane source CIDR(s). When BOTH
+  # lists are empty the policy is STILL rendered selecting the webhook pods with
+  # policyTypes [Ingress] and an EMPTY ingress rule set, which DENIES all ingress
+  # (fail-closed), and a warning is emitted in NOTES.txt. The allow rule is only
+  # emitted once a peer is set — a `ports` rule with no `from` would match every
+  # source (allow-all-on-port), so it is never rendered unscoped.
+  webhook:
+    ingressFrom:
+      # ipBlock CIDRs the apiserver connects from (control-plane node range).
+      ipBlocks: []
+      #   - 10.0.0.0/24
+      # namespaceSelector matchLabels for in-cluster callers (rarely needed; the
+      # apiserver is not in a labeled namespace). Each entry is a label map.
+      namespaceSelectors: []
+      #   - kubernetes.io/metadata.name: some-namespace
+
+  # Metrics scraper (NET-WU-06). Ingress to each component's metrics port
+  # (9090/9091/9092) is allowed ONLY from the monitoring scraper identified here.
+  # Default targets a Prometheus pod in the `monitoring` namespace; adjust to your
+  # observability stack. Both selectors are ANDed within a single `from` peer.
+  metricsScraperSelector:
+    namespaceSelector:
+      kubernetes.io/metadata.name: monitoring
+    podSelector:
+      app.kubernetes.io/name: prometheus
+
+  # dashboard ingress (NET-WU-07). Browser traffic to the dashboard :8090 normally
+  # arrives via an ingress controller; allow only that controller's namespace.
+  # Default targets ingress-nginx; adjust to your ingress controller. Only rendered
+  # when dashboard.enabled=true.
+  dashboard:
+    ingressFrom:
+      namespaceSelectors:
+        - kubernetes.io/metadata.name: ingress-nginx
+      ipBlocks: []
+
 # FIPS 140-3 cryptographic posture (CRY-WU-01, CRY-WU-02).
 # Images are built with the Go FIPS 140-3 module (GOFIPS140) and default to
 # fips140=on at runtime. These values surface the runtime controls:
@@ -308,6 +402,75 @@ auth:
     roleBindings: []
 
 # Policy Configuration
+# Rate-limiting / DoS-protection (NET-WU-14/15, RES-WU-17). Flows into the
+# shared config.yaml ConfigMap as security.ratelimit.* and is consumed by the
+# webhook and policy-manager. Limits are PER-REPLICA (per pod): the effective
+# cluster-wide ceiling is roughly limit * replicaCount. Defaults are tuned to
+# protect the fail-closed admission webhook — on the cluster's critical write
+# path — from a request flood WITHOUT throttling legitimate apiserver admission
+# traffic. The dashboard reads its own DASHBOARD_RATELIMIT_* env (see the
+# dashboard block / deployment) which defaults match these.
+rateLimit:
+  # Master switch. When false the limiter, concurrency cap, and body cap are
+  # all no-ops (pass-through).
+  enabled: true
+  # Sustained token-bucket refill rate (req/s) for the global request limiter.
+  # 0 disables the rate limiter while leaving the other protections active.
+  requestsPerSecond: 50
+  # Token-bucket depth (max instantaneous burst before the per-second rate
+  # applies). 0 disables the rate limiter.
+  burst: 100
+  # Max in-flight requests handled simultaneously; excess get HTTP 429
+  # (non-blocking acquire — never queued). 0 disables the concurrency cap.
+  maxConcurrent: 100
+  # Max request body size in bytes; oversized requests get HTTP 413. 3 MiB
+  # leaves headroom for large AdmissionReviews while rejecting absurd payloads.
+  # 0 disables the body cap.
+  maxBodyBytes: 3145728
+  # Max concurrent SSE stream connections on /decisions/stream (the N+1th gets
+  # 429), capped separately from maxConcurrent since SSE connections are
+  # long-lived. 0 disables the stream cap.
+  maxStreamConnections: 100
+
+# Namespace ResourceQuota (RES-WU-17). OPT-IN (default false): a mis-sized quota
+# can block the chart's own pods from scheduling, so operators enable it
+# explicitly and size it for their topology. When enabled, it caps the aggregate
+# compute and object counts in the release namespace. `hard` is passed verbatim
+# to the ResourceQuota spec; tune it before enabling.
+resourceQuota:
+  enabled: false
+  hard:
+    requests.cpu: "4"
+    requests.memory: 8Gi
+    limits.cpu: "8"
+    limits.memory: 16Gi
+    pods: "50"
+  # Optional scopes / scopeSelector (left empty by default).
+  scopes: []
+  scopeSelector: {}
+
+# Namespace LimitRange (RES-WU-17). OPT-IN (default false): a default request
+# larger than a pod's actual usage can block scheduling, so operators enable it
+# explicitly. When enabled, it applies per-container default requests/limits and
+# min/max bounds so a pod created without resource constraints cannot consume
+# unbounded CPU/memory. `limits` is passed verbatim to the LimitRange spec.
+limitRange:
+  enabled: false
+  limits:
+    - type: Container
+      default:
+        cpu: 500m
+        memory: 512Mi
+      defaultRequest:
+        cpu: 100m
+        memory: 128Mi
+      max:
+        cpu: "2"
+        memory: 2Gi
+      min:
+        cpu: 10m
+        memory: 16Mi
+
 policies:
   # Enable default security policies
   enableDefaults: true
@@ -459,6 +622,21 @@ dashboard:
   # per-user authZ is enforced upstream by the policy-manager (IAM-WU-05).
   allowWrites: false
 
+  # Rate-limiting / DoS-protection for the dashboard BFF (NET-WU-15, RES-WU-17).
+  # The dashboard is env-configured (it does not read the shared config.yaml), so
+  # these map to DASHBOARD_RATELIMIT_* / DASHBOARD_MAX_SSE_CONNECTIONS env on the
+  # dashboard container. Defaults match the shared rateLimit.* block above.
+  rateLimit:
+    enabled: true
+    requestsPerSecond: 50
+    burst: 100
+    maxConcurrent: 100
+    maxBodyBytes: 3145728
+  # Max concurrent browser SSE connections on GET /api/decisions/stream (the
+  # N+1th gets 429), separate from the general request concurrency cap since SSE
+  # connections are long-lived.
+  maxSSEConnections: 100
+
   # User authentication for the dashboard BFF (IAM-WU-04 / NET-WU-18 / IAM-WU-16).
   auth:
     # disabled (default; unauthenticated dev posture) | oidc | forward-auth.
@@ -503,13 +681,48 @@ dashboard:
   ingress:
     enabled: false
     className: nginx
+    # Operator-supplied annotations. These are MERGED with (and override) the
+    # generated DoS/TLS annotations below, so an operator can tune or remove any
+    # default by re-specifying the same key here.
     annotations: {}
     hosts:
       - host: kube-policies-dashboard.local
         paths:
           - path: /
             pathType: Prefix
+    # TLS for the dashboard Ingress. Populate with a host + the name of a
+    # kubernetes.io/tls Secret holding the cert/key for that host, e.g.:
+    #   tls:
+    #     - hosts:
+    #         - kube-policies-dashboard.example.com
+    #       secretName: kube-policies-dashboard-tls
+    # Provision the Secret out-of-band (cert-manager Certificate, or
+    # `kubectl create secret tls`). force-ssl-redirect below makes the
+    # browser-facing hop HTTPS regardless, but without a TLS Secret nginx serves
+    # its default certificate.
     tls: []
+
+    # DoS protection on the dashboard Ingress (NET-WU-16). Renders nginx rate-limit
+    # annotations plus forced TLS redirect. Defaults are conservative for a low-
+    # traffic admin dashboard; raise the limits if legitimate clients are throttled.
+    # These annotations only take effect with the nginx ingress controller.
+    dosProtection:
+      enabled: true
+      # nginx.ingress.kubernetes.io/limit-rps — requests/second per client IP.
+      limitRps: 20
+      # nginx.ingress.kubernetes.io/limit-connections — concurrent connections per IP.
+      limitConnections: 10
+
+    # Source-range allowlist (NET-WU-17). When non-empty, renders
+    # nginx.ingress.kubernetes.io/whitelist-source-range so ONLY these client CIDRs
+    # may reach the dashboard via the Ingress. Secure-by-default EMPTY means NO
+    # allowlist annotation is rendered (nginx then permits all sources) — set this
+    # to your admin/VPN CIDR(s) to restrict access. WARNING: leaving this empty
+    # exposes the dashboard Ingress to every client the ingress controller accepts;
+    # rely on dashboard.auth and/or networkPolicy.dashboard.ingressFrom in that case.
+    sourceRanges: []
+    #   - 10.0.0.0/8
+    #   - 192.168.0.0/16
 
   resources:
     requests:

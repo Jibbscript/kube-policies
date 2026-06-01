@@ -39,6 +39,13 @@ type Collector struct {
 	// TLS certificate expiry (CRY-WU-12): Unix expiry time of the served cert,
 	// updated on each hot reload. An Alertmanager rule fires as it approaches.
 	certExpiry *prometheus.GaugeVec
+
+	// HTTP rate-limiting / DoS-protection rejections (NET-WU-14/15, RES-WU-17).
+	// Labelled by the handler that rejected the request and the reason it was
+	// rejected ("rate", "concurrency", "body_too_large", "stream_capacity").
+	// Label cardinality is bounded: handler is the small static set of mounted
+	// routes and reason is a four-value enum, so no operator-driven growth.
+	httpRateLimited *prometheus.CounterVec
 }
 
 // NewCollector creates a new metrics collector
@@ -186,6 +193,16 @@ func NewCollector() *Collector {
 			},
 			[]string{"component"},
 		),
+
+		httpRateLimited: promauto.NewCounterVec(
+			prometheus.CounterOpts{
+				Namespace: "kube_policies",
+				Subsystem: "http",
+				Name:      "rate_limited_total",
+				Help:      "Total number of HTTP requests rejected by the rate-limit / DoS-protection middleware, by handler and reason (rate, concurrency, body_too_large, stream_capacity)",
+			},
+			[]string{"handler", "reason"},
+		),
 	}
 }
 
@@ -262,6 +279,13 @@ func (c *Collector) IncExceptionSuppression(policyID, ruleID string) {
 	c.exceptionSuppressions.WithLabelValues(policyID, ruleID).Inc()
 }
 
+// IncRateLimited increments the HTTP rate-limit rejection counter for the given
+// handler and reason (NET-WU-14/15, RES-WU-17). reason is one of "rate",
+// "concurrency", "body_too_large", "stream_capacity".
+func (c *Collector) IncRateLimited(handler, reason string) {
+	c.httpRateLimited.WithLabelValues(handler, reason).Inc()
+}
+
 // GetMetrics returns all metrics for testing or inspection
 func (c *Collector) GetMetrics() map[string]prometheus.Collector {
 	return map[string]prometheus.Collector{
@@ -278,5 +302,6 @@ func (c *Collector) GetMetrics() map[string]prometheus.Collector {
 		"compliance_reports":               c.complianceReports,
 		"webhook_decision_publish_dropped": c.webhookDecisionPublishDropped,
 		"exception_suppressions":           c.exceptionSuppressions,
+		"http_rate_limited":                c.httpRateLimited,
 	}
 }

@@ -43,7 +43,11 @@ continuous-monitoring cadence described under [How to maintain](#how-to-maintain
 - **remediation** — the fixing phase and work-unit family from the
   [Production Readiness Plan](../../.omc/plans/PRODUCTION-READINESS-FEDRAMP-CIS.md) (P0–P12).
 - **scheduled_completion** — target close date, planned by remediating phase across 2026.
-- **status** — lifecycle state; all rows currently `Open`.
+- **status** — lifecycle state; all rows remain `Open`. Some carry P4 partial-remediation
+  notes (e.g. POAM-004 management-plane TLS, POAM-007 NetworkPolicy, POAM-027 DoS limits) and
+  a reduced `risk_rating`, but stay `Open` because residual risk remains (config-gated defaults
+  off, CNI-dependent enforcement, or live e2e proof pending). The CSV `status`/`milestones`
+  cells carry the authoritative residual-risk text.
 
 ## Severity rollup (current)
 
@@ -62,6 +66,17 @@ boundary (SC-7), the policy-engine `spec.template.spec` enforcement blindness (C
 audit tamper-evidence on `emptyDir` storage (AU-9), and the untrustworthy CI Go-version skew
 (SA-11). None of these can be open at the authorization decision.
 
+> **P4 progress (2026-06-01), partial — items remain Open.** SC-7 (POAM-007): default-deny +
+> least-privilege NetworkPolicies now ship in the chart and the static base manifest, but
+> enforcement **requires a NetworkPolicy-enforcing CNI** and the live e2e proof is not yet run,
+> so the item stays Open (residual `risk_rating` lowered to Moderate). SC-8 (POAM-004):
+> policy-manager API TLS 1.3 (P2) and a verified-HTTPS, no-plaintext-token decisions channel
+> (P3) shipped, but dashboard in-pod TLS and metrics-plane authN remain config-gated and off by
+> default, so it stays Open (Moderate). SC-5 (POAM-027): application-layer rate-limit / body /
+> concurrency / SSE caps ship on by default, but ResourceQuota/LimitRange ship off and HPA is
+> P8, so it stays Open (Low). The Critical severity labels above are preserved for the original
+> finding; consult the CSV for the current residual-risk text.
+
 ## Summary table
 
 | POA&M | Control | Severity | Risk | Phase | Scheduled | Weakness |
@@ -69,10 +84,10 @@ audit tamper-evidence on `emptyDir` storage (AU-9), and the untrustworthy CI Go-
 | POAM-001 | SC-13 | Critical | High | P2 | 2026-08-15 | No FIPS 140-2/3 validated cryptographic module |
 | POAM-002 | IA-2 | Critical | High | P3 | 2026-09-15 | Unauthenticated management & enforcement planes |
 | POAM-003 | AC-3 | Critical | High | P3 | 2026-09-15 | No application-layer authorization model |
-| POAM-004 | SC-8 | Critical | High | P4 | 2026-10-15 | Plaintext HTTP on the management plane |
+| POAM-004 | SC-8 | Critical | Moderate | P4 | 2026-10-15 | Plaintext HTTP on the management plane (P4: PM API TLS 1.3 + verified HTTPS decisions channel shipped; dashboard/metrics TLS config-gated off — Open) |
 | POAM-005 | IA-3 | High | High | P3 | 2026-09-15 | Webhook accepts any client (no apiserver mTLS) |
 | POAM-006 | AC-6 | Critical | High | P3 | 2026-09-15 | Over-broad shared ServiceAccount / ClusterRole |
-| POAM-007 | SC-7 | Critical | High | P4 | 2026-10-15 | No NetworkPolicy (no default-deny boundary) |
+| POAM-007 | SC-7 | Critical | Moderate | P4 | 2026-10-15 | No NetworkPolicy (P4: default-deny + allow-list ship in chart + base; requires enforcing CNI; live e2e proof pending — Open) |
 | POAM-008 | CM-6 | Critical | High | P10 | 2026-10-31 | Policy-engine `spec.template.spec` blindness |
 | POAM-009 | SI-10 | High | Moderate | P10 | 2026-10-31 | Unvalidated Rego in CRD; no compile check |
 | POAM-010 | AU-9 | Critical | High | P7 | 2026-11-30 | No audit tamper-evidence; emptyDir storage |
@@ -92,7 +107,7 @@ audit tamper-evidence on `emptyDir` storage (AU-9), and the untrustworthy CI Go-
 | POAM-024 | CM-7 | High | Moderate | P5 | 2026-11-01 | Chart less hardened than base manifest |
 | POAM-025 | RA-5 | High | Moderate | P11 | 2026-12-31 | Vulnerability scanning does not gate the build |
 | POAM-026 | SI-2 | Moderate | Moderate | P11 | 2026-12-31 | No flaw-remediation program / SLAs |
-| POAM-027 | SC-5 | Moderate | Low | P4 | 2026-10-15 | No DoS / resource-availability protection |
+| POAM-027 | SC-5 | Moderate | Low | P4 | 2026-10-15 | No DoS / resource-availability protection (P4: app-layer rate-limit/body/concurrency/SSE caps on by default; ResourceQuota/LimitRange ship off; HPA in P8 — Open) |
 | POAM-028 | AU-12 | Moderate | Moderate | P7 | 2026-11-30 | No system-wide time-correlated audit trail |
 | POAM-029 | AU-5 | Moderate | Low | P9 | 2026-12-31 | No alerting on audit-processing failure |
 | POAM-030 | SI-4 | High | Moderate | P9 | 2026-12-31 | No detection/monitoring safety net |

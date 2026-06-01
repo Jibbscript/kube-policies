@@ -67,3 +67,15 @@ data:
         {{- else }}
         role_bindings: []
         {{- end }}
+      # Rate-limiting / DoS-protection (NET-WU-14/15, RES-WU-17). Flows through
+      # the shared config.yaml ConfigMap so the webhook and policy-manager pick
+      # the same limits up via security.ratelimit.*. Limits are PER-REPLICA;
+      # defaults are tuned to protect the fail-closed webhook from a flood
+      # without throttling legitimate apiserver admission traffic.
+      ratelimit:
+        enabled: {{ .Values.rateLimit.enabled }}
+        requests_per_second: {{ .Values.rateLimit.requestsPerSecond }}
+        burst: {{ .Values.rateLimit.burst }}
+        max_concurrent: {{ .Values.rateLimit.maxConcurrent }}
+        max_body_bytes: {{ .Values.rateLimit.maxBodyBytes | int64 }}
+        max_stream_connections: {{ .Values.rateLimit.maxStreamConnections }}

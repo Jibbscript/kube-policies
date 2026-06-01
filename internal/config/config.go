@@ -52,9 +52,10 @@ type MetricsConfig struct {
 
 // SecurityConfig represents security configuration
 type SecurityConfig struct {
-	TLS            TLSConfig  `mapstructure:"tls"`
-	RBAC           RBACConfig `mapstructure:"rbac"`
-	Authentication AuthConfig `mapstructure:"authentication"`
+	TLS            TLSConfig       `mapstructure:"tls"`
+	RBAC           RBACConfig      `mapstructure:"rbac"`
+	Authentication AuthConfig      `mapstructure:"authentication"`
+	RateLimit      RateLimitConfig `mapstructure:"ratelimit"`
 	// NOTE: encryption-at-rest is intentionally NOT a field here. The webhook
 	// does not encrypt at rest in-process; secret/etcd at-rest protection is a
 	// cluster concern provided by a Kubernetes EncryptionConfiguration + KMS
@@ -101,6 +102,55 @@ type RBACConfig struct {
 type RoleBinding struct {
 	Role   string   `mapstructure:"role"`   // "viewer" | "editor" | "admin"
 	Groups []string `mapstructure:"groups"` // OIDC groups granted this role
+}
+
+// RateLimitConfig configures the shared HTTP rate-limiting / DoS-protection
+// middleware (NET-WU-14/15, RES-WU-17) applied to the webhook, policy-manager,
+// and dashboard gin routers. All limits are PER-PROCESS (per replica), not
+// cluster-wide: each pod constructs its own limiter, so the effective
+// cluster-wide ceiling is roughly limit * replicaCount.
+//
+// Defaults are tuned to protect the fail-closed admission webhook — which is on
+// the cluster's critical write path — from a request flood WITHOUT throttling
+// legitimate apiserver admission traffic. The apiserver serializes admission
+// calls per webhook with a 10s timeout and modest in-flight concurrency, so a
+// 50 req/s steady rate with a burst of 100 absorbs normal spikes (rollouts,
+// CRD churn) while still rejecting a runaway client. See
+// internal/middleware/ratelimit.go for the enforcement details.
+type RateLimitConfig struct {
+	// Enabled toggles the whole middleware. When false the limiter, the
+	// concurrency cap, and the body cap are all no-ops (pass-through). Default
+	// true.
+	Enabled bool `mapstructure:"enabled"`
+
+	// RequestsPerSecond is the sustained token-bucket refill rate (req/s) for
+	// the global request limiter. <= 0 disables the rate limiter while leaving
+	// the other protections active. Default 50.
+	RequestsPerSecond float64 `mapstructure:"requests_per_second"`
+
+	// Burst is the token-bucket depth — the maximum number of requests admitted
+	// in an instantaneous spike before the per-second rate applies. <= 0
+	// disables the rate limiter. Default 100.
+	Burst int `mapstructure:"burst"`
+
+	// MaxConcurrent caps the number of in-flight requests handled
+	// simultaneously. Excess requests are rejected with 429 (non-blocking
+	// acquire) rather than queued, so a slow upstream cannot accumulate an
+	// unbounded backlog. <= 0 disables the concurrency cap. Default 100.
+	MaxConcurrent int `mapstructure:"max_concurrent"`
+
+	// MaxBodyBytes caps the request body size; oversized requests get 413. The
+	// admission AdmissionReview for a large object can exceed 1MiB, so the
+	// default 3MiB (3145728) leaves headroom for legitimate workloads while
+	// still rejecting absurd payloads. <= 0 disables the body cap.
+	MaxBodyBytes int64 `mapstructure:"max_body_bytes"`
+
+	// MaxStreamConnections caps concurrent long-lived SSE connections on the
+	// decisions stream endpoint, separately from MaxConcurrent (SSE connections
+	// are held open and would otherwise exhaust the general concurrency budget).
+	// The N+1th concurrent stream gets 429; the slot is released on disconnect.
+	// <= 0 disables the stream cap. Default 100.
+	MaxStreamConnections int `mapstructure:"max_stream_connections"`
 }
 
 // StorageConfig represents storage configuration
@@ -181,6 +231,17 @@ func setDefaults(v *viper.Viper) {
 	// security.encryption.* defaults removed with the inert EncryptionConfig
 	// (CRY-WU-15): at-rest protection is a cluster EncryptionConfiguration + KMS
 	// concern, not an in-app control.
+
+	// Rate-limiting / DoS-protection defaults (NET-WU-14/15, RES-WU-17). Enabled
+	// by default with limits tuned to protect the fail-closed webhook from a
+	// flood without throttling legitimate apiserver admission traffic. See
+	// RateLimitConfig for the per-replica rationale of each value.
+	v.SetDefault("security.ratelimit.enabled", true)
+	v.SetDefault("security.ratelimit.requests_per_second", 50.0)
+	v.SetDefault("security.ratelimit.burst", 100)
+	v.SetDefault("security.ratelimit.max_concurrent", 100)
+	v.SetDefault("security.ratelimit.max_body_bytes", 3145728) // 3 MiB
+	v.SetDefault("security.ratelimit.max_stream_connections", 100)
 
 	// Storage defaults
 	v.SetDefault("storage.type", "memory")
@@ -287,6 +348,28 @@ func validateConfig(config *Config) error {
 	}
 	if dr := strings.TrimSpace(config.Security.RBAC.DefaultRole); dr != "" && !validRole(dr) {
 		return fmt.Errorf("security.rbac.default_role %q is invalid (must be viewer, editor, or admin)", config.Security.RBAC.DefaultRole)
+	}
+
+	// Validate rate-limiting / DoS-protection bounds (NET-WU-14/15, RES-WU-17):
+	// every limit must be non-negative. A negative value is an operator typo that
+	// would otherwise be silently treated as "disabled" by the middleware; fail
+	// fast so the misconfiguration is caught at load. Zero is allowed and means
+	// "disable that particular protection" (documented on each field).
+	rl := config.Security.RateLimit
+	if rl.RequestsPerSecond < 0 {
+		return fmt.Errorf("security.ratelimit.requests_per_second must be non-negative, got %g", rl.RequestsPerSecond)
+	}
+	if rl.Burst < 0 {
+		return fmt.Errorf("security.ratelimit.burst must be non-negative, got %d", rl.Burst)
+	}
+	if rl.MaxConcurrent < 0 {
+		return fmt.Errorf("security.ratelimit.max_concurrent must be non-negative, got %d", rl.MaxConcurrent)
+	}
+	if rl.MaxBodyBytes < 0 {
+		return fmt.Errorf("security.ratelimit.max_body_bytes must be non-negative, got %d", rl.MaxBodyBytes)
+	}
+	if rl.MaxStreamConnections < 0 {
+		return fmt.Errorf("security.ratelimit.max_stream_connections must be non-negative, got %d", rl.MaxStreamConnections)
 	}
 
 	// Validate storage type (IAM-WU-13 honesty). Only "memory" is implemented;

@@ -117,7 +117,7 @@ func TestSetupWebhookServer_MTLSEnforce(t *testing.T) {
 	caPath := ca.writeCAFile(t)
 
 	tlsCfg := &config.TLSConfig{MinVersion: "1.3", ClientAuth: "require", ClientCAPath: caPath}
-	srv, err := setupWebhookServer(admission.NewController(nil, nil, nil, log, nil), tlsCfg, true, log)
+	srv, err := setupWebhookServer(admission.NewController(nil, nil, nil, log, nil), tlsCfg, true, config.RateLimitConfig{}, nil, log)
 	require.NoError(t, err, "enforce + CA bundle must build successfully")
 	require.NotNil(t, srv)
 	require.Equal(t, tls.RequireAndVerifyClientCert, srv.TLSConfig.ClientAuth,
@@ -160,7 +160,7 @@ func TestSetupWebhookServer_MTLSEnforce(t *testing.T) {
 func TestSetupWebhookServer_EnforceWithoutCAFailsClosed(t *testing.T) {
 	log := zaptest.NewLogger(t)
 	tlsCfg := &config.TLSConfig{MinVersion: "1.3", ClientAuth: "require", ClientCAPath: ""}
-	srv, err := setupWebhookServer(admission.NewController(nil, nil, nil, log, nil), tlsCfg, true, log)
+	srv, err := setupWebhookServer(admission.NewController(nil, nil, nil, log, nil), tlsCfg, true, config.RateLimitConfig{}, nil, log)
 	require.Error(t, err, "enforce with no client-CA bundle MUST fail closed")
 	assert.Nil(t, srv, "no server should be returned on the fail-closed path")
 	assert.Contains(t, err.Error(), "require-client-cert",
@@ -176,7 +176,7 @@ func TestSetupWebhookServer_BreakGlassPermissive(t *testing.T) {
 	serverLeaf := ca.leaf(t, "webhook-server", false)
 
 	tlsCfg := &config.TLSConfig{MinVersion: "1.3", ClientAuth: "require", ClientCAPath: ""}
-	srv, err := setupWebhookServer(admission.NewController(nil, nil, nil, log, nil), tlsCfg, false, log)
+	srv, err := setupWebhookServer(admission.NewController(nil, nil, nil, log, nil), tlsCfg, false, config.RateLimitConfig{}, nil, log)
 	require.NoError(t, err, "break-glass with no CA bundle must build successfully")
 	require.NotNil(t, srv)
 	require.Equal(t, tls.NoClientCert, srv.TLSConfig.ClientAuth,

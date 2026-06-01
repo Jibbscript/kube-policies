@@ -1,0 +1,42 @@
+{{- /* NET-WU-07: dashboard ingress on :8090 ONLY from the ingress controller
+       described by networkPolicy.dashboard.ingressFrom (namespaceSelectors and/or
+       ipBlock CIDRs). Default targets the ingress-nginx namespace. Only rendered
+       when dashboard.enabled=true and networkPolicy.enabled=true. When the peer
+       set is empty the policy renders with policyTypes [Ingress] and an EMPTY
+       ingress rule set (fail-closed deny) — the `- ports:` rule item is gated on
+       a non-empty peer set, because a rule with `ports` and no `from` matches
+       EVERY source (allow-all-on-port). */ -}}
+{{- if and .Values.networkPolicy.enabled .Values.dashboard.enabled }}
+{{- $from := .Values.networkPolicy.dashboard.ingressFrom }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "kube-policies.fullname" . }}-ingress-dashboard
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kube-policies.labels" . | nindent 4 }}
+    app.kubernetes.io/component: dashboard
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "kube-policies.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: dashboard
+  policyTypes:
+    - Ingress
+  ingress:
+    {{- if or $from.namespaceSelectors $from.ipBlocks }}
+    - ports:
+        - protocol: TCP
+          port: 8090
+      from:
+        {{- range $from.namespaceSelectors }}
+        - namespaceSelector:
+            matchLabels:
+              {{- toYaml . | nindent 14 }}
+        {{- end }}
+        {{- range $from.ipBlocks }}
+        - ipBlock:
+            cidr: {{ . | quote }}
+        {{- end }}
+    {{- end }}
+{{- end }}

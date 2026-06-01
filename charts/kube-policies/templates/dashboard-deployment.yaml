@@ -96,6 +96,23 @@ spec:
             {{- end }}
             - name: ALLOW_WRITES
               value: {{ .Values.dashboard.allowWrites | default false | quote }}
+            # Rate-limiting / DoS-protection (NET-WU-15, RES-WU-17). The dashboard
+            # is env-configured (no shared config.yaml), so these mirror the
+            # shared security.ratelimit.* keys the webhook/PM read.
+            - name: DASHBOARD_RATELIMIT_ENABLED
+              value: {{ .Values.dashboard.rateLimit.enabled | quote }}
+            - name: DASHBOARD_RATELIMIT_REQUESTS_PER_SECOND
+              value: {{ .Values.dashboard.rateLimit.requestsPerSecond | quote }}
+            - name: DASHBOARD_RATELIMIT_BURST
+              value: {{ .Values.dashboard.rateLimit.burst | quote }}
+            - name: DASHBOARD_RATELIMIT_MAX_CONCURRENT
+              value: {{ .Values.dashboard.rateLimit.maxConcurrent | quote }}
+            - name: DASHBOARD_RATELIMIT_MAX_BODY_BYTES
+              # `| int64` before `| quote` so large byte counts are not rendered
+              # in scientific notation (Helm parses YAML numbers as float64).
+              value: {{ .Values.dashboard.rateLimit.maxBodyBytes | int64 | quote }}
+            - name: DASHBOARD_MAX_SSE_CONNECTIONS
+              value: {{ .Values.dashboard.maxSSEConnections | quote }}
             - name: POLICY_MANAGER_STREAM_URL
               value: "https://{{ include "kube-policies.fullname" . }}-policy-manager:8080/api/v1/decisions/stream"
             {{- if eq (include "kube-policies.internalAuthMode" .) "tokenreview" }}

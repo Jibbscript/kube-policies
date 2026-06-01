@@ -101,12 +101,28 @@ Each CSV row is one Moderate control or enhancement. Columns:
 These are the controls where the repository already does real work. They are
 deliberately marked **Partial** (or **Implemented**) and cite the exact artifact:
 
+- **SC-7 / SC-7(3)(4)(5)(7) — Boundary protection / network segmentation
+  (Implemented (Helm) — requires enforcing CNI).** The chart and the static base
+  manifest render a **default-deny** baseline plus a least-privilege allow-list
+  (`charts/kube-policies/templates/networkpolicy-*.yaml`,
+  `deployments/kubernetes/base/networkpolicy.yaml`); every allowed flow is mapped to
+  its template in [network-architecture.md](network-architecture.md) (also the CA-3
+  scoped-flow record). **Enforcement requires a NetworkPolicy-enforcing CNI**
+  (Calico/Cilium/Antrea) — inert on kindnet — and the live e2e proof is not yet run,
+  so it is **not** "enforced by default" (residual **POAM-007**).
+- **SC-5 — Denial-of-service protection (Partial).** Per-replica rate limiting, body
+  cap (413), concurrency + SSE caps (429), and the
+  `kube_policies_http_rate_limited_total` metric ship on by default
+  (`internal/middleware/ratelimit.go`); ResourceQuota/LimitRange ship **off** by
+  default (residual **POAM-027**).
 - **SC-8 / SC-8(1) — Transmission protection (Partial).** The admission webhook
   serves **TLS 1.3** with a fixed modern cipher-suite list
-  (`cmd/admission-webhook/main.go:269-280`); this protects `ICX-01`
-  (kube-apiserver → `AST-WH:8443`). The management/metrics planes
-  (`AST-PM:8080/9091`, `AST-DB:8090/9092`, `ICX-02/03/04/05`) are still plaintext —
-  in-cluster TLS/mTLS lands in **P3/P4** (open weakness **POAM-003**).
+  (`cmd/admission-webhook/main.go`); this protects `ICX-01`
+  (kube-apiserver → `AST-WH:8443`). **P2/P3** added TLS 1.3 on the policy-manager API
+  (`internal/config/tls.go`) and a **verified-HTTPS** webhook→policy-manager decisions
+  channel (RootCAs, no `InsecureSkipVerify`, audience-bound token —
+  `internal/admission/decision_publisher.go`). Dashboard in-pod TLS and metrics-plane
+  authN remain **config-gated and off by default** (residual **POAM-004**).
 - **AC-3 / AC-5 / AC-6 — Access enforcement, separation of duties, least privilege (Partial).**
   Each plane runs under its **own** ServiceAccount bound to its **own** (Cluster)Role
   (`charts/kube-policies/templates/rbac.yaml`, `…/dashboard-rbac.yaml`): webhook and

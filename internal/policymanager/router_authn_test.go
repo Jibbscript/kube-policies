@@ -8,6 +8,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/Jibbscript/kube-policies/internal/config"
 )
 
 // TestAPIRouter_AllV1RoutesRequireServiceOrOIDCToken is the P3 exit-gate matrix
@@ -30,7 +32,7 @@ func TestAPIRouter_AllV1RoutesRequireServiceOrOIDCToken(t *testing.T) {
 	m := newTestManagerWithPolicy(t, newPrivilegedPolicy())
 	// Auth enabled, but NO service tokens/reviewers configured: every route must
 	// fail closed for an unauthenticated/garbage caller regardless.
-	router := NewAPIRouter(m, testAuthConfig(), rbacTestConfig(), v)
+	router := NewAPIRouter(m, testAuthConfig(), rbacTestConfig(), v, config.RateLimitConfig{}, nil)
 
 	type route struct {
 		method string
@@ -129,7 +131,7 @@ func routeTemplateForTest(path string) string {
 func TestRouteTemplateForTest_MatchesGinTable(t *testing.T) {
 	v := newHermeticVerifier(t)
 	m := newTestManagerWithPolicy(t, newPrivilegedPolicy())
-	router := NewAPIRouter(m, testAuthConfig(), rbacTestConfig(), v)
+	router := NewAPIRouter(m, testAuthConfig(), rbacTestConfig(), v, config.RateLimitConfig{}, nil)
 
 	templates := make(map[string]bool)
 	for _, ri := range router.Routes() {

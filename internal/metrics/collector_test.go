@@ -195,6 +195,28 @@ func TestMetricsCollector_SetCertExpiry(t *testing.T) {
 	assert.InDelta(t, float64(exp.Unix()), collectGaugeValue(t, g), 1e-9)
 }
 
+// TestCollector_IncRateLimited_Increments asserts the HTTP rate-limit rejection
+// counter (NET-WU-14/15, RES-WU-17) increments per (handler, reason) and that
+// its label set is exactly {handler, reason}.
+func TestCollector_IncRateLimited_Increments(t *testing.T) {
+	const handler = "/validate"
+	const reason = "rate"
+
+	testCollector.IncRateLimited(handler, reason)
+
+	vec, ok := testCollector.GetMetrics()["http_rate_limited"].(*prometheus.CounterVec)
+	require.True(t, ok, "http_rate_limited must be a *prometheus.CounterVec")
+
+	val, names := collectCounterValue(t, vec.WithLabelValues(handler, reason))
+	assert.InDelta(t, 1.0, val, 1e-9)
+	assert.Equal(t, []string{"handler", "reason"}, names,
+		"label set must be exactly {handler, reason}")
+
+	testCollector.IncRateLimited(handler, reason)
+	val, _ = collectCounterValue(t, vec.WithLabelValues(handler, reason))
+	assert.InDelta(t, 2.0, val, 1e-9)
+}
+
 func TestMetricsCollector_GetMetrics(t *testing.T) {
 	// Using shared testCollector
 

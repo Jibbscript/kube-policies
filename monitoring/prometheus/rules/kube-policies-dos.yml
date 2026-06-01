@@ -1,0 +1,80 @@
+# Kube-Policies DoS / load-saturation alerts (NET-WU-23, NIST SC-5 denial-of-
+# service protection / SI-4 system monitoring). Loaded via prometheus.yaml
+# rule_files (/etc/prometheus/rules/*.yml). Metrics are published per replica by
+# internal/metrics/collector.go; all rate() expressions are per-replica unless
+# aggregated, which surfaces a single hot pod rather than hiding it in a fleet
+# average.
+groups:
+  - name: kube-policies-dos
+    rules:
+      # Sustained admission-request flood. Threshold: > 200 req/s per replica
+      # held for 10m. Rationale: the admission webhook is sized for steady-state
+      # cluster churn (tens of req/s); a single replica sustaining 200+ req/s for
+      # ten minutes is well outside normal apply/scale traffic and indicates a
+      # client loop or a deliberate flood. `for: 10m` rides out CI-deploy and
+      # rollout bursts so we alert on sustained load, not spikes.
+      - alert: KubePoliciesHighAdmissionRequestRate
+        expr: sum by (instance) (rate(kube_policies_admission_requests_total[5m])) > 200
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "kube-policies admission request rate is sustained-high on {{ $labels.instance }}"
+          description: "Admission request rate on {{ $labels.instance }} has held above 200 req/s for 10m ({{ printf \"%.0f\" $value }} req/s). Possible client loop or DoS flood; check the offending source and consider rate-limit tuning (security.ratelimit.*)."
+          runbook_url: "https://github.com/Jibbscript/kube-policies/blob/main/docs/runbooks/dos-response.md"
+
+      # Rate-limiter is actively shedding load. ANY sustained throttling means
+      # clients are exceeding the configured limits (NET-WU-15) — a leading
+      # indicator of a flood before it reaches the admission path. Broken out by
+      # reason (rate|concurrency|body_too_large|stream_capacity) so the runbook
+      # knows which limit is binding. Threshold: > 1 rejection/s per
+      # (instance,reason) for 5m.
+      - alert: KubePoliciesRateLimitSurge
+        expr: sum by (instance, reason) (rate(kube_policies_http_rate_limited_total[5m])) > 1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "kube-policies is throttling clients (reason={{ $labels.reason }}) on {{ $labels.instance }}"
+          description: "The rate limiter on {{ $labels.instance }} has rejected > 1 req/s for reason '{{ $labels.reason }}' over 5m ({{ printf \"%.1f\" $value }} rejections/s). Clients are exceeding limits — possible flood. Identify the source before relaxing security.ratelimit.* limits."
+          runbook_url: "https://github.com/Jibbscript/kube-policies/blob/main/docs/runbooks/dos-response.md"
+
+      # p95 admission evaluation latency approaching the 10s webhook timeout
+      # (timeoutSeconds: 10). A timed-out admission either fails the request or
+      # (fail-open) admits unchecked — both are bad under load. Two severities
+      # give early warning before the cliff:
+      #   warning  > 5s p95 (half the budget) for 5m
+      #   critical > 8s p95 (80% of budget) for 2m
+      - alert: KubePoliciesAdmissionLatencyHigh
+        expr: histogram_quantile(0.95, sum by (le) (rate(kube_policies_admission_evaluation_duration_seconds_bucket[5m]))) > 5
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "kube-policies admission p95 latency is high (> 5s)"
+          description: "p95 admission evaluation latency is {{ printf \"%.2f\" $value }}s, over half the 10s webhook timeout. Sustained load or slow policy evaluation; investigate before requests start timing out."
+          runbook_url: "https://github.com/Jibbscript/kube-policies/blob/main/docs/runbooks/dos-response.md"
+
+      - alert: KubePoliciesAdmissionLatencyCritical
+        expr: histogram_quantile(0.95, sum by (le) (rate(kube_policies_admission_evaluation_duration_seconds_bucket[5m]))) > 8
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "kube-policies admission p95 latency is CRITICAL (> 8s, near 10s timeout)"
+          description: "p95 admission evaluation latency is {{ printf \"%.2f\" $value }}s, at 80% of the 10s webhook timeout. Requests are about to time out (fail-open admits unchecked / fail-closed blocks apply). Mitigate load immediately."
+          runbook_url: "https://github.com/Jibbscript/kube-policies/blob/main/docs/runbooks/dos-response.md"
+
+      # Decision-publish buffer is dropping events. The webhook publishes admission
+      # decisions to the policy-manager decisions channel through a bounded buffer;
+      # any drop means the buffer saturated (consumer too slow / channel down under
+      # load), so audit decisions are being lost. ANY nonzero drop rate is an alert.
+      - alert: KubePoliciesDecisionPublishDrops
+        expr: sum by (instance) (rate(kube_policies_webhook_decision_publish_dropped_total[5m])) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "kube-policies is dropping admission-decision publishes on {{ $labels.instance }}"
+          description: "The decision-publish buffer on {{ $labels.instance }} is dropping events ({{ printf \"%.2f\" $value }} drops/s) — buffer saturation under load. Audit decisions are being lost; check decisions-channel health and consumer throughput."
+          runbook_url: "https://github.com/Jibbscript/kube-policies/blob/main/docs/runbooks/dos-response.md"

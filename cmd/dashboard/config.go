@@ -146,6 +146,25 @@ type Config struct {
 	ForwardAuthEmailHeader  string
 	ForwardAuthGroupsHeader string
 	ForwardAuthTokenHeader  string
+
+	// --- Rate-limiting / DoS-protection (NET-WU-15, RES-WU-17) ---
+
+	// RateLimitEnabled toggles the shared rate-limit / DoS-protection middleware
+	// on the dashboard router. Default true. The dashboard is browser-facing and
+	// usually behind an Ingress, but the limiter is defense-in-depth against a
+	// flood that bypasses the Ingress (e.g. in-cluster).
+	RateLimitEnabled bool
+	// RateLimitRPS / RateLimitBurst configure the token-bucket request limiter.
+	RateLimitRPS   float64
+	RateLimitBurst int
+	// RateLimitMaxConcurrent caps in-flight (non-SSE) requests; excess get 429.
+	RateLimitMaxConcurrent int
+	// RateLimitMaxBodyBytes caps request body size; oversized requests get 413.
+	RateLimitMaxBodyBytes int64
+	// MaxSSEConnections caps concurrent browser SSE connections on
+	// GET /api/decisions/stream (the N+1th gets 429), separately from the general
+	// request concurrency cap since SSE connections are long-lived. Default 100.
+	MaxSSEConnections int
 }
 
 // LoadConfig reads dashboard configuration from environment variables.
@@ -198,6 +217,16 @@ func LoadConfig() (*Config, error) {
 		ForwardAuthEmailHeader:  envOr("DASHBOARD_FORWARD_AUTH_EMAIL_HEADER", "X-Forwarded-Email"),
 		ForwardAuthGroupsHeader: envOr("DASHBOARD_FORWARD_AUTH_GROUPS_HEADER", "X-Forwarded-Groups"),
 		ForwardAuthTokenHeader:  envOr("DASHBOARD_FORWARD_AUTH_TOKEN_HEADER", "X-Forwarded-Access-Token"),
+
+		// Rate-limiting / DoS-protection (NET-WU-15, RES-WU-17). Defaults mirror
+		// the shared security.ratelimit.* defaults so all three components behave
+		// consistently out of the box.
+		RateLimitEnabled:       envBool("DASHBOARD_RATELIMIT_ENABLED", true),
+		RateLimitRPS:           envFloatOr("DASHBOARD_RATELIMIT_REQUESTS_PER_SECOND", 50),
+		RateLimitBurst:         envIntOr("DASHBOARD_RATELIMIT_BURST", 100),
+		RateLimitMaxConcurrent: envIntOr("DASHBOARD_RATELIMIT_MAX_CONCURRENT", 100),
+		RateLimitMaxBodyBytes:  int64(envIntOr("DASHBOARD_RATELIMIT_MAX_BODY_BYTES", 3145728)), // 3 MiB
+		MaxSSEConnections:      envIntOr("DASHBOARD_MAX_SSE_CONNECTIONS", 100),
 	}
 	if err := cfg.validateAuth(); err != nil {
 		return nil, err
@@ -259,6 +288,19 @@ func envDurationOr(key string, fallback time.Duration) time.Duration {
 		return fallback
 	}
 	return d
+}
+
+// envFloatOr returns the float64 value of key, or fallback when unset/invalid.
+func envFloatOr(key string, fallback float64) float64 {
+	v, ok := os.LookupEnv(key)
+	if !ok || v == "" {
+		return fallback
+	}
+	f, err := strconv.ParseFloat(strings.TrimSpace(v), 64)
+	if err != nil {
+		return fallback
+	}
+	return f
 }
 
 // envIntOr returns the integer value of key, or fallback when unset/invalid.

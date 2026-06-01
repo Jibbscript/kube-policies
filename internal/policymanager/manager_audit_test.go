@@ -159,7 +159,7 @@ func TestManagerAudit_AttributesAuthenticatedPrincipal(t *testing.T) {
 	m.SetAuditLogger(auditLogger)
 
 	verifier := newHermeticVerifier(t)
-	router := NewAPIRouter(m, testAuthConfig(), auditTestRBAC(), verifier)
+	router := NewAPIRouter(m, testAuthConfig(), auditTestRBAC(), verifier, config.RateLimitConfig{}, nil)
 
 	// CREATE
 	w := authedRequest(t, router, http.MethodPost, "/api/v1/policies", policyBody(t, "p-create"))
@@ -227,7 +227,7 @@ func TestManagerAudit_UIDIsSubjectNotUsername(t *testing.T) {
 	// Keep groups so the editor RBAC binding matches.
 
 	verifier := newHermeticVerifier(t)
-	router := NewAPIRouter(m, authCfg, auditTestRBAC(), verifier)
+	router := NewAPIRouter(m, authCfg, auditTestRBAC(), verifier, config.RateLimitConfig{}, nil)
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/policies", bytes.NewReader(policyBody(t, "uid-test")))
 	req.Header.Set("Authorization", "Bearer "+mintToken(t, jose.RS256, claims))
@@ -257,7 +257,7 @@ func TestManagerAudit_NoUnauthenticatedAttributionWhenAuthEnabled(t *testing.T) 
 	m.SetAuditLogger(auditLogger)
 
 	verifier := newHermeticVerifier(t)
-	router := NewAPIRouter(m, testAuthConfig(), auditTestRBAC(), verifier)
+	router := NewAPIRouter(m, testAuthConfig(), auditTestRBAC(), verifier, config.RateLimitConfig{}, nil)
 
 	// Policy lifecycle.
 	w := authedRequest(t, router, http.MethodPost, "/api/v1/policies", policyBody(t, "p"))
@@ -308,7 +308,7 @@ func TestManagerAudit_DevFallbackLabelsUnauthenticated(t *testing.T) {
 	m.SetAuditLogger(auditLogger)
 
 	disabledAuth := config.AuthConfig{Enabled: false}
-	router := NewAPIRouter(m, disabledAuth, config.RBACConfig{}, nil)
+	router := NewAPIRouter(m, disabledAuth, config.RBACConfig{}, nil, config.RateLimitConfig{}, nil)
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/policies", bytes.NewReader(policyBody(t, "dev")))
 	req.Header.Set("Content-Type", "application/json")
@@ -339,7 +339,7 @@ func TestManagerAudit_PlaygroundRPCsEmitNoConfigChange(t *testing.T) {
 	m.SetAuditLogger(auditLogger)
 
 	verifier := newHermeticVerifier(t)
-	router := NewAPIRouter(m, testAuthConfig(), auditTestRBAC(), verifier)
+	router := NewAPIRouter(m, testAuthConfig(), auditTestRBAC(), verifier, config.RateLimitConfig{}, nil)
 
 	// Seed a policy so /policies/:id/test resolves (this is the only persisting
 	// call in this test → exactly one CREATE event).

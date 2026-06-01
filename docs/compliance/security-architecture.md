@@ -192,6 +192,7 @@ phases land so that the "current posture" columns above remain accurate.
 
 - [Authorization Boundary Diagram](diagrams/authorization-boundary.md)
 - [Data Flow Diagram](diagrams/data-flow.md)
+- [Network Boundary & Segmentation Architecture (SC-7/CA-3)](network-architecture.md) — every allowed flow mapped to its NetworkPolicy template
 - [Interconnection Register](interconnections.md) (`ICX-01..06`)
 - [System Security Plan (SSP)](ssp/SSP.md) · [Ports, Protocols & Services](ssp/ports-protocols-services.md)
 - [Planning Policy (PL-1/PL-2)](policies/PL-policy.md)

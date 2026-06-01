@@ -223,7 +223,24 @@ data:
           - "TLS_AES_256_GCM_SHA384"
           - "TLS_CHACHA20_POLY1305_SHA256"
           - "TLS_AES_128_GCM_SHA256"
-        client_auth: "require"
+        # client_auth is set to "none" here because this base/example manifest
+        # does NOT mount an apiserver client-CA bundle (no client_ca_path volume
+        # or Secret). Setting "require" without a CA bundle would be internally
+        # inconsistent: BuildServerTLSConfig silently degrades to NoClientCert
+        # when clientCAs==nil, so the declared intent would be silently no-opped.
+        #
+        # Production mutual TLS enforcement is NOT configured here. It is
+        # provided by:
+        #   1. The Helm chart, which mounts the apiserver client-CA bundle and
+        #      passes --client-ca-path to the webhook, AND
+        #   2. The --require-client-cert=true default on the webhook binary, which
+        #      fails CLOSED at startup if no client-CA bundle is supplied.
+        #
+        # To enable mTLS in a non-Helm deployment, set client_ca_path to the
+        # mounted apiserver CA bundle path and pass --client-ca-path accordingly.
+        # See deployments/kubernetes/helm/ and cmd/admission-webhook/main.go.
+        # (NET-WU-24: base manifest made consistent with what it actually provisions)
+        client_auth: "none"
       # This base/example manifest ships the policy-manager management API with
       # authentication DISABLED (dev only; tracked gap). It is NOT production
       # secure. The production path is the Helm chart with auth.enabled=true,

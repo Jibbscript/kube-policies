@@ -41,6 +41,7 @@ This index is reviewed at least **annually** (next review **2027-05-29**) and on
 |---|---|
 | [diagrams/authorization-boundary.md](diagrams/authorization-boundary.md) | Authorization boundary diagram: what is in-boundary (`ZONE-SYS`) versus external (`ZONE-EXT`). |
 | [diagrams/data-flow.md](diagrams/data-flow.md) | Data-flow diagram across the boundary and interconnections. |
+| [network-architecture.md](network-architecture.md) | Network boundary & segmentation architecture (SC-7 / CA-3): every allowed flow mapped to its shipped NetworkPolicy template (default-deny + least-privilege allow-list), the SC-5 DoS protections, and the CNI/config-gated honesty caveats. |
 | [inventory.md](inventory.md) | Component inventory narrative (assets, images, ports). |
 | [inventory.csv](inventory.csv) | Machine-readable component inventory keyed on `AST-*` asset IDs. |
 | [interconnections.md](interconnections.md) | External interconnection register (`ICX-01..06`): data, sensitivity, and transport. |

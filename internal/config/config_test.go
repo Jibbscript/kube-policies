@@ -31,6 +31,12 @@ func clearConfigEnv(t *testing.T) {
 		"KUBE_POLICIES_METRICS_SUBSYSTEM",
 		"KUBE_POLICIES_SECURITY_TLS_MIN_VERSION",
 		"KUBE_POLICIES_SECURITY_TLS_CLIENT_AUTH",
+		"KUBE_POLICIES_SECURITY_RATELIMIT_ENABLED",
+		"KUBE_POLICIES_SECURITY_RATELIMIT_REQUESTS_PER_SECOND",
+		"KUBE_POLICIES_SECURITY_RATELIMIT_BURST",
+		"KUBE_POLICIES_SECURITY_RATELIMIT_MAX_CONCURRENT",
+		"KUBE_POLICIES_SECURITY_RATELIMIT_MAX_BODY_BYTES",
+		"KUBE_POLICIES_SECURITY_RATELIMIT_MAX_STREAM_CONNECTIONS",
 		"KUBE_POLICIES_SECURITY_ENCRYPTION_AT_REST_ENABLED",
 		"KUBE_POLICIES_SECURITY_ENCRYPTION_AT_REST_ALGORITHM",
 		"KUBE_POLICIES_SECURITY_ENCRYPTION_IN_TRANSIT_ENABLED",
@@ -54,6 +60,85 @@ func TestLoadConfig_DefaultsAndMissingFile(t *testing.T) {
 	require.False(t, cfg.Policy.DisableDefaults)
 	require.Equal(t, "file", cfg.Audit.Backend)
 	require.Equal(t, "1.3", cfg.Security.TLS.MinVersion)
+
+	// Rate-limiting / DoS-protection defaults (NET-WU-14/15, RES-WU-17).
+	rl := cfg.Security.RateLimit
+	require.True(t, rl.Enabled)
+	require.InDelta(t, 50.0, rl.RequestsPerSecond, 1e-9)
+	require.Equal(t, 100, rl.Burst)
+	require.Equal(t, 100, rl.MaxConcurrent)
+	require.Equal(t, int64(3145728), rl.MaxBodyBytes)
+	require.Equal(t, 100, rl.MaxStreamConnections)
+}
+
+func TestLoadConfig_RateLimitOverridesAndValidation(t *testing.T) {
+	clearConfigEnv(t)
+
+	// File override of the rate-limit stanza is honored.
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	writeConfig(t, path, `
+security:
+  ratelimit:
+    enabled: false
+    requests_per_second: 25.5
+    burst: 40
+    max_concurrent: 12
+    max_body_bytes: 1048576
+    max_stream_connections: 7
+`)
+	cfg, err := LoadConfig(path)
+	require.NoError(t, err)
+	rl := cfg.Security.RateLimit
+	require.False(t, rl.Enabled)
+	require.InDelta(t, 25.5, rl.RequestsPerSecond, 1e-9)
+	require.Equal(t, 40, rl.Burst)
+	require.Equal(t, 12, rl.MaxConcurrent)
+	require.Equal(t, int64(1048576), rl.MaxBodyBytes)
+	require.Equal(t, 7, rl.MaxStreamConnections)
+}
+
+func TestLoadConfig_RateLimitRejectsNegatives(t *testing.T) {
+	cases := []struct {
+		name    string
+		body    string
+		wantErr string
+	}{
+		{
+			name:    "negative requests_per_second",
+			body:    "security:\n  ratelimit:\n    requests_per_second: -1\n",
+			wantErr: "requests_per_second must be non-negative",
+		},
+		{
+			name:    "negative burst",
+			body:    "security:\n  ratelimit:\n    burst: -5\n",
+			wantErr: "burst must be non-negative",
+		},
+		{
+			name:    "negative max_concurrent",
+			body:    "security:\n  ratelimit:\n    max_concurrent: -2\n",
+			wantErr: "max_concurrent must be non-negative",
+		},
+		{
+			name:    "negative max_body_bytes",
+			body:    "security:\n  ratelimit:\n    max_body_bytes: -10\n",
+			wantErr: "max_body_bytes must be non-negative",
+		},
+		{
+			name:    "negative max_stream_connections",
+			body:    "security:\n  ratelimit:\n    max_stream_connections: -3\n",
+			wantErr: "max_stream_connections must be non-negative",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			clearConfigEnv(t)
+			path := filepath.Join(t.TempDir(), "config.yaml")
+			writeConfig(t, path, tc.body)
+			_, err := LoadConfig(path)
+			require.Error(t, err)
+			require.Contains(t, err.Error(), tc.wantErr)
+		})
+	}
 }
 
 func TestLoadConfig_EnvironmentOverridesNestedKeys(t *testing.T) {
@@ -309,6 +394,91 @@ func TestLoadConfig_RejectsNonMemoryStorageType(t *testing.T) {
 			_, err := LoadConfig(path)
 			require.Error(t, err)
 			require.Contains(t, err.Error(), "storage.type")
+		})
+	}
+}
+
+// TestTLSConfig_ClientAuthRequireWithoutCAPath documents the full contract for
+// the client_auth=require + empty ClientCAPath combination (NET-WU-24).
+//
+// The config layer (LoadConfig / TLSConfig.Validate) accepts this combination
+// because enforcement is the responsibility of the flag layer in the binary
+// mains (--require-client-cert / --client-ca-path), not the config layer.
+// The admission-webhook binary fails CLOSED at startup when requireClientCert
+// is true and no CA pool is supplied (cmd/admission-webhook/main.go line ~454).
+// The policy-manager uses requireClientCert=false by default for optional mTLS.
+//
+// What IS machine-verified here is the downstream behavior that must NOT be
+// silently ignored: BuildServerTLSConfig DEGRADES to NoClientCert when
+// clientCAs==nil, even if client_auth=require is configured. This is the
+// documented intentional behaviour (CRY-WU-04 comment in tls.go). The test
+// makes this explicit so any change to that downgrade path will break this test
+// and force a conscious decision.
+func TestTLSConfig_ClientAuthRequireWithoutCAPath(t *testing.T) {
+	cases := []struct {
+		name          string
+		clientAuth    string
+		caPool        *x509.CertPool // nil = no bundle supplied
+		wantAuthInCfg tls.ClientAuthType
+		wantAuthInTLS tls.ClientAuthType
+		wantLoadErr   bool
+	}{
+		{
+			// (a) require + no CA path: LoadConfig succeeds (flag layer enforces),
+			// but BuildServerTLSConfig degrades to NoClientCert — not silently
+			// ignored, explicitly documented and tested here (NET-WU-24).
+			name:          "require_no_ca_pool_degrades_to_NoClientCert",
+			clientAuth:    "require",
+			caPool:        nil,
+			wantAuthInCfg: tls.RequireAndVerifyClientCert,
+			wantAuthInTLS: tls.NoClientCert,
+		},
+		{
+			// (b) require + CA pool: both layers honour RequireAndVerifyClientCert.
+			name:          "require_with_ca_pool_enforces_mtls",
+			clientAuth:    "require",
+			caPool:        x509.NewCertPool(),
+			wantAuthInCfg: tls.RequireAndVerifyClientCert,
+			wantAuthInTLS: tls.RequireAndVerifyClientCert,
+		},
+		{
+			// (c) none: no client cert in either layer — straightforward.
+			name:          "none_no_client_cert",
+			clientAuth:    "none",
+			caPool:        nil,
+			wantAuthInCfg: tls.NoClientCert,
+			wantAuthInTLS: tls.NoClientCert,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			clearConfigEnv(t)
+			path := filepath.Join(t.TempDir(), "config.yaml")
+			writeConfig(t, path, `
+security:
+  tls:
+    min_version: "1.3"
+    client_auth: `+tc.clientAuth+`
+`)
+			cfg, err := LoadConfig(path)
+			if tc.wantLoadErr {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+
+			// Layer 1: ClientAuthType() resolves the configured string correctly.
+			require.Equal(t, tc.wantAuthInCfg, cfg.Security.TLS.ClientAuthType(),
+				"ClientAuthType() must resolve client_auth=%q", tc.clientAuth)
+
+			// Layer 2: BuildServerTLSConfig propagates — or intentionally degrades —
+			// the ClientAuth value based on whether a CA pool is supplied.
+			tlsCfg, err := BuildServerTLSConfig(cfg.Security.TLS, tc.caPool)
+			require.NoError(t, err)
+			require.Equal(t, tc.wantAuthInTLS, tlsCfg.ClientAuth,
+				"BuildServerTLSConfig with caPool=%v must set ClientAuth=%v for client_auth=%q",
+				tc.caPool != nil, tc.wantAuthInTLS, tc.clientAuth)
 		})
 	}
 }

@@ -95,7 +95,20 @@ type ControllerOptions struct {
 	// Leave false for policy-manager, whose reconciler owns the
 	// cluster-wide registry state and should run on the leader only.
 	LeaderlessReconcilers bool
+
+	// MaxConcurrentReconciles bounds the number of concurrent Reconcile calls per
+	// reconciler (RES-WU-17, DoS protection). controller-runtime defaults to 1;
+	// a small bound (e.g. 2) keeps a CRD-apply storm from spawning unbounded
+	// goroutines while still allowing modest parallelism. <= 0 falls back to the
+	// defensive default of 2 so an unset value is never an unbounded worker pool.
+	MaxConcurrentReconciles int
 }
+
+// defaultMaxConcurrentReconciles is the bound applied when
+// ControllerOptions.MaxConcurrentReconciles is unset (<= 0). It caps the
+// per-reconciler worker pool so a flood of CRD changes cannot exhaust process
+// resources (RES-WU-17).
+const defaultMaxConcurrentReconciles = 2
 
 // StartControllers builds and starts a controller-runtime Manager that
 // watches Policy CRDs (always) and PolicyException CRDs (when opts.ExceptionSink
@@ -165,13 +178,21 @@ func StartControllers(ctx context.Context, cfg *rest.Config, log *zap.Logger, op
 		return fmt.Errorf("build controller manager: %w", err)
 	}
 
+	// Bound the per-reconciler worker pool (RES-WU-17). An unset/non-positive
+	// value falls back to the defensive default so a CRD-apply storm cannot spawn
+	// an unbounded number of concurrent Reconcile goroutines.
+	maxConcurrent := opts.MaxConcurrentReconciles
+	if maxConcurrent <= 0 {
+		maxConcurrent = defaultMaxConcurrentReconciles
+	}
+
 	policyReconciler := &PolicyReconciler{
 		Client: mgr.GetClient(),
 		Scheme: mgr.GetScheme(),
 		Sink:   opts.PolicySink,
 		Log:    log.Named("policy-reconciler"),
 	}
-	if err := policyReconciler.SetupWithManager(mgr, opts.LeaderlessReconcilers); err != nil {
+	if err := policyReconciler.SetupWithManager(mgr, opts.LeaderlessReconcilers, maxConcurrent); err != nil {
 		return fmt.Errorf("setup Policy reconciler: %w", err)
 	}
 
@@ -182,7 +203,7 @@ func StartControllers(ctx context.Context, cfg *rest.Config, log *zap.Logger, op
 			Sink:   opts.ExceptionSink,
 			Log:    log.Named("exception-reconciler"),
 		}
-		if err := exceptionReconciler.SetupWithManager(mgr, opts.LeaderlessReconcilers); err != nil {
+		if err := exceptionReconciler.SetupWithManager(mgr, opts.LeaderlessReconcilers, maxConcurrent); err != nil {
 			return fmt.Errorf("setup PolicyException reconciler: %w", err)
 		}
 	}
@@ -191,6 +212,7 @@ func StartControllers(ctx context.Context, cfg *rest.Config, log *zap.Logger, op
 		zap.Bool("leader_election", effectiveLeaderElection),
 		zap.Bool("leaderless_reconcilers", opts.LeaderlessReconcilers),
 		zap.Bool("exception_reconciler_enabled", opts.ExceptionSink != nil),
+		zap.Int("max_concurrent_reconciles", maxConcurrent),
 	)
 	if err := mgr.Start(ctx); err != nil {
 		return fmt.Errorf("controller manager exited: %w", err)
@@ -261,12 +283,16 @@ func (r *PolicyReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 // When leaderless is true, the controller is registered with
 // NeedLeaderElection=false so it runs on every replica — required by
 // embedders whose Sink populates a per-pod local cache (e.g. the
-// admission-webhook's OPA engine).
-func (r *PolicyReconciler) SetupWithManager(mgr ctrl.Manager, leaderless bool) error {
+// admission-webhook's OPA engine). maxConcurrent bounds the worker pool
+// (RES-WU-17); a non-positive value defers to controller-runtime's default of 1.
+func (r *PolicyReconciler) SetupWithManager(mgr ctrl.Manager, leaderless bool, maxConcurrent int) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&policiesv1.Policy{}).
 		Named("policy").
-		WithOptions(controller.Options{NeedLeaderElection: ptr.To(!leaderless)}).
+		WithOptions(controller.Options{
+			NeedLeaderElection:      ptr.To(!leaderless),
+			MaxConcurrentReconciles: maxConcurrent,
+		}).
 		Complete(r)
 }
 
@@ -329,11 +355,14 @@ func (r *PolicyExceptionReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 	return ctrl.Result{}, nil
 }
 
-func (r *PolicyExceptionReconciler) SetupWithManager(mgr ctrl.Manager, leaderless bool) error {
+func (r *PolicyExceptionReconciler) SetupWithManager(mgr ctrl.Manager, leaderless bool, maxConcurrent int) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&policiesv1.PolicyException{}).
 		Named("policyexception").
-		WithOptions(controller.Options{NeedLeaderElection: ptr.To(!leaderless)}).
+		WithOptions(controller.Options{
+			NeedLeaderElection:      ptr.To(!leaderless),
+			MaxConcurrentReconciles: maxConcurrent,
+		}).
 		Complete(r)
 }
 

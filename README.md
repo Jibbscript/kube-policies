@@ -134,6 +134,52 @@ The webhook TLS chart notes are emitted after install. The chart supports
 existing Secret preservation, inline PEM values, generated self-signed
 certificates, and cert-manager-managed Secrets.
 
+## Network Segmentation Prerequisite (CNI / NetworkPolicy)
+
+The chart ships a **default-deny** baseline plus a least-privilege allow-list as
+`NetworkPolicy` objects (`networkPolicy.enabled=true` by default; the raw-manifest
+path is `deployments/kubernetes/base/networkpolicy.yaml`). **These objects only
+take effect on a NetworkPolicy-enforcing CNI** — Calico, Cilium, Antrea, or
+similar. On the default kind CNI (`kindnet`) or any CNI that does not implement
+the `networking.k8s.io/v1` NetworkPolicy API, the policies **install but enforce
+nothing** (they are inert). This is a hard prerequisite for the SC-7 / CIS 5.3.1
+boundary controls, not a guarantee.
+
+Two fail-closed values **must** be set for the policies to permit the traffic the
+system needs (left empty they deny, by design):
+
+- `networkPolicy.apiServerCIDRs` — your control-plane / apiserver CIDR(s); without
+  it the webhook and policy-manager cannot reach the kube-apiserver (leader
+  election and TokenReview fail).
+- `networkPolicy.webhook.ingressFrom.ipBlocks` — the control-plane source CIDR(s)
+  the apiserver connects from; without it admission requests to `:8443` are denied.
+
+Verify your CNI actually enforces NetworkPolicy before relying on segmentation:
+
+```bash
+# Apply a deny-all in a throwaway namespace and prove a pod-to-pod call is blocked.
+kubectl create ns np-test
+kubectl -n np-test run a --image=busybox --restart=Never -- sleep 3600
+kubectl -n np-test run b --image=busybox --restart=Never -- sleep 3600
+kubectl -n np-test wait --for=condition=Ready pod/a pod/b
+kubectl -n np-test apply -f - <<'EOF'
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: { name: deny-all, namespace: np-test }
+spec: { podSelector: {}, policyTypes: [Ingress, Egress] }
+EOF
+# Enforcing CNI: the call TIMES OUT (blocked). Non-enforcing CNI (kindnet): it SUCCEEDS.
+kubectl -n np-test exec a -- wget -qO- --timeout=3 \
+  "http://$(kubectl -n np-test get pod b -o jsonpath='{.status.podIP}')" \
+  && echo "NOT enforced (CNI does not implement NetworkPolicy)" \
+  || echo "blocked (CNI enforces NetworkPolicy — expected)"
+kubectl delete ns np-test
+```
+
+The full SC-7 boundary narrative — every allowed flow mapped to its NetworkPolicy
+template, plus the honest CNI-dependency and config-gated caveats — is in
+[docs/compliance/network-architecture.md](docs/compliance/network-architecture.md).
+
 ## Policy Authoring
 
 Policies are namespaced CRDs in `policies.kube-policies.io/v1`. Rules are Rego

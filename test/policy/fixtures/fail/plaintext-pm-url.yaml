@@ -1,0 +1,26 @@
+# NEGATIVE fixture for network.posture (NET-WU-20), evaluated per-document.
+#
+# A Deployment whose POLICY_MANAGER_INTERNAL_URL points at the policy-manager
+# service over plaintext http:// — the TLS-downgrade regression P2 closed
+# (policy-manager serves TLS 1.3, CRY-WU-05/07). The control-plane plaintext
+# rule MUST deny. The *_METRICS_URL env below is intentionally http:// to prove
+# the rule is correctly scoped to control-plane keys and does NOT false-positive
+# on the legitimately-plaintext metrics endpoint (CRY-WU-08).
+#
+# conftest test --namespace network.posture MUST exit non-zero (exactly one deny).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: regression-webhook-plaintext
+  labels:
+    app.kubernetes.io/component: admission-webhook
+spec:
+  template:
+    spec:
+      containers:
+        - name: admission-webhook
+          env:
+            - name: POLICY_MANAGER_INTERNAL_URL
+              value: "http://regression-policy-manager:8080/api/v1/decisions/internal"
+            - name: ADMISSION_WEBHOOK_METRICS_URL
+              value: "http://regression-admission-webhook:9090/metrics"

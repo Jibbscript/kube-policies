@@ -8,6 +8,7 @@ import (
 
 	"github.com/Jibbscript/kube-policies/internal/auth"
 	"github.com/Jibbscript/kube-policies/internal/config"
+	"github.com/Jibbscript/kube-policies/internal/middleware"
 )
 
 // NewAPIRouter returns the gin.Engine that backs the policy-manager API on
@@ -29,7 +30,7 @@ import (
 //
 // CORS is intentionally not configured here: the policy-manager API is
 // deployed behind an ingress/mesh that owns CORS, auth, and TLS termination.
-func NewAPIRouter(m *Manager, authCfg config.AuthConfig, rbacCfg config.RBACConfig, verifier oidcVerifier) *gin.Engine {
+func NewAPIRouter(m *Manager, authCfg config.AuthConfig, rbacCfg config.RBACConfig, verifier oidcVerifier, rlCfg config.RateLimitConfig, rlMetrics middleware.Metrics) *gin.Engine {
 	gin.SetMode(gin.ReleaseMode)
 	router := gin.New()
 	// Trust no proxy headers: c.ClientIP() returns the non-spoofable direct
@@ -40,6 +41,8 @@ func NewAPIRouter(m *Manager, authCfg config.AuthConfig, rbacCfg config.RBACConf
 	_ = router.SetTrustedProxies(nil)
 	router.Use(gin.Recovery())
 
+	// Health endpoints are registered BEFORE the rate-limit middleware so the
+	// kubelet probes are never throttled (NET-WU-15).
 	router.GET("/healthz", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"status": "healthy"})
 	})
@@ -47,9 +50,30 @@ func NewAPIRouter(m *Manager, authCfg config.AuthConfig, rbacCfg config.RBACConf
 		c.JSON(http.StatusOK, gin.H{"status": "ready"})
 	})
 
+	// Rate-limiting / DoS-protection (NET-WU-15, RES-WU-17): token-bucket rate
+	// limit + in-flight concurrency cap (429) + request-body cap (413), applied
+	// to the API groups below. A dedicated StreamGate (separate from the general
+	// concurrency cap) bounds the long-lived /decisions/stream connections so SSE
+	// subscribers cannot exhaust the request limiter (NET-WU-15).
+	limiter := middleware.New(middleware.Config{
+		RequestsPerSecond: rlCfg.RequestsPerSecond,
+		Burst:             rlCfg.Burst,
+		MaxConcurrent:     rlCfg.MaxConcurrent,
+		MaxBodyBytes:      rlCfg.MaxBodyBytes,
+		Enabled:           rlCfg.Enabled,
+	}, rlMetrics)
+	requestLimit := limiter.RequestMiddleware()
+	var streamGate gin.HandlerFunc
+	if rlCfg.Enabled {
+		streamGate = middleware.NewStreamGate(rlCfg.MaxStreamConnections, "/api/v1/decisions/stream", rlMetrics).Middleware()
+	} else {
+		streamGate = func(c *gin.Context) { c.Next() }
+	}
+
 	// Management plane: human-facing CRUD + read RPCs. Guarded by OIDC authN +
-	// RBAC when enabled.
+	// RBAC when enabled, and the rate-limit middleware always.
 	mgmt := router.Group("/api/v1")
+	mgmt.Use(requestLimit)
 	if authCfg.Enabled && verifier != nil {
 		mgmt.Use(OIDCAuthMiddleware(verifier, authCfg), RBACMiddleware(rbacCfg))
 	}
@@ -103,12 +127,16 @@ func NewAPIRouter(m *Manager, authCfg config.AuthConfig, rbacCfg config.RBACConf
 	// non-cluster/demo (static-mode) deployments. Only OIDC human-auth is exempt
 	// here, NOT authentication itself.
 	decisions := router.Group("/api/v1")
+	decisions.Use(requestLimit)
 	{
 		decisions.POST("/decisions/internal", m.IngestInternal)
 		// The read feeds are service-authed via DecisionsReadAuth (dashboard-SA
 		// TokenReview + static fallback), applied per-route so /internal keeps
-		// its own webhook-SA pin in IngestInternal.
-		decisions.GET("/decisions/stream", m.DecisionsReadAuth(), m.StreamDecisions)
+		// its own webhook-SA pin in IngestInternal. The stream gate caps
+		// concurrent SSE connections (NET-WU-15) and is applied before the auth
+		// middleware so an over-cap connection is rejected with 429 without a
+		// TokenReview round-trip.
+		decisions.GET("/decisions/stream", streamGate, m.DecisionsReadAuth(), m.StreamDecisions)
 		decisions.GET("/decisions/recent", m.DecisionsReadAuth(), m.RecentDecisions)
 	}
 

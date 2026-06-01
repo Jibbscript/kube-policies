@@ -1,0 +1,14 @@
+# NEGATIVE fixture for network.posture (NET-WU-20), evaluated per-document.
+#
+# A Namespace that is missing the PSA-restricted labels: enforce is set to
+# "baseline" (weaker than restricted) and audit/warn are absent entirely. All
+# three pod-security.kubernetes.io/* labels must equal "restricted"; this
+# Namespace satisfies none, so the per-document PSA rule MUST deny.
+#
+# conftest test --namespace network.posture MUST exit non-zero.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: regression-unrestricted
+  labels:
+    pod-security.kubernetes.io/enforce: baseline

@@ -65,6 +65,20 @@ var (
 	// this to keep the HTTP API functional with bundled defaults only.
 	disableControllers = flag.Bool("disable-controllers", false, "Disable CRD reconcilers; serve only bundled defaults via the HTTP API.")
 
+	// Rate-limiting / DoS-protection flag overrides (NET-WU-15, RES-WU-17).
+	// Sentinel "use config" defaults: -1 for numeric limits, false for the
+	// disable switch. A non-negative override wins over security.ratelimit.*.
+	rateLimitDisabled       = flag.Bool("ratelimit-disabled", false, "Disable the HTTP rate-limit / DoS-protection middleware (overrides security.ratelimit.enabled)")
+	rateLimitRPS            = flag.Float64("ratelimit-requests-per-second", -1, "Sustained request rate (req/s); -1 uses security.ratelimit.requests_per_second")
+	rateLimitBurst          = flag.Int("ratelimit-burst", -1, "Token-bucket burst depth; -1 uses security.ratelimit.burst")
+	rateLimitMaxConcurrent  = flag.Int("ratelimit-max-concurrent", -1, "Max in-flight requests; -1 uses security.ratelimit.max_concurrent")
+	rateLimitMaxBodyBytes   = flag.Int64("ratelimit-max-body-bytes", -1, "Max request body size in bytes (413 when exceeded); -1 uses security.ratelimit.max_body_bytes")
+	rateLimitMaxStreamConns = flag.Int("ratelimit-max-stream-connections", -1, "Max concurrent SSE stream connections; -1 uses security.ratelimit.max_stream_connections")
+
+	// maxConcurrentReconciles bounds the per-reconciler worker pool (RES-WU-17).
+	// <= 0 defers to the policymanager package default (2).
+	maxConcurrentReconciles = flag.Int("max-concurrent-reconciles", 2, "Max concurrent reconciles per CRD reconciler (RES-WU-17 DoS protection)")
+
 	version = "dev"
 	commit  = "unknown"
 	date    = "unknown"
@@ -305,9 +319,41 @@ func main() {
 		}
 	}()
 
+	// Rate-limiting / DoS-protection config (NET-WU-15, RES-WU-17). Flags
+	// override the config-file values (security.ratelimit.*). The SSE stream cap
+	// (max_stream_connections) bounds the long-lived /decisions/stream
+	// connections separately from the general concurrency cap.
+	rlCfg := cfg.Security.RateLimit
+	if *rateLimitDisabled {
+		rlCfg.Enabled = false
+	}
+	if *rateLimitRPS >= 0 {
+		rlCfg.RequestsPerSecond = *rateLimitRPS
+	}
+	if *rateLimitBurst >= 0 {
+		rlCfg.Burst = *rateLimitBurst
+	}
+	if *rateLimitMaxConcurrent >= 0 {
+		rlCfg.MaxConcurrent = *rateLimitMaxConcurrent
+	}
+	if *rateLimitMaxBodyBytes >= 0 {
+		rlCfg.MaxBodyBytes = *rateLimitMaxBodyBytes
+	}
+	if *rateLimitMaxStreamConns >= 0 {
+		rlCfg.MaxStreamConnections = *rateLimitMaxStreamConns
+	}
+	log.Info("policy-manager rate-limiting configured",
+		zap.Bool("enabled", rlCfg.Enabled),
+		zap.Float64("requests_per_second", rlCfg.RequestsPerSecond),
+		zap.Int("burst", rlCfg.Burst),
+		zap.Int("max_concurrent", rlCfg.MaxConcurrent),
+		zap.Int64("max_body_bytes", rlCfg.MaxBodyBytes),
+		zap.Int("max_stream_connections", rlCfg.MaxStreamConnections),
+	)
+
 	apiServer := &http.Server{
 		Addr:         fmt.Sprintf(":%d", *port),
-		Handler:      policymanager.NewAPIRouter(policyManager, cfg.Security.Authentication, cfg.Security.RBAC, apiVerifier),
+		Handler:      policymanager.NewAPIRouter(policyManager, cfg.Security.Authentication, cfg.Security.RBAC, apiVerifier, rlCfg, metricsCollector),
 		TLSConfig:    tlsConf,
 		ReadTimeout:  30 * time.Second,
 		WriteTimeout: 30 * time.Second,
@@ -403,6 +449,9 @@ func main() {
 				PolicySink:              policyManager,
 				ExceptionSink:           policyManager,
 				// DisableLeaderElection: zero value (false) → election ENABLED.
+				// Bound the reconciler worker pool (RES-WU-17). <= 0 defers to
+				// the package default (2).
+				MaxConcurrentReconciles: *maxConcurrentReconciles,
 			}
 			if err := policymanager.StartControllers(ctx, restCfg, log, opts); err != nil && !errors.Is(err, context.Canceled) {
 				log.Error("CRD controller manager exited with error", zap.Error(err))

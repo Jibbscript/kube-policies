@@ -1,13 +1,13 @@
 ---
 title: "System & Communications Protection Procedures (SC) — Kube-Policies (KP)"
 control_family: "SC — System and Communications Protection"
-controls: "SC-1, SC-7, SC-8, SC-8(1), SC-12, SC-13, SC-17"
-version: "0.1.0"
+controls: "SC-1, SC-5, SC-7, SC-7(3), SC-7(4), SC-7(5), SC-7(7), SC-8, SC-8(1), SC-12, SC-13, SC-17"
+version: "0.2.0"
 status: "Draft"
 owner: "System Owner (TBD — assign)"
 approver: "Authorizing Official (TBD — assign)"
-last_reviewed: "2026-05-31"
-next_review: "2027-05-31"
+last_reviewed: "2026-06-01"
+next_review: "2027-06-01"
 ---
 
 # System & Communications Protection Procedures — Kube-Policies (KP)
@@ -100,6 +100,73 @@ handshake without a client cert must be rejected; the webhook logs `mtls_enforce
 at startup. If `--client-ca-path` is unset the webhook runs server-auth-only (permissive)
 and logs a warning — this is the documented default and a tracked gap, not a silent
 failure.
+
+## 2A SC-7 — NetworkPolicy / network-segmentation verification
+
+The full design and the every-flow→template map are in
+`docs/compliance/network-architecture.md`. The NetworkPolicy objects ship in the chart
+(`charts/kube-policies/templates/networkpolicy-*.yaml`, `networkPolicy.enabled` default true)
+and in the static base manifest (`deployments/kubernetes/base/networkpolicy.yaml`), but they
+**enforce nothing unless the CNI implements NetworkPolicy**.
+
+### 2A.1 Confirm the CNI enforces NetworkPolicy (PREREQUISITE — CIS 5.3.1)
+
+Do this first; if it fails, the policies below are inert and SC-7 segmentation is **not**
+in effect regardless of what `kubectl get networkpolicy` shows.
+
+```console
+kubectl create ns np-test
+kubectl -n np-test run a --image=busybox --restart=Never -- sleep 3600
+kubectl -n np-test run b --image=busybox --restart=Never -- sleep 3600
+kubectl -n np-test wait --for=condition=Ready pod/a pod/b
+kubectl -n np-test apply -f - <<'EOF'
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: { name: deny-all, namespace: np-test }
+spec: { podSelector: {}, policyTypes: [Ingress, Egress] }
+EOF
+# Enforcing CNI (Calico/Cilium/Antrea) -> TIMES OUT (blocked, expected).
+# Non-enforcing CNI (kindnet) -> SUCCEEDS (NOT enforced — segmentation inert).
+kubectl -n np-test exec a -- wget -qO- --timeout=3 \
+  "http://$(kubectl -n np-test get pod b -o jsonpath='{.status.podIP}')"
+kubectl delete ns np-test
+```
+
+### 2A.2 Confirm the policy set rendered and is fail-closed where expected
+
+```console
+# With the dashboard enabled, expect the default-deny baseline plus the least-privilege
+# allow-list (11 NetworkPolicy objects):
+kubectl -n kube-policies-system get networkpolicy
+# Default-deny baseline selects every pod with no allow rules:
+kubectl -n kube-policies-system get networkpolicy <release>-default-deny -o yaml \
+  | grep -A3 'policyTypes'
+# Fail-closed-until-configured: with networkPolicy.apiServerCIDRs / webhook.ingressFrom empty,
+# the egress-apiserver and ingress-webhook policies render with NO peers (deny). Setting the
+# control-plane CIDRs is REQUIRED for leader election / TokenReview / admission to work.
+```
+
+A green CNI probe (2A.1) plus the rendered fail-closed/allow-list (2A.2) is the SC-7 /
+SC-7(3)/(4)/(5)/(7) enforcement evidence. **Until 2A.1 is run on an enforcing CNI in the
+target environment, report SC-7 as "Implemented (Helm) — requires enforcing CNI; live proof
+pending", not as enforced.**
+
+## 2B SC-5 — Denial-of-service protection verification
+
+```console
+# Rate-limit / body-cap / concurrency rejections increment this metric:
+curl -s http://<pod>:<metrics-port>/metrics | grep kube_policies_http_rate_limited_total
+# Exceed the body cap (default 3 MiB) -> HTTP 413:
+head -c 4194304 /dev/zero | curl -s -o /dev/null -w '%{http_code}\n' \
+  --data-binary @- http://<webhook>:8443/validate   # expect 413
+# Flood beyond ~50 rps / burst 100 -> HTTP 429 (reason="rate"); saturate in-flight -> 429
+# (reason="concurrency"); >100 concurrent SSE streams -> 429 (reason="stream_capacity").
+```
+
+The limits are configured via `rateLimit.*` (default on) and are **per replica**. The
+optional namespace ResourceQuota/LimitRange (`resourceQuota.enabled` / `limitRange.enabled`)
+ship **off by default**; when enabled, verify with
+`kubectl -n kube-policies-system get resourcequota,limitrange`.
 
 ## 3 Certificate and key management / rotation (SC-12 / SC-17)
 
@@ -203,10 +270,13 @@ referenced from the SSP (`ssp/SSP.md`). These procedures are reviewed at least a
 ## 7 References
 
 - SC policy: `docs/compliance/policies/SC-policy.md`
+- Network boundary & segmentation architecture (SC-7/CA-3): `docs/compliance/network-architecture.md`
+- NetworkPolicy templates: `charts/kube-policies/templates/networkpolicy-*.yaml` · static base: `deployments/kubernetes/base/networkpolicy.yaml`
+- Rate-limit / DoS middleware (SC-5): `internal/middleware/ratelimit.go`
 - Cert rotation runbook: `docs/runbooks/cert-rotation.md` · Internal-token rotation: `docs/runbooks/internal-token-rotation.md`
 - Cryptographic module (SC-13): `crypto-module.md` · Cryptographic standards (SC-12/13/17): `crypto-standards.md`
 - TLS conformance test: `internal/config/tls_conformance_test.go` · TLS config: `internal/config/tls.go` · Hot reload: `internal/tlsreload`
 - Webhook TLS bootstrap: `charts/kube-policies/templates/admission-webhook-tls.yaml`, `charts/kube-policies/templates/certificate.yaml`, `charts/kube-policies/templates/issuer.yaml` · `scripts/gen-webhook-cert.sh`
 - FIPS self-test: `internal/cryptofips/fips.go` · Audit integrity: `internal/audit/integrity.go`
 - System facts: `system-facts.md` · Compliance index: [README](../README.md)
-- NIST SP 800-53 Rev 5 (SC-7, SC-8, SC-8(1), SC-12, SC-13, SC-17); FedRAMP Moderate baseline; FIPS 140-3.
+- NIST SP 800-53 Rev 5 (SC-5, SC-7, SC-7(3)(4)(5)(7), SC-8, SC-8(1), SC-12, SC-13, SC-17, CA-3); FedRAMP Moderate baseline; CIS Kubernetes 5.3.1/5.3.2; FIPS 140-3.

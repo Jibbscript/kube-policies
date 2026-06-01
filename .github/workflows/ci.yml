@@ -671,6 +671,211 @@ jobs:
         path: report-*.json
         if-no-files-found: ignore
 
+  # Network-posture gate (NET-WU-20, NIST SC-7 / CIS 5.3.2). Pure static
+  # render-then-scan (no cluster, no images) so it runs in parallel with lint —
+  # NO needs:. Renders the chart with network-segmentation + namespace creation
+  # on and fails the build when: the fail-closed default-deny NetworkPolicy is
+  # missing, a per-component ingress NetworkPolicy (webhook :8443 / policy-manager
+  # :8080 / metrics) is absent, a shipped Namespace is not PSA-restricted, or a
+  # control-plane inter-service URL is plaintext http://. Mirrors rbac-sa-gate.
+  network-posture-gate:
+    name: Network-Posture Gate
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      CONFTEST_VERSION: '0.68.2'
+      # sha256 of conftest_${CONFTEST_VERSION}_Linux_x86_64.tar.gz, from the
+      # published checksums.txt of the pinned release. Verified with sha256sum -c.
+      CONFTEST_SHA256: 'e8144c6d6d2ae0260b869caa60c7c262a1f95ac63ec1e5d2fb19be452d606347'
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+
+    - name: Install Helm
+      uses: azure/setup-helm@dda3372f752e03dde6b3237bc9431cdc2f7a02a2  # v5.0.0
+
+    - name: Install conftest (pinned, checksum-verified)
+      run: |
+        set -euo pipefail
+        asset="conftest_${CONFTEST_VERSION}_Linux_x86_64.tar.gz"
+        url="https://github.com/open-policy-agent/conftest/releases/download/v${CONFTEST_VERSION}/${asset}"
+        curl -fsSL -o "${asset}" "${url}"
+        echo "${CONFTEST_SHA256}  ${asset}" | sha256sum -c -
+        tar -xzf "${asset}" conftest
+        sudo install -m 0755 conftest /usr/local/bin/conftest
+        conftest --version
+
+    - name: Render chart (network segmentation + namespace on)
+      run: |
+        # Render a realistically-CONFIGURED install: an operator has supplied the
+        # control-plane sources, so the fail-closed-until-configured allow-flows
+        # (webhook ingress :8443, apiserver egress) are populated and the gate can
+        # assert they are present AND scoped. With the shipped empty defaults these
+        # flows render deny (correct fail-closed posture, but nothing for rule 4 to
+        # find). The gate validates a deployable config, not the bare defaults.
+        helm template kube-policies charts/kube-policies \
+          --set dashboard.enabled=true \
+          --set namespace.create=true \
+          --set 'networkPolicy.webhook.ingressFrom.ipBlocks={10.0.0.0/24}' \
+          --set 'networkPolicy.apiServerCIDRs={10.0.0.0/24}' > rendered-network.yaml
+
+    - name: Conftest — network posture (per-document)
+      run: |
+        set -euo pipefail
+        echo "==> per-document scan: rendered-network.yaml"
+        conftest test --policy test/policy \
+          --namespace network.posture rendered-network.yaml
+
+    - name: Conftest — network posture (--combine existence checks)
+      run: |
+        set -euo pipefail
+        echo "==> --combine scan: rendered-network.yaml"
+        conftest test --combine --policy test/policy \
+          --namespace network.posture rendered-network.yaml
+
+    # Keystone regression proof: removing the default-deny NetworkPolicy template
+    # MUST fail the build. Strip the default-deny document from the render and
+    # confirm the --combine existence check now denies (non-zero). A passing
+    # default-deny-removed render == dead gate -> fail the build immediately.
+    - name: Default-deny regression proof (removed default-deny MUST be denied)
+      run: |
+        set -euo pipefail
+        awk '
+          /# Source: kube-policies\/templates\/networkpolicy-default-deny.yaml/ {drop=1}
+          drop==1 && /^---$/ && seen==1 {drop=0}
+          drop==1 && /^---$/ {seen=1}
+          drop!=1 {print}
+        ' rendered-network.yaml > rendered-no-default-deny.yaml
+        if grep -q 'podSelector: {}' rendered-no-default-deny.yaml; then
+          echo "::error::test setup error — default-deny doc was not stripped"
+          exit 1
+        fi
+        if conftest test --combine --policy test/policy \
+            --namespace network.posture rendered-no-default-deny.yaml; then
+          echo "::error::NETWORK GATE DEAD: chart without a default-deny NetworkPolicy passed — the keystone existence rule is broken"
+          exit 1
+        fi
+        echo "OK — conftest correctly denied the default-deny-removed render"
+
+    # CONF-1: Policy self-test — each negative fixture MUST make conftest exit
+    # non-zero. If a fixture exits 0 the deny rule is silently broken and we
+    # must fail the build immediately (a passing fail-fixture == dead gate).
+    - name: Policy self-test (fail fixtures must be denied)
+      run: |
+        set -euo pipefail
+        broken=0
+
+        # Per-document fixtures: PSA-restricted + plaintext control-plane URL +
+        # unscoped allow-all-on-port NetworkPolicy rule.
+        for fx in \
+            test/policy/fixtures/fail/namespace-not-restricted.yaml \
+            test/policy/fixtures/fail/plaintext-pm-url.yaml \
+            test/policy/fixtures/fail/unscoped-ingress.yaml; do
+          echo "==> self-test (per-doc): ${fx}"
+          if conftest test --policy test/policy \
+              --namespace network.posture "${fx}"; then
+            echo "::error::POLICY SELF-TEST FAILED: ${fx} produced 0 denies — the deny rule is broken"
+            broken=1
+          else
+            echo "    OK — conftest correctly denied ${fx}"
+          fi
+        done
+
+        # --combine fixture: default-deny / per-component ingress existence.
+        for fx in \
+            test/policy/fixtures/fail/no-default-deny.yaml; do
+          echo "==> self-test (--combine): ${fx}"
+          if conftest test --combine --policy test/policy \
+              --namespace network.posture "${fx}"; then
+            echo "::error::POLICY SELF-TEST FAILED: ${fx} produced 0 denies — the deny rule is broken"
+            broken=1
+          else
+            echo "    OK — conftest correctly denied ${fx}"
+          fi
+        done
+
+        if [ "${broken}" -ne 0 ]; then
+          echo "::error::One or more policy self-tests failed — a deny rule is not firing. Fix the Rego before merging."
+          exit 1
+        fi
+        echo "All policy self-tests passed — every fail fixture was correctly denied."
+
+    - name: Generate conftest report
+      if: always()
+      run: |
+        set -uo pipefail
+        [ -f rendered-network.yaml ] || exit 0
+        conftest test --policy test/policy \
+          --namespace network.posture \
+          --output json rendered-network.yaml > report-network-perdoc.json || true
+        conftest test --combine --policy test/policy \
+          --namespace network.posture \
+          --output json rendered-network.yaml > report-network-combine.json || true
+
+    - name: Upload conftest report
+      if: always()
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+      with:
+        name: network-posture-gate-report
+        path: report-network-*.json
+        if-no-files-found: ignore
+
+  # Monitoring-rules gate (NET-WU-23, NIST SI-4). Validates every standalone
+  # Prometheus rule file under monitoring/prometheus/rules/ with promtool, and
+  # runs the promtool unit tests (*_test.yml) that drive each alert. Catches a
+  # syntactically-broken rule or an alert whose expression no longer fires.
+  # promtool ships in the official Prometheus release tarball (pinned + checksum-
+  # verified). `go install` is intentionally NOT used: the prometheus go.mod
+  # carries replace directives that make `go install .../cmd/promtool` fail.
+  monitoring-rules:
+    name: Monitoring Rules (promtool)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      PROMETHEUS_VERSION: '2.53.5'
+      # sha256 of prometheus-${PROMETHEUS_VERSION}.linux-amd64.tar.gz, from the
+      # published sha256sums.txt of the pinned LTS release. Verified with
+      # sha256sum -c against the upstream checksum file.
+      PROMETHEUS_SHA256: '456eb31530484d181e860e329fa0c6628e79eb388fac670cdeb4fa5d57c74ed9'
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+
+    - name: Install promtool (pinned, checksum-verified)
+      run: |
+        set -euo pipefail
+        asset="prometheus-${PROMETHEUS_VERSION}.linux-amd64.tar.gz"
+        url="https://github.com/prometheus/prometheus/releases/download/v${PROMETHEUS_VERSION}/${asset}"
+        curl -fsSL -o "${asset}" "${url}"
+        echo "${PROMETHEUS_SHA256}  ${asset}" | sha256sum -c -
+        tar -xzf "${asset}" "prometheus-${PROMETHEUS_VERSION}.linux-amd64/promtool"
+        sudo install -m 0755 "prometheus-${PROMETHEUS_VERSION}.linux-amd64/promtool" /usr/local/bin/promtool
+        promtool --version
+
+    - name: Promtool — check rules (all standalone rule files)
+      run: |
+        set -euo pipefail
+        # Exclude *_test.yml — those are promtool unit-test files (rule_files/tests
+        # schema), not rule definitions, so `check rules` would reject them.
+        if [ "$(find monitoring/prometheus/rules -name '*.yml' ! -name '*_test.yml' | wc -l)" -eq 0 ]; then
+          echo "::error::no Prometheus rule files found under monitoring/prometheus/rules"
+          exit 1
+        fi
+        find monitoring/prometheus/rules -name '*.yml' ! -name '*_test.yml' -print0 \
+          | sort -z | xargs -0 promtool check rules
+
+    - name: Promtool — run unit tests
+      run: |
+        set -euo pipefail
+        if [ "$(find monitoring/prometheus/rules -name '*_test.yml' | wc -l)" -eq 0 ]; then
+          echo "::error::no promtool unit-test files (*_test.yml) found under monitoring/prometheus/rules"
+          exit 1
+        fi
+        find monitoring/prometheus/rules -name '*_test.yml' -print0 \
+          | sort -z | xargs -0 promtool test rules
+
   # GAP 2: actionlint workflow linter — gates on actionlint's own native rules.
   # shellcheck is intentionally disabled (-shellcheck=) because GitHub-hosted
   # runners ship shellcheck on PATH and actionlint would otherwise surface 20
@@ -735,11 +940,11 @@ jobs:
     name: CI Gate
     runs-on: ubuntu-latest
     if: always()
-    needs: [lint, unit-tests, fips-verify, build-images, integration-tests, e2e-kind, e2e-k3s, security-scan, helm-tests, docs-tests, rbac-sa-gate, actionlint, govulncheck]
+    needs: [lint, unit-tests, fips-verify, build-images, integration-tests, e2e-kind, e2e-k3s, security-scan, helm-tests, docs-tests, rbac-sa-gate, network-posture-gate, monitoring-rules, actionlint, govulncheck]
     steps:
     - name: Verify all required jobs succeeded
       run: |
-        results="${{ needs.lint.result }} ${{ needs.unit-tests.result }} ${{ needs.fips-verify.result }} ${{ needs.build-images.result }} ${{ needs.integration-tests.result }} ${{ needs.e2e-kind.result }} ${{ needs.e2e-k3s.result }} ${{ needs.security-scan.result }} ${{ needs.helm-tests.result }} ${{ needs.docs-tests.result }} ${{ needs.rbac-sa-gate.result }} ${{ needs.actionlint.result }} ${{ needs.govulncheck.result }}"
+        results="${{ needs.lint.result }} ${{ needs.unit-tests.result }} ${{ needs.fips-verify.result }} ${{ needs.build-images.result }} ${{ needs.integration-tests.result }} ${{ needs.e2e-kind.result }} ${{ needs.e2e-k3s.result }} ${{ needs.security-scan.result }} ${{ needs.helm-tests.result }} ${{ needs.docs-tests.result }} ${{ needs.rbac-sa-gate.result }} ${{ needs.network-posture-gate.result }} ${{ needs.monitoring-rules.result }} ${{ needs.actionlint.result }} ${{ needs.govulncheck.result }}"
         echo "job results: ${results}"
         # shellcheck disable=SC2086
         for r in ${results}; do

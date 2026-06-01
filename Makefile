@@ -188,6 +188,11 @@ test-kind: ## Run tests on Kind cluster
 	@echo "$(BLUE)Running Kind cluster tests...$(NC)"
 	$(SCRIPTS_DIR)/test/test-kind.sh
 
+.PHONY: test-netpol-e2e
+test-netpol-e2e: ## Prove NetworkPolicy segmentation on a Calico (enforcing CNI) Kind cluster (P4 exit gate)
+	@echo "$(BLUE)Running NetworkPolicy segmentation E2E (Calico-enforced Kind)...$(NC)"
+	$(SCRIPTS_DIR)/test/test-netpol-e2e.sh
+
 .PHONY: test-k3s
 test-k3s: ## Run tests on k3s cluster (requires sudo)
 	@echo "$(BLUE)Running k3s cluster tests...$(NC)"
@@ -310,6 +315,20 @@ validate-rbac: ## Gate RBAC + ServiceAccount-token least-privilege (IAM-WU-17) v
 		exit 1; \
 	fi
 	@echo "$(GREEN)RBAC/SA-token least-privilege gate passed (policy self-test green)$(NC)"
+
+.PHONY: validate-monitoring-rules
+validate-monitoring-rules: ## Validate Prometheus rules + run promtool unit tests (NET-WU-23)
+	@echo "$(BLUE)Validating Prometheus rules and running promtool unit tests (NET-WU-23)...$(NC)"
+	@command -v promtool >/dev/null 2>&1 || { echo "$(RED)promtool not found — install Prometheus (https://prometheus.io/download/) and rerun$(NC)"; exit 127; }
+	@rule_files="$$(find monitoring/prometheus/rules -name '*.yml' ! -name '*_test.yml' | sort)"; \
+	test -n "$$rule_files" || { echo "$(RED)no Prometheus rule files found$(NC)" >&2; exit 1; }; \
+	echo "==> promtool check rules"; \
+	promtool check rules $$rule_files
+	@test_files="$$(find monitoring/prometheus/rules -name '*_test.yml' | sort)"; \
+	test -n "$$test_files" || { echo "$(RED)no promtool unit-test files (*_test.yml) found$(NC)" >&2; exit 1; }; \
+	echo "==> promtool test rules"; \
+	promtool test rules $$test_files
+	@echo "$(GREEN)Prometheus rule validation + unit tests passed$(NC)"
 
 .PHONY: validate-compliance
 validate-compliance: ## Validate compliance artifacts (control matrix, POA&M, inventory, doc links) offline

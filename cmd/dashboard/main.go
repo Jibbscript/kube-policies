@@ -19,6 +19,7 @@ import (
 	"github.com/Jibbscript/kube-policies/internal/auth"
 	"github.com/Jibbscript/kube-policies/internal/config"
 	"github.com/Jibbscript/kube-policies/internal/cryptofips"
+	"github.com/Jibbscript/kube-policies/internal/middleware"
 	"github.com/Jibbscript/kube-policies/internal/tlsreload"
 	"github.com/Jibbscript/kube-policies/pkg/logger"
 )
@@ -161,12 +162,45 @@ func newAPIServer(ctx context.Context, cfg *Config, log *zap.Logger) (*http.Serv
 	router.Use(cspMiddleware(cfg.CSPUnsafeInlineStyle))
 	router.Use(secureHeadersMiddleware(cfg))
 
+	// Health endpoints are registered BEFORE the rate-limit middleware so the
+	// kubelet probes are never throttled (NET-WU-15).
 	router.GET("/healthz", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"status": "healthy"})
 	})
 	router.GET("/readyz", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"status": "ready"})
 	})
+
+	// Rate-limiting / DoS-protection (NET-WU-15, RES-WU-17): token-bucket rate
+	// limit + in-flight concurrency cap (429) + request-body cap (413), plus a
+	// dedicated SSE connection gate (NET-WU-15) on /api/decisions/stream so
+	// long-lived browser streams cannot exhaust the general concurrency budget.
+	// The dashboard does not run its own metrics.Collector (it scrapes upstream
+	// /metrics), so a nil metrics is passed — rejections are enforced but not
+	// counted by a dashboard-local counter.
+	limiter := middleware.New(middleware.Config{
+		RequestsPerSecond: cfg.RateLimitRPS,
+		Burst:             cfg.RateLimitBurst,
+		MaxConcurrent:     cfg.RateLimitMaxConcurrent,
+		MaxBodyBytes:      cfg.RateLimitMaxBodyBytes,
+		Enabled:           cfg.RateLimitEnabled,
+	}, nil)
+	requestLimit := limiter.RequestMiddleware()
+	router.Use(requestLimit)
+	var streamGate gin.HandlerFunc
+	if cfg.RateLimitEnabled {
+		streamGate = middleware.NewStreamGate(cfg.MaxSSEConnections, "/api/decisions/stream", nil).Middleware()
+	} else {
+		streamGate = func(c *gin.Context) { c.Next() }
+	}
+	log.Info("dashboard rate-limiting configured",
+		zap.Bool("enabled", cfg.RateLimitEnabled),
+		zap.Float64("requests_per_second", cfg.RateLimitRPS),
+		zap.Int("burst", cfg.RateLimitBurst),
+		zap.Int("max_concurrent", cfg.RateLimitMaxConcurrent),
+		zap.Int64("max_body_bytes", cfg.RateLimitMaxBodyBytes),
+		zap.Int("max_sse_connections", cfg.MaxSSEConnections),
+	)
 
 	ring := NewRing(100)
 
@@ -247,7 +281,9 @@ func newAPIServer(ctx context.Context, cfg *Config, log *zap.Logger) (*http.Serv
 	authed.Use(authn.middleware())
 	authed.GET("/api/metrics/summary", NewMetricsHandler(cfg, log))
 	authed.GET("/api/decisions/recent", NewRecentHandler(ring, log))
-	authed.GET("/api/decisions/stream", subscriber.Handler())
+	// streamGate caps concurrent SSE connections (NET-WU-15); placed before the
+	// SSE handler so an over-cap connection is rejected with 429 immediately.
+	authed.GET("/api/decisions/stream", streamGate, subscriber.Handler())
 	// Wildcard match — Gin requires distinct method registration for the
 	// shared prefix, so we register the common verbs explicitly. Disallowed
 	// verbs are rejected inside the proxy handler (verb gate); unknown verbs

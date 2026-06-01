@@ -18,9 +18,12 @@ most controls are **Planned** or **Partial** and statuses are tracked in the
 2027-05-29) and upon any significant change to the system.
 
 > Honesty note: "current" descriptions reflect the as-built PoC, which has known foundational gaps
-> (no validated FIPS module, unauthenticated planes, no NetworkPolicy, audit on `emptyDir`,
-> untrustworthy CI). These are recorded in the [POA&M](../poam.csv) and remediated across phases
-> P1–P12. Nothing here should be read as an authorization to operate.
+> (no validated FIPS module, audit on `emptyDir`, untrustworthy CI, and planes whose
+> authentication/TLS are config-gated and off by default). NetworkPolicy segmentation now ships
+> in the chart (P4) but **requires a NetworkPolicy-enforcing CNI** and its live e2e proof is not
+> yet run, so SC-7 is "Implemented (Helm) — requires enforcing CNI", not enforced by default.
+> These are recorded in the [POA&M](../poam.csv) and remediated across phases P1–P12. Nothing
+> here should be read as an authorization to operate.
 
 ---
 
@@ -203,7 +206,12 @@ re-reviewed on significant architectural change.
 
 ### 7.18 SC — System and Communications Protection
 
-Implementation: see remediating phase; status tracked in ../control-matrix.csv
+Implementation: see the [SC policy (SC-1/5/7/8)](../policies/SC-policy.md), the
+[SC procedures](../procedures/SC-procedures.md), and the
+[network boundary & segmentation architecture (SC-7/CA-3)](../network-architecture.md), which
+maps every allowed network flow to its shipped NetworkPolicy template (default-deny baseline +
+least-privilege allow-list, requiring a NetworkPolicy-enforcing CNI) and documents the SC-5
+denial-of-service protections. Per-control status tracked in ../control-matrix.csv.
 
 ### 7.19 SI — System and Information Integrity
 

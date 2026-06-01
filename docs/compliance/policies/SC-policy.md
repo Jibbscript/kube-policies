@@ -1,13 +1,13 @@
 ---
 title: "System & Communications Protection Policy (SC) — Kube-Policies (KP)"
 control_family: "SC — System and Communications Protection"
-controls: "SC-1, SC-7, SC-8, SC-8(1), SC-12, SC-13"
-version: "0.1.0"
+controls: "SC-1, SC-5, SC-7, SC-7(3), SC-7(4), SC-7(5), SC-7(7), SC-8, SC-8(1), SC-12, SC-13"
+version: "0.2.0"
 status: "Draft"
 owner: "System Owner (TBD — assign)"
 approver: "Authorizing Official (TBD — assign)"
-last_reviewed: "2026-05-31"
-next_review: "2027-05-31"
+last_reviewed: "2026-06-01"
+next_review: "2027-06-01"
 ---
 
 # System & Communications Protection Policy — Kube-Policies (KP)
@@ -15,19 +15,26 @@ next_review: "2027-05-31"
 This policy establishes the System and Communications Protection requirements for the
 Kube-Policies system (KP), categorized **FIPS-199 Moderate** under **NIST SP 800-53
 Rev 5** (FedRAMP **Moderate** baseline). It implements control **SC-1 (Policy and
-Procedures)** and the SC controls that protect KP at its boundary and in transit:
-**SC-7 (Boundary Protection)**, **SC-8 / SC-8(1) (Transmission Confidentiality and
-Integrity)**, **SC-12 (Cryptographic Key Establishment and Management)**, and
-**SC-13 (Cryptographic Protection)**. It is the SC-family anchor; the operational
-verification and rotation steps live in the companion `docs/compliance/procedures/SC-procedures.md`.
+Procedures)** and the SC controls that protect KP at its boundary, against
+denial-of-service, and in transit: **SC-5 (Denial-of-Service Protection)**,
+**SC-7 (Boundary Protection)** with enhancements **SC-7(3)/(4)/(5)/(7)**,
+**SC-8 / SC-8(1) (Transmission Confidentiality and Integrity)**, **SC-12
+(Cryptographic Key Establishment and Management)**, and **SC-13 (Cryptographic
+Protection)**. It is the SC-family anchor; the operational verification and
+rotation steps live in the companion `docs/compliance/procedures/SC-procedures.md`,
+and the SC-7 boundary/segmentation narrative (every allowed flow mapped to its
+NetworkPolicy template) is in `docs/compliance/network-architecture.md`.
 
 Kube-Policies is presently a **Proof-of-Concept being driven to assessment readiness**;
 it is **not yet authorized** (no ATO) and not in production use. This policy documents the
 protection *discipline* the program operates under and the controls that are *actually
 implemented* in the shipped code and Helm chart — it is not a claim that every SC control
-is fully met. Several boundary protections (apiserver-side mutual TLS for `ICX-01`,
-NetworkPolicy, authentication of the metrics and management planes) are **Partial** or
-**Planned**; per-control status is tracked in the control matrix (`control-matrix.csv`)
+is fully met. The NetworkPolicy segmentation (SC-7) now **ships in the chart** but is
+**Implemented (Helm) — requires a NetworkPolicy-enforcing CNI** (Calico/Cilium/Antrea); on a
+non-enforcing CNI (e.g. kindnet) the objects are inert. Several other boundary protections
+(apiserver-side mutual TLS for `ICX-01`, dashboard user authentication, authentication of
+the metrics plane) remain **Partial** or **config-gated and off by default**; per-control
+status is tracked in the control matrix (`control-matrix.csv`)
 and open weaknesses in the POA&M (`poam.csv`), with remediation phases (P0–P12) defined
 in `.omc/plans/PRODUCTION-READINESS-FEDRAMP-CIS.md`.
 
@@ -106,6 +113,18 @@ ports enumerated in `ssp/ports-protocols-services.md`.
 
 ### 3.2 Implemented boundary controls (current, honest)
 
+- **Network segmentation — default-deny + least-privilege allow-list (SC-7, SC-7(3),
+  SC-7(4), SC-7(5), SC-7(7)).** The Helm chart renders a `podSelector:{}` default-deny
+  baseline (`charts/kube-policies/templates/networkpolicy-default-deny.yaml`) plus a minimum
+  allow-list — apiserver→webhook `:8443`, webhook+dashboard→policy-manager `:8080`,
+  scoped egress to kube-dns `:53` and the operator-set apiserver CIDRs, scraper→metrics, and
+  ingress→dashboard `:8090`. The static base manifest
+  (`deployments/kubernetes/base/networkpolicy.yaml`) mirrors the same set for raw `kubectl
+  apply`. **This is Implemented (Helm) but requires a NetworkPolicy-enforcing CNI** to take
+  effect (Calico/Cilium/Antrea); on a non-enforcing CNI the objects are inert. The
+  apiserver-egress and webhook-ingress policies render **fail-closed** when their CIDR lists
+  are empty (the shipped defaults). Every allowed flow is mapped to its template in
+  `docs/compliance/network-architecture.md`; this is also the CA-3 scoped-flow record.
 - **Defined, minimal interfaces.** Each component exposes only the ports recorded in
   `system-facts.md`: `AST-WH` on `8443/tcp` (TLS 1.3 `/validate`,`/mutate`) plus `9090/tcp`
   metrics; `AST-PM` on `8080/tcp` REST `/api/v1` plus `9091/tcp` metrics; `AST-DB` on
@@ -124,19 +143,56 @@ ports enumerated in `ssp/ports-protocols-services.md`.
 
 ### 3.3 Known boundary gaps (Partial / Planned — do not overstate)
 
-The following boundary protections are **not** yet implemented and are tracked in
-`poam.csv` and the phased plan:
+The following boundary protections are **partial, config-gated, or environment-dependent**
+and are tracked in `poam.csv` and the phased plan:
 
-- **No NetworkPolicy** restricting east-west traffic to/from the namespace (Planned).
-- **Management and metrics planes are unauthenticated by default.** The policy-manager
-  REST API on `8080/tcp`, the dashboard on `8090/tcp`, and the `9090/9091/9092` metrics
-  endpoints ship without user/peer authentication unless the optional TLS/bearer features
-  in §4 are enabled; OIDC/authZ is Planned (P2/P3).
-- **`ICX-01` apiserver-side mutual TLS** (the apiserver presenting a client cert) depends
-  on cluster configuration and is Planned (P3); the webhook side supports it today (§5).
+- **NetworkPolicy enforcement depends on the CNI.** The policy objects ship (§3.2) but a
+  NetworkPolicy-enforcing CNI (Calico/Cilium/Antrea) is a **hard prerequisite**; on kindnet
+  or any non-enforcing CNI they are inert. The live end-to-end enforcement proof on an
+  enforcing CNI is **designed but not yet executed live** (see
+  `docs/compliance/network-architecture.md` §7) — it must not be reported as a passed test.
+- **NetworkPolicy fail-closed-until-configured.** The apiserver-egress and webhook-ingress
+  policies deny their flow when `networkPolicy.apiServerCIDRs` / `webhook.ingressFrom` are
+  empty (shipped defaults); the operator must set the control-plane CIDRs.
+- **Dashboard user authentication is config-gated and OFF by default** (`DASHBOARD_AUTH_MODE`);
+  the default dashboard on `8090/tcp` is unauthenticated. In-pod dashboard TLS
+  (`DASHBOARD_TLS_ENABLED`) is likewise off by default.
+- **Metrics plane authentication is optional.** The `9090/9091/9092` metrics endpoints ship
+  unauthenticated unless `metrics.tls.enabled` (WH/PM) is set; dashboard `/metrics` (`9092`)
+  is never bearer-authenticated (tracked gap).
+- **`ICX-01` apiserver-side mutual TLS** (the apiserver presenting a client cert) depends on
+  cluster configuration and is Planned (P3); the webhook binary defaults `--require-client-cert`
+  true (fail-closed) but the chart value `admissionWebhook.tls.requireClientCert` defaults
+  false for dev (§5).
 
 No boundary control may be reported as Implemented in the SSP beyond what this section
-states.
+states; the NetworkPolicy controls are reported as **Implemented (Helm) — requires enforcing
+CNI**, not "enforced by default".
+
+### 3.4 SC-5 — Denial-of-Service Protection
+
+**Policy statement.** KP shall protect its availability against resource-exhaustion and
+request-flood denial of service at the application layer and, where the operator enables it,
+at the namespace resource-budget layer.
+
+**Implemented posture (current, honest).**
+
+- **Per-replica request rate limiting + caps.** `internal/middleware/ratelimit.go` is mounted
+  on the webhook and policy-manager routers and enforces a token-bucket limiter (default
+  **50 rps / burst 100**) returning `429`, a non-blocking **max-in-flight concurrency cap
+  (100)** returning `429` (requests are rejected, never queued, so the apiserver admission
+  timeout is not consumed), a **request-body cap (3 MiB)** returning `413`, and a separate
+  **SSE stream-connection cap (100)** returning `429`. Limits are **per pod**; the cluster
+  ceiling is roughly `limit × replicaCount`. Rejections are counted on
+  `kube_policies_http_rate_limited_total{handler,reason}`. Enabled by default (`rateLimit.*`).
+- **Bounded controller concurrency.** `MaxConcurrentReconciles` is bounded (default **2**).
+- **Optional namespace ResourceQuota + LimitRange.** `resourceQuota` and `limitRange` cap
+  aggregate/per-container compute. **Both ship OFF by default** (a mis-sized quota can block
+  the chart's own pods); operators size and enable them per topology — mark **Partial /
+  config-dependent**, not enforced by default.
+- **Fail-closed admission** ensures an overloaded webhook denies rather than admits.
+
+Details and the SC-5 verification are in `docs/compliance/network-architecture.md` §5.
 
 ## 4 SC-8 / SC-8(1) — Transmission Confidentiality and Integrity (TLS in transit)
 
@@ -280,6 +336,7 @@ only as an **inherited** control; it implements no in-app at-rest encryption.
 ## 8 References
 
 - SC procedures: `docs/compliance/procedures/SC-procedures.md`
+- Network boundary & segmentation architecture (SC-7/CA-3, every allowed flow → NetworkPolicy template): `docs/compliance/network-architecture.md`
 - Cryptographic module (SC-13): `crypto-module.md` · Cryptographic standards (SC-12/13/17): `crypto-standards.md`
 - Secrets at rest (SC-28): `secrets-at-rest.md` · Secure configuration baseline: `secure-configuration-baseline.md`
 - System facts: `system-facts.md` · Interconnections (`ICX-01..06`): `interconnections.md` · PPS register: `ssp/ports-protocols-services.md`

@@ -1,4 +1,20 @@
 {{- if and .Values.dashboard.enabled .Values.dashboard.ingress.enabled }}
+{{- /* NET-WU-16/17: assemble the effective annotation set. Generated DoS + forced-
+       TLS annotations form the base; the source-range allowlist is added when set;
+       operator-supplied .ingress.annotations are merged LAST so they win on any key
+       conflict. mergeOverwrite mutates its first arg, so we start from a fresh dict. */ -}}
+{{- $annotations := dict -}}
+{{- $dos := .Values.dashboard.ingress.dosProtection -}}
+{{- if $dos.enabled -}}
+  {{- $_ := set $annotations "nginx.ingress.kubernetes.io/limit-rps" (printf "%v" $dos.limitRps) -}}
+  {{- $_ := set $annotations "nginx.ingress.kubernetes.io/limit-connections" (printf "%v" $dos.limitConnections) -}}
+  {{- $_ := set $annotations "nginx.ingress.kubernetes.io/ssl-redirect" "true" -}}
+  {{- $_ := set $annotations "nginx.ingress.kubernetes.io/force-ssl-redirect" "true" -}}
+{{- end -}}
+{{- if .Values.dashboard.ingress.sourceRanges -}}
+  {{- $_ := set $annotations "nginx.ingress.kubernetes.io/whitelist-source-range" (join "," .Values.dashboard.ingress.sourceRanges) -}}
+{{- end -}}
+{{- $annotations = mergeOverwrite $annotations (.Values.dashboard.ingress.annotations | default dict) -}}
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
@@ -7,7 +23,7 @@ metadata:
   labels:
     {{- include "kube-policies.labels" . | nindent 4 }}
     app.kubernetes.io/component: dashboard
-  {{- with .Values.dashboard.ingress.annotations }}
+  {{- with $annotations }}
   annotations:
     {{- toYaml . | nindent 4 }}
   {{- end }}

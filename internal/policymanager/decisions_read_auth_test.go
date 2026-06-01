@@ -14,6 +14,8 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/kubernetes/fake"
 	clienttesting "k8s.io/client-go/testing"
+
+	"github.com/Jibbscript/kube-policies/internal/config"
 )
 
 // dashboardSA is the dashboard ServiceAccount username the decisions-read
@@ -55,7 +57,7 @@ func reviewAuthenticatedAs(username string, audiences ...string) func() (runtime
 func doReadRequest(t *testing.T, m *Manager, path, token string) *httptest.ResponseRecorder {
 	t.Helper()
 	v := newHermeticVerifier(t)
-	router := NewAPIRouter(m, testAuthConfig(), rbacTestConfig(), v)
+	router := NewAPIRouter(m, testAuthConfig(), rbacTestConfig(), v, config.RateLimitConfig{}, nil)
 	req := httptest.NewRequest(http.MethodGet, path, strings.NewReader(""))
 	if token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)

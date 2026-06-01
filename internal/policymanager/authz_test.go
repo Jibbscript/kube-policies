@@ -76,7 +76,7 @@ func TestRBACMiddleware_RoleVerbMatrix(t *testing.T) {
 	authCfg := testAuthConfig()
 	rbacCfg := rbacTestConfig()
 	m := newTestManagerWithPolicy(t, newPrivilegedPolicy())
-	router := NewAPIRouter(m, authCfg, rbacCfg, v)
+	router := NewAPIRouter(m, authCfg, rbacCfg, v, config.RateLimitConfig{}, nil)
 
 	tokens := map[string]string{
 		"none":   tokenForGroups(t, []string{"grp-unmapped"}),
@@ -157,7 +157,7 @@ func TestRBACMiddleware_RoleVerbMatrix(t *testing.T) {
 func TestAPIRouter_ManagementPlaneRequiresAuthN(t *testing.T) {
 	v := newHermeticVerifier(t)
 	m := newTestManagerWithPolicy(t, newPrivilegedPolicy())
-	router := NewAPIRouter(m, testAuthConfig(), rbacTestConfig(), v)
+	router := NewAPIRouter(m, testAuthConfig(), rbacTestConfig(), v, config.RateLimitConfig{}, nil)
 
 	t.Run("no bearer => 401", func(t *testing.T) {
 		code := doRBACRequest(t, router, http.MethodGet, "/api/v1/policies", "", "")
@@ -191,7 +191,7 @@ func TestAPIRouter_DecisionsPlaneIsOIDCExempt(t *testing.T) {
 	m := newTestManagerWithPolicy(t, newPrivilegedPolicy())
 	// No reviewer and no static token configured: the decisions auth layer must
 	// still reject an unauthenticated read (an empty verifier is not a wildcard).
-	router := NewAPIRouter(m, testAuthConfig(), rbacTestConfig(), v)
+	router := NewAPIRouter(m, testAuthConfig(), rbacTestConfig(), v, config.RateLimitConfig{}, nil)
 
 	// stream + recent are no longer unauthenticated: with no token they 401 via
 	// the DecisionsReadAuth service-token middleware.

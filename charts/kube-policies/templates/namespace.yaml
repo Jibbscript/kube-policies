@@ -1,0 +1,16 @@
+{{- /* NET-WU-19: optional Namespace with Pod Security Admission labels.
+       Gated on namespace.create (default false) — the common path is
+       `helm install --create-namespace`, which provisions the namespace before
+       the release objects and conflicts with the chart also rendering it. See
+       the namespace.* block in values.yaml. */ -}}
+{{- if .Values.namespace.create }}
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ .Release.Namespace }}
+  labels:
+    {{- include "kube-policies.labels" . | nindent 4 }}
+    pod-security.kubernetes.io/enforce: {{ .Values.namespace.podSecurity.enforce }}
+    pod-security.kubernetes.io/audit: {{ .Values.namespace.podSecurity.audit }}
+    pod-security.kubernetes.io/warn: {{ .Values.namespace.podSecurity.warn }}
+{{- end }}

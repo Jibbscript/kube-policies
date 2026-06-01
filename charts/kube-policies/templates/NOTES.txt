@@ -89,3 +89,48 @@ Two image conventions are used in this chart:
   and the registry is SUPPRESSED to prevent double-prefixing. To use a mirror, set
   dashboard.image.registry=<mirror> AND dashboard.image.repository=kube-policies/dashboard
   (host-less), or leave registry empty and override the full repository instead.
+{{- if .Values.networkPolicy.enabled }}
+
+## Network segmentation (NetworkPolicy)
+
+networkPolicy.enabled=true: a default-deny baseline plus least-privilege allow
+policies are installed (SC-7 / CIS 5.3.1-5.3.2). Your CNI MUST enforce
+NetworkPolicy (Calico, Cilium, Antrea, ...) or these objects are inert. The
+default kind CNI (kindnet) does NOT enforce NetworkPolicy — the objects install
+but block nothing there.
+
+  Verify your CNI actually enforces NetworkPolicy (deny-all probe):
+    kubectl create ns np-test
+    kubectl -n np-test run a --image=busybox --restart=Never -- sleep 3600
+    kubectl -n np-test run b --image=busybox --restart=Never -- sleep 3600
+    kubectl -n np-test wait --for=condition=Ready pod/a pod/b
+    kubectl -n np-test apply -f - <<'EOF'
+    apiVersion: networking.k8s.io/v1
+    kind: NetworkPolicy
+    metadata: { name: deny-all, namespace: np-test }
+    spec: { podSelector: {}, policyTypes: [Ingress, Egress] }
+    EOF
+    # Enforcing CNI -> the call TIMES OUT (blocked). kindnet -> it SUCCEEDS.
+    kubectl -n np-test exec a -- wget -qO- --timeout=3 \
+      "http://$(kubectl -n np-test get pod b -o jsonpath='{.status.podIP}')"
+    kubectl delete ns np-test
+
+  Full SC-7 flow map + honest CNI/config caveats:
+    docs/compliance/network-architecture.md
+{{- if not .Values.networkPolicy.apiServerCIDRs }}
+
+  ⚠ networkPolicy.apiServerCIDRs is EMPTY. The apiserver-egress policy is rendered
+    fail-closed (no egress peers), so the admission-webhook and policy-manager
+    CANNOT reach the kube-apiserver — leader election and TokenReview auth will
+    FAIL. Set networkPolicy.apiServerCIDRs to your control-plane CIDR(s), e.g.:
+      --set 'networkPolicy.apiServerCIDRs={10.96.0.1/32}'
+{{- end }}
+{{- if and .Values.admissionWebhook.enabled (not (or .Values.networkPolicy.webhook.ingressFrom.ipBlocks .Values.networkPolicy.webhook.ingressFrom.namespaceSelectors)) }}
+
+  ⚠ networkPolicy.webhook.ingressFrom is EMPTY. The webhook-ingress policy is
+    rendered fail-closed (no `from`), so the kube-apiserver CANNOT reach the
+    webhook on :8443 and admission requests will FAIL (failurePolicy=Fail).
+    Set networkPolicy.webhook.ingressFrom.ipBlocks to the control-plane CIDR(s):
+      --set 'networkPolicy.webhook.ingressFrom.ipBlocks={10.0.0.0/24}'
+{{- end }}
+{{- end }}

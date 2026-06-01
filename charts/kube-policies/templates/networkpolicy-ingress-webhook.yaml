@@ -1,0 +1,42 @@
+{{- /* NET-WU-04: admission-webhook ingress on :8443 from the control plane.
+       Sources come from networkPolicy.webhook.ingressFrom (ipBlock CIDRs and/or
+       namespaceSelectors). When BOTH are empty the policy renders selecting the
+       webhook pods with policyTypes [Ingress] and an EMPTY ingress rule set,
+       which DENIES all ingress (fail-closed) — NOTES.txt warns the operator.
+       The entire `- ports:` rule item is gated on a non-empty peer set: a rule
+       with `ports` but no `from` would match EVERY source (allow-all-on-port),
+       so the rule is only emitted once scoped peers exist (cf. egress-apiserver). */ -}}
+{{- if and .Values.networkPolicy.enabled .Values.admissionWebhook.enabled }}
+{{- $from := .Values.networkPolicy.webhook.ingressFrom }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "kube-policies.fullname" . }}-ingress-webhook
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kube-policies.labels" . | nindent 4 }}
+    app.kubernetes.io/component: admission-webhook
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "kube-policies.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: admission-webhook
+  policyTypes:
+    - Ingress
+  ingress:
+    {{- if or $from.ipBlocks $from.namespaceSelectors }}
+    - ports:
+        - protocol: TCP
+          port: 8443
+      from:
+        {{- range $from.ipBlocks }}
+        - ipBlock:
+            cidr: {{ . | quote }}
+        {{- end }}
+        {{- range $from.namespaceSelectors }}
+        - namespaceSelector:
+            matchLabels:
+              {{- toYaml . | nindent 14 }}
+        {{- end }}
+    {{- end }}
+{{- end }}

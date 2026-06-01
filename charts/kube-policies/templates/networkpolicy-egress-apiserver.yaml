@@ -1,0 +1,42 @@
+{{- /* NET-WU-03: kube-apiserver egress for the webhook (leader election +
+       TokenReview) and the policy-manager (TokenReview). Kubernetes attaches no
+       label to apiserver endpoints, so the allow target is expressed as ipBlock
+       CIDRs (networkPolicy.apiServerCIDRs) on networkPolicy.apiServerPorts.
+       When apiServerCIDRs is empty the policy still renders but with an empty
+       egress peer set, which DENIES apiserver egress (fail-closed) — NOTES.txt
+       warns the operator. We intentionally do NOT fall back to 0.0.0.0/0. */ -}}
+{{- if .Values.networkPolicy.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "kube-policies.fullname" . }}-egress-apiserver
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kube-policies.labels" . | nindent 4 }}
+    app.kubernetes.io/component: network-policy
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "kube-policies.selectorLabels" . | nindent 6 }}
+    matchExpressions:
+      - key: app.kubernetes.io/component
+        operator: In
+        values:
+          - admission-webhook
+          - policy-manager
+  policyTypes:
+    - Egress
+  egress:
+    {{- if .Values.networkPolicy.apiServerCIDRs }}
+    - to:
+        {{- range .Values.networkPolicy.apiServerCIDRs }}
+        - ipBlock:
+            cidr: {{ . | quote }}
+        {{- end }}
+      ports:
+        {{- range .Values.networkPolicy.apiServerPorts }}
+        - protocol: TCP
+          port: {{ . }}
+        {{- end }}
+    {{- end }}
+{{- end }}

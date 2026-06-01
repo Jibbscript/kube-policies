@@ -23,6 +23,7 @@ import (
 	"github.com/Jibbscript/kube-policies/internal/config"
 	"github.com/Jibbscript/kube-policies/internal/cryptofips"
 	"github.com/Jibbscript/kube-policies/internal/metrics"
+	"github.com/Jibbscript/kube-policies/internal/middleware"
 	"github.com/Jibbscript/kube-policies/internal/policy"
 	"github.com/Jibbscript/kube-policies/internal/policymanager"
 	"github.com/Jibbscript/kube-policies/internal/tlsreload"
@@ -96,6 +97,23 @@ var (
 	// disableDefaults skips loading the bundled default policies entirely.
 	// Useful for testing with a clean engine or deploying with only user-defined policies.
 	disableDefaults = flag.Bool("disable-default-policies", false, "Skip loading bundled default policies")
+
+	// Rate-limiting / DoS-protection flag overrides (NET-WU-14, RES-WU-17).
+	// Each defaults to a sentinel that means "use the config-file value"
+	// (security.ratelimit.*): -1 for the numeric limits, false for the
+	// disable switch. A non-negative override wins over config. The webhook is
+	// on the cluster's critical write path, so the config defaults are tuned to
+	// reject floods without throttling legitimate apiserver admission traffic;
+	// see internal/config/config.go RateLimitConfig.
+	rateLimitDisabled      = flag.Bool("ratelimit-disabled", false, "Disable the HTTP rate-limit / DoS-protection middleware (overrides security.ratelimit.enabled)")
+	rateLimitRPS           = flag.Float64("ratelimit-requests-per-second", -1, "Sustained request rate (req/s) for the rate limiter; -1 uses security.ratelimit.requests_per_second")
+	rateLimitBurst         = flag.Int("ratelimit-burst", -1, "Token-bucket burst depth; -1 uses security.ratelimit.burst")
+	rateLimitMaxConcurrent = flag.Int("ratelimit-max-concurrent", -1, "Max in-flight requests; -1 uses security.ratelimit.max_concurrent")
+	rateLimitMaxBodyBytes  = flag.Int64("ratelimit-max-body-bytes", -1, "Max request body size in bytes (413 when exceeded); -1 uses security.ratelimit.max_body_bytes")
+
+	// maxConcurrentReconciles bounds the per-reconciler worker pool (RES-WU-17).
+	// <= 0 defers to the policymanager package default (2).
+	maxConcurrentReconciles = flag.Int("max-concurrent-reconciles", 2, "Max concurrent reconciles per CRD reconciler (RES-WU-17 DoS protection)")
 
 	version = "dev"
 	commit  = "unknown"
@@ -242,11 +260,32 @@ func main() {
 	// Initialize admission controller
 	admissionController := admission.NewController(policyEngine, auditLogger, metricsCollector, log, publisher)
 
+	// Rate-limiting / DoS-protection config (NET-WU-14, RES-WU-17). Flags
+	// override the config-file values so an operator can tune limits without
+	// editing the ConfigMap. The webhook is on the cluster's critical write
+	// path; see config.RateLimitConfig for the defaults' rationale.
+	rlCfg := cfg.Security.RateLimit
+	if *rateLimitDisabled {
+		rlCfg.Enabled = false
+	}
+	if *rateLimitRPS >= 0 {
+		rlCfg.RequestsPerSecond = *rateLimitRPS
+	}
+	if *rateLimitBurst >= 0 {
+		rlCfg.Burst = *rateLimitBurst
+	}
+	if *rateLimitMaxConcurrent >= 0 {
+		rlCfg.MaxConcurrent = *rateLimitMaxConcurrent
+	}
+	if *rateLimitMaxBodyBytes >= 0 {
+		rlCfg.MaxBodyBytes = *rateLimitMaxBodyBytes
+	}
+
 	// Setup webhook server. TLS parameters (min version, cipher suites,
 	// client auth) are driven by cfg.Security.TLS rather than hardcoded
 	// literals (CRY-WU-03). A startup failure here is fatal — serving on a
 	// misconfigured TLS stack would be worse than not serving.
-	webhookServer, err := setupWebhookServer(admissionController, &cfg.Security.TLS, *requireClientCert, log)
+	webhookServer, err := setupWebhookServer(admissionController, &cfg.Security.TLS, *requireClientCert, rlCfg, metricsCollector, log)
 	if err != nil {
 		log.Fatal("Failed to build webhook TLS server", zap.Error(err))
 	}
@@ -383,6 +422,9 @@ func main() {
 			// (read side); constructed above and passed to
 			// policy.NewEngineWithExceptions. One struct, two named interfaces.
 			ExceptionSink: excSink,
+			// Bound the reconciler worker pool (RES-WU-17). <= 0 defers to the
+			// package default (2).
+			MaxConcurrentReconciles: *maxConcurrentReconciles,
 		}
 		go func() {
 			log.Info("starting CRD controllers")
@@ -418,12 +460,14 @@ func main() {
 	log.Info("Servers stopped")
 }
 
-func setupWebhookServer(controller *admission.Controller, tlsCfg *config.TLSConfig, requireClientCert bool, log *zap.Logger) (*http.Server, error) {
+func setupWebhookServer(controller *admission.Controller, tlsCfg *config.TLSConfig, requireClientCert bool, rlCfg config.RateLimitConfig, m middleware.Metrics, log *zap.Logger) (*http.Server, error) {
 	gin.SetMode(gin.ReleaseMode)
 	router := gin.New()
 	router.Use(gin.Recovery())
 
-	// Health check endpoints
+	// Health check endpoints. These are registered BEFORE the rate-limit
+	// middleware group so the kubelet liveness/readiness probes (which run
+	// constantly) are never throttled (NET-WU-14).
 	router.GET("/healthz", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"status": "healthy"})
 	})
@@ -432,9 +476,30 @@ func setupWebhookServer(controller *admission.Controller, tlsCfg *config.TLSConf
 		c.JSON(http.StatusOK, gin.H{"status": "ready"})
 	})
 
-	// Admission webhook endpoints
-	router.POST("/validate", controller.ValidateHandler)
-	router.POST("/mutate", controller.MutateHandler)
+	// Rate-limiting / DoS-protection (NET-WU-14, RES-WU-17): a token-bucket rate
+	// limit, an in-flight concurrency cap (429 on either), and a request-body
+	// size cap (413). Applied ONLY to the admission endpoints — the health
+	// probes above bypass it. Defaults are tuned to reject a flood without
+	// throttling legitimate apiserver admission traffic; see config.RateLimitConfig.
+	limiter := middleware.New(middleware.Config{
+		RequestsPerSecond: rlCfg.RequestsPerSecond,
+		Burst:             rlCfg.Burst,
+		MaxConcurrent:     rlCfg.MaxConcurrent,
+		MaxBodyBytes:      rlCfg.MaxBodyBytes,
+		Enabled:           rlCfg.Enabled,
+	}, m)
+	log.Info("webhook rate-limiting configured",
+		zap.Bool("enabled", rlCfg.Enabled),
+		zap.Float64("requests_per_second", rlCfg.RequestsPerSecond),
+		zap.Int("burst", rlCfg.Burst),
+		zap.Int("max_concurrent", rlCfg.MaxConcurrent),
+		zap.Int64("max_body_bytes", rlCfg.MaxBodyBytes),
+	)
+
+	// Admission webhook endpoints, guarded by the rate-limit middleware.
+	admissionGroup := router.Group("", limiter.RequestMiddleware())
+	admissionGroup.POST("/validate", controller.ValidateHandler)
+	admissionGroup.POST("/mutate", controller.MutateHandler)
 
 	// Build the TLS config from configuration rather than hardcoded literals
 	// (CRY-WU-03). Apiserver client-certificate verification (mTLS, CRY-WU-04 /
