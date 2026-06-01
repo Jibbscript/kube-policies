@@ -452,6 +452,13 @@ func main() {
 				// Bound the reconciler worker pool (RES-WU-17). <= 0 defers to
 				// the package default (2).
 				MaxConcurrentReconciles: *maxConcurrentReconciles,
+				// Audit reconcile-driven CRD create/update/delete and exception
+				// expiry, attributed to the controller service account
+				// (AUD-WU-12, AU-2/AU-12). Shares the same audit logger as the
+				// management-plane mutations so all configuration changes land in
+				// one stream. ControllerNamespace is the resolved pod namespace.
+				AuditLogger:         auditLogger,
+				ControllerNamespace: ns,
 			}
 			if err := policymanager.StartControllers(ctx, restCfg, log, opts); err != nil && !errors.Is(err, context.Canceled) {
 				log.Error("CRD controller manager exited with error", zap.Error(err))

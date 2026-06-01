@@ -91,6 +91,10 @@ spec:
                 description: Phase reflects the controller's view of the exception (Pending / Active / Expired / Failed).
                 type: string
                 enum: ["Pending", "Active", "Expired", "Failed"]
+              observedGeneration:
+                description: The .metadata.generation the controller last reconciled (used to dedup reconcile-driven audit records).
+                type: integer
+                format: int64
               conditions:
                 description: Conditions records reconcile-loop transitions for observability.
                 type: array

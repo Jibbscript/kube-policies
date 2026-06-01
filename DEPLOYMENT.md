@@ -20,6 +20,10 @@ This guide provides comprehensive instructions for deploying Kube-Policies in pr
 - RBAC enabled
 - Admission controllers enabled
 - Minimum 3 worker nodes (for HA deployment)
+- **Node time synchronization** (AUD-WU-03, NIST AU-8/AU-8(1)): every cluster
+  node must run NTP/chrony synchronized to a reliable source. Container clocks
+  track the host kernel; audit timestamps are RFC 3339 UTC. See
+  `docs/audit/time-synchronization.md`.
 
 ### Resource Requirements
 

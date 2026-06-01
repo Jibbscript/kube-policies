@@ -46,6 +46,35 @@ func NewController(
 }
 
 // ValidateHandler handles validation admission requests
+// newAuditContext builds the audit.Context common to both admission handlers,
+// populating the AU-3 source-attribution fields (AUD-WU-01) from the inbound
+// *http.Request, the AU-8 dual timestamps (AUD-WU-02), and the AU-12(1)
+// correlation id (AUD-WU-20). SourceIP is the webhook's HTTP peer (the
+// apiserver/proxy hop) — gin must be configured with SetTrustedProxies(nil) so
+// it is not spoofable via X-Forwarded-For (done in setupWebhookServer).
+// APIServerID/AdmissionWebhookConfig are left empty: the AdmissionRequest does
+// not carry them; they are correlated from the apiserver-side audit policy
+// (see docs/audit/cluster-audit-policy.md).
+func (c *Controller) newAuditContext(ginCtx *gin.Context, req *admissionv1.AdmissionRequest, startTime time.Time) *audit.Context {
+	received := startTime.UTC()
+	return &audit.Context{
+		RequestID:                string(req.UID),
+		UserInfo:                 req.UserInfo,
+		Namespace:                req.Namespace,
+		Kind:                     req.Kind,
+		Name:                     req.Name,
+		Operation:                string(req.Operation),
+		Object:                   &req.Object,
+		OldObject:                &req.OldObject,
+		Timestamp:                received,
+		RequestReceivedTimestamp: received,
+		CorrelationID:            string(req.UID),
+		SourceIP:                 ginCtx.ClientIP(),
+		UserAgent:                ginCtx.Request.UserAgent(),
+		RequestURI:               ginCtx.Request.RequestURI,
+	}
+}
+
 func (c *Controller) ValidateHandler(ctx *gin.Context) {
 	startTime := time.Now()
 
@@ -65,18 +94,9 @@ func (c *Controller) ValidateHandler(ctx *gin.Context) {
 		return
 	}
 
-	// Create audit context
-	auditCtx := &audit.Context{
-		RequestID: string(req.UID),
-		UserInfo:  req.UserInfo,
-		Namespace: req.Namespace,
-		Kind:      req.Kind,
-		Name:      req.Name,
-		Operation: string(req.Operation),
-		Object:    &req.Object,
-		OldObject: &req.OldObject,
-		Timestamp: time.Now(),
-	}
+	// Create audit context (AU-3 attribution + AU-8 dual timestamps + AU-12(1)
+	// correlation id are populated by the shared helper).
+	auditCtx := c.newAuditContext(ctx, req, startTime)
 
 	// Evaluate policies
 	decision, err := c.policyEngine.Evaluate(context.Background(), &policy.EvaluationRequest{
@@ -183,18 +203,9 @@ func (c *Controller) MutateHandler(ctx *gin.Context) {
 		return
 	}
 
-	// Create audit context
-	auditCtx := &audit.Context{
-		RequestID: string(req.UID),
-		UserInfo:  req.UserInfo,
-		Namespace: req.Namespace,
-		Kind:      req.Kind,
-		Name:      req.Name,
-		Operation: string(req.Operation),
-		Object:    &req.Object,
-		OldObject: &req.OldObject,
-		Timestamp: time.Now(),
-	}
+	// Create audit context (AU-3 attribution + AU-8 dual timestamps + AU-12(1)
+	// correlation id are populated by the shared helper).
+	auditCtx := c.newAuditContext(ctx, req, startTime)
 
 	// Evaluate policies for mutations
 	decision, err := c.policyEngine.Evaluate(context.Background(), &policy.EvaluationRequest{

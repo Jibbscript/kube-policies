@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"go.uber.org/zap"
+	authenticationv1 "k8s.io/api/authentication/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -19,6 +20,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
+	"github.com/Jibbscript/kube-policies/internal/audit"
 	"github.com/Jibbscript/kube-policies/internal/policy"
 	policiesv1 "github.com/Jibbscript/kube-policies/internal/policymanager/apis/policies/v1"
 )
@@ -102,6 +104,23 @@ type ControllerOptions struct {
 	// goroutines while still allowing modest parallelism. <= 0 falls back to the
 	// defensive default of 2 so an unset value is never an unbounded worker pool.
 	MaxConcurrentReconciles int
+
+	// AuditLogger records a reconcile-driven ConfigurationChange / system event
+	// for every CRD create/update/delete and exception expiry (AUD-WU-12,
+	// AU-2/AU-12). It is OPTIONAL and NIL-SAFE: a nil logger makes every audit
+	// emission a no-op, so embedders that do not audit reconciles (the
+	// admission-webhook, which already passes nil here) compile and run
+	// unchanged. The policy-manager threads its own *audit.Logger so CRD-driven
+	// registry changes are attributed to the controller service account.
+	AuditLogger *audit.Logger
+
+	// ControllerNamespace is the namespace the controller service account runs
+	// in; it is woven into the synthesized controlling identity recorded on
+	// reconcile audit events (Username
+	// "system:serviceaccount:<ns>:kube-policies-controller"). Empty falls back to
+	// "kube-system" only as a defensive last resort — production callers set it
+	// to the pod namespace (the same value used for LeaderElectionNamespace).
+	ControllerNamespace string
 }
 
 // defaultMaxConcurrentReconciles is the bound applied when
@@ -186,11 +205,26 @@ func StartControllers(ctx context.Context, cfg *rest.Config, log *zap.Logger, op
 		maxConcurrent = defaultMaxConcurrentReconciles
 	}
 
+	// Synthesized controlling identity recorded on reconcile-driven audit events
+	// (AUD-WU-12). It is the controller service account, not a human principal —
+	// CRD reconciliation is a system actor. ControllerNamespace falls back to
+	// kube-system only defensively; production callers set it to the pod namespace.
+	controllerNS := opts.ControllerNamespace
+	if controllerNS == "" {
+		controllerNS = "kube-system"
+	}
+	controllerIdentity := authenticationv1.UserInfo{
+		Username: fmt.Sprintf("system:serviceaccount:%s:kube-policies-controller", controllerNS),
+		Groups:   []string{"system:serviceaccounts", "system:serviceaccounts:" + controllerNS},
+	}
+
 	policyReconciler := &PolicyReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
-		Sink:   opts.PolicySink,
-		Log:    log.Named("policy-reconciler"),
+		Client:   mgr.GetClient(),
+		Scheme:   mgr.GetScheme(),
+		Sink:     opts.PolicySink,
+		Log:      log.Named("policy-reconciler"),
+		Audit:    opts.AuditLogger,
+		Identity: controllerIdentity,
 	}
 	if err := policyReconciler.SetupWithManager(mgr, opts.LeaderlessReconcilers, maxConcurrent); err != nil {
 		return fmt.Errorf("setup Policy reconciler: %w", err)
@@ -198,10 +232,12 @@ func StartControllers(ctx context.Context, cfg *rest.Config, log *zap.Logger, op
 
 	if opts.ExceptionSink != nil {
 		exceptionReconciler := &PolicyExceptionReconciler{
-			Client: mgr.GetClient(),
-			Scheme: mgr.GetScheme(),
-			Sink:   opts.ExceptionSink,
-			Log:    log.Named("exception-reconciler"),
+			Client:   mgr.GetClient(),
+			Scheme:   mgr.GetScheme(),
+			Sink:     opts.ExceptionSink,
+			Log:      log.Named("exception-reconciler"),
+			Audit:    opts.AuditLogger,
+			Identity: controllerIdentity,
 		}
 		if err := exceptionReconciler.SetupWithManager(mgr, opts.LeaderlessReconcilers, maxConcurrent); err != nil {
 			return fmt.Errorf("setup PolicyException reconciler: %w", err)
@@ -229,6 +265,14 @@ type PolicyReconciler struct {
 	Scheme *runtime.Scheme
 	Sink   PolicySink
 	Log    *zap.Logger
+	// Audit records a reconcile-driven ConfigurationChange for every CRD
+	// create/update/delete (AUD-WU-12, AU-2/AU-12). Optional and nil-safe: nil
+	// makes auditReconcile a no-op so embedders that pass no logger are
+	// unaffected.
+	Audit *audit.Logger
+	// Identity is the synthesized controller service-account UserInfo recorded
+	// on the audit events emitted by this reconciler.
+	Identity authenticationv1.UserInfo
 }
 
 // Reconcile is the controller-runtime entry point. The reconcile contract is
@@ -244,6 +288,10 @@ func (r *PolicyReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 			// Policy was deleted at the apiserver — drop it from the sink.
 			// NotFound is not an error from the reconciler's POV.
 			r.Sink.RemovePolicyByID(id)
+			r.auditReconcile("DELETE", "policy", id, map[string]interface{}{
+				"crd_namespace": req.Namespace,
+				"crd_name":      req.Name,
+			})
 			return ctrl.Result{}, nil
 		}
 		return ctrl.Result{}, fmt.Errorf("get Policy %s: %w", req.NamespacedName, err)
@@ -276,7 +324,28 @@ func (r *PolicyReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 
 	r.Sink.UpsertPolicyFromCRD(&crd)
 	r.publishPolicyStatus(ctx, &crd, "Active", metav1.ConditionTrue, "Reconciled", "Policy is loaded into the engine")
+	// A create and an update are indistinguishable at the reconcile level (each is
+	// an idempotent re-read of apiserver state), so we record UPSERT and let the
+	// generation/UID distinguish a first apply from a spec change.
+	r.auditReconcile("UPSERT", "policy", id, map[string]interface{}{
+		"crd_namespace": crd.Namespace,
+		"crd_name":      crd.Name,
+		"uid":           string(crd.UID),
+		"generation":    crd.Generation,
+	})
 	return ctrl.Result{}, nil
+}
+
+// auditReconcile records a reconcile-driven ConfigurationChange attributed to
+// the controller service account (AUD-WU-12, AU-2/AU-12). It is nil-safe: a nil
+// r.Audit makes this a no-op. The correlation id is synthesized by the logger
+// (a reconcile is not part of an inbound HTTP request chain).
+func (r *PolicyReconciler) auditReconcile(verb, resource, id string, changes map[string]interface{}) {
+	if r.Audit == nil {
+		return
+	}
+	changes["controller"] = "reconcile"
+	r.Audit.LogConfigChange(r.Identity, verb, resource, id, changes)
 }
 
 // SetupWithManager wires the reconciler into the controller-runtime manager.
@@ -322,6 +391,13 @@ type PolicyExceptionReconciler struct {
 	Scheme *runtime.Scheme
 	Sink   ExceptionSink
 	Log    *zap.Logger
+	// Audit records a reconcile-driven ConfigurationChange for every
+	// PolicyException create/update/delete and a system event when the reconciler
+	// observes an expired exception (AUD-WU-12, AU-2/AU-12). Optional and nil-safe.
+	Audit *audit.Logger
+	// Identity is the synthesized controller service-account UserInfo recorded on
+	// the audit events emitted by this reconciler.
+	Identity authenticationv1.UserInfo
 }
 
 func (r *PolicyExceptionReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -331,6 +407,10 @@ func (r *PolicyExceptionReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 	if err := r.Get(ctx, req.NamespacedName, &crd); err != nil {
 		if apierrors.IsNotFound(err) {
 			r.Sink.RemoveExceptionByID(id)
+			r.auditReconcile("DELETE", "exception", id, map[string]interface{}{
+				"crd_namespace": req.Namespace,
+				"crd_name":      req.Name,
+			})
 			return ctrl.Result{}, nil
 		}
 		return ctrl.Result{}, fmt.Errorf("get PolicyException %s: %w", req.NamespacedName, err)
@@ -347,12 +427,74 @@ func (r *PolicyExceptionReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 	}
 
 	r.Sink.UpsertExceptionFromCRD(&crd)
+
+	// Capture prior observed state BEFORE publishing the new status, to dedup
+	// reconcile-driven audit records (AUD-WU-12): a periodic resync of an
+	// unchanged exception must NOT flood the audit log. We audit an UPSERT only
+	// when the spec generation advances, and an expiry only on the TRANSITION
+	// into Expired. (publishExceptionStatus is a no-op patch when nothing
+	// changed, so steady state does not even re-reconcile; this guards the 10h
+	// resync and post-restart cases where it does.)
+	priorPhase := crd.Status.Phase
+	priorObservedGen := crd.Status.ObservedGeneration
+
 	phase := "Active"
-	if crd.Spec.ExpiresAt != nil && crd.Spec.ExpiresAt.Time.Before(time.Now()) {
+	expired := crd.Spec.ExpiresAt != nil && crd.Spec.ExpiresAt.Time.Before(time.Now())
+	if expired {
 		phase = "Expired"
 	}
 	r.publishExceptionStatus(ctx, &crd, phase, metav1.ConditionTrue, "Reconciled", "Exception is loaded into the registry")
+
+	if crd.Generation != priorObservedGen {
+		r.auditReconcile("UPSERT", "exception", id, map[string]interface{}{
+			"crd_namespace": crd.Namespace,
+			"crd_name":      crd.Name,
+			"uid":           string(crd.UID),
+			"generation":    crd.Generation,
+			"policy_id":     crd.Spec.PolicyID,
+			"phase":         phase,
+		})
+	}
+	// An exception transitioning INTO phase=Expired is a lifecycle event distinct
+	// from the upsert; record it explicitly (once per transition) so AU-2 expiry
+	// coverage does not depend on a reader inferring expiry from a phase field.
+	if expired && priorPhase != "Expired" {
+		r.auditExpiry(id, crd.Namespace, crd.Name, string(crd.UID), crd.Generation, crd.Spec.PolicyID)
+	}
 	return ctrl.Result{}, nil
+}
+
+// auditReconcile records a reconcile-driven ConfigurationChange attributed to
+// the controller service account (AUD-WU-12). Nil-safe.
+func (r *PolicyExceptionReconciler) auditReconcile(verb, resource, id string, changes map[string]interface{}) {
+	if r.Audit == nil {
+		return
+	}
+	changes["controller"] = "reconcile"
+	r.Audit.LogConfigChange(r.Identity, verb, resource, id, changes)
+}
+
+// auditExpiry records the CRD-reconciler exception-expiry lifecycle event
+// (AUD-WU-12, AU-2). Nil-safe. The controlling identity and resource
+// generation/UID are recorded so the expiry is attributable. This is the
+// CRD-reconciler half of the expiry coverage; the in-memory hourly ticker
+// (Manager.checkExpiredExceptions) records the other half.
+func (r *PolicyExceptionReconciler) auditExpiry(id, ns, name, uid string, generation int64, policyID string) {
+	if r.Audit == nil {
+		return
+	}
+	r.Audit.LogSystemEvent("ExceptionExpired",
+		fmt.Sprintf("policy exception %s expired (reconcile)", id),
+		map[string]interface{}{
+			"controller":    "reconcile",
+			"identity":      r.Identity.Username,
+			"exception_id":  id,
+			"crd_namespace": ns,
+			"crd_name":      name,
+			"uid":           uid,
+			"generation":    generation,
+			"policy_id":     policyID,
+		})
 }
 
 func (r *PolicyExceptionReconciler) SetupWithManager(mgr ctrl.Manager, leaderless bool, maxConcurrent int) error {
@@ -369,6 +511,7 @@ func (r *PolicyExceptionReconciler) SetupWithManager(mgr ctrl.Manager, leaderles
 func (r *PolicyExceptionReconciler) publishExceptionStatus(ctx context.Context, crd *policiesv1.PolicyException, phase string, status metav1.ConditionStatus, reason, message string) {
 	patch := client.MergeFrom(crd.DeepCopy())
 	crd.Status.Phase = phase
+	crd.Status.ObservedGeneration = crd.Generation
 	cond := metav1.Condition{
 		Type:               "Ready",
 		Status:             status,

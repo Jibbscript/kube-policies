@@ -259,13 +259,19 @@ spec:
             name: {{ include "kube-policies.fullname" . }}-config
         - name: tmp
           emptyDir: {}
-        # Writable mount for the audit file backend. readOnlyRootFilesystem
-        # blocks mkdir at /var/log/kube-policies on the pod's overlay; this
-        # emptyDir gives the audit logger a writable directory matching the
-        # default filename. For persistence beyond pod lifetime, replace
-        # with a PVC.
+        # AUD-WU-08 (NIST AU-9/AU-11): writable audit log directory.
+        # readOnlyRootFilesystem blocks mkdir on the overlay; this volume gives
+        # the audit logger a writable directory at the path the ConfigMap targets.
+        # Default: emptyDir (ephemeral, per-pod). When audit.persistence.enabled=true
+        # the emptyDir is replaced by the <fullname>-audit PVC (see
+        # admission-webhook-audit-pvc.yaml).
         - name: audit-log
+          {{- if .Values.audit.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ include "kube-policies.fullname" . }}-audit
+          {{- else }}
           emptyDir: {}
+          {{- end }}
       {{- with .Values.admissionWebhook.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}

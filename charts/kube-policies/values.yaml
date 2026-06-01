@@ -573,6 +573,88 @@ audit:
     # production should supply a CSPRNG-generated key or an external secret.
     key: ""
 
+  # Durable audit storage (AUD-WU-08, NIST AU-9/AU-11).
+  # When enabled, a dedicated PVC named <fullname>-audit is created and mounted
+  # at the audit log directory instead of the default emptyDir.
+  #
+  # IMPORTANT — RWO + replicaCount > 1 WARNING:
+  #   The admission-webhook runs replicaCount: 2 by default. A single
+  #   ReadWriteOnce (RWO) PVC can only be mounted by pods on ONE node at a
+  #   time. If the two webhook replicas land on different nodes the second pod
+  #   will fail to schedule (VolumeMount conflict).
+  #
+  #   Scalable durability options:
+  #   1. Use accessMode: ReadWriteMany (RWX) with a shared filesystem
+  #      StorageClass (NFS, EFS, CephFS, etc.) — all replicas can mount
+  #      simultaneously (logs will be interleaved; ensure the forwarder
+  #      deduplicates).
+  #   2. Set admissionWebhook.replicaCount: 1 when RWX is unavailable.
+  #   3. Preferred at scale: enable audit.forwarder (AUD-WU-10) with a
+  #      forward backend (Loki/Elasticsearch/Splunk/syslog). The DaemonSet
+  #      forwarder ships logs off-pod without requiring shared storage.
+  persistence:
+    enabled: false
+    storageClass: ""
+    # ReadWriteOnce is the safest default but incompatible with replicaCount > 1
+    # on most StorageClasses. Set ReadWriteMany for multi-replica deployments.
+    accessMode: ReadWriteOnce
+    size: 5Gi
+    annotations: {}
+
+  # Audit log-shipping DaemonSet (AUD-WU-10, NIST AU-6).
+  # When enabled, a Fluent Bit DaemonSet tails the webhook's audit log and
+  # forwards to a configurable destination. Disabled by default.
+  forwarder:
+    enabled: false
+
+    image:
+      repository: fluent/fluent-bit
+      tag: "3.3"
+      pullPolicy: IfNotPresent
+
+    # Destination configuration. Set one backend to active: true.
+    # All backends are disabled by default — set your target before enabling.
+    destination:
+      # Loki (push API)
+      loki:
+        enabled: false
+        host: "loki.monitoring.svc.cluster.local"
+        port: 3100
+        labels: "job=kube-policies-audit"
+      # Elasticsearch / OpenSearch
+      elasticsearch:
+        enabled: false
+        host: "elasticsearch.logging.svc.cluster.local"
+        port: 9200
+        index: "kube-policies-audit"
+        tls: false
+      # Splunk HEC
+      splunk:
+        enabled: false
+        host: "splunk.logging.svc.cluster.local"
+        port: 8088
+        token: ""
+        tls: true
+      # Generic syslog (RFC 5424 over TCP/TLS)
+      syslog:
+        enabled: false
+        host: "syslog.logging.svc.cluster.local"
+        port: 514
+        mode: tcp
+
+    resources:
+      requests:
+        cpu: 50m
+        memory: 64Mi
+      limits:
+        cpu: 200m
+        memory: 128Mi
+
+    # Node selector, tolerations, and affinity for the forwarder DaemonSet.
+    nodeSelector: {}
+    tolerations: []
+    affinity: {}
+
 # Persistence Configuration
 persistence:
   enabled: true

@@ -205,7 +205,7 @@ func TestRecentHandler_EmptyRingReportsDegraded(t *testing.T) {
 
 func TestProxy_VerbGate_RejectsWritesWhenDisabled(t *testing.T) {
 	cfg := &Config{PolicyManagerURL: "http://upstream.invalid", AllowWrites: false}
-	proxy, err := NewProxyHandler(cfg, nil, zap.NewNop())
+	proxy, err := NewProxyHandler(cfg, nil, zap.NewNop(), nil)
 	if err != nil {
 		t.Fatalf("NewProxyHandler: %v", err)
 	}
@@ -246,7 +246,7 @@ func TestProxy_ForwardsUserTokenUpstream(t *testing.T) {
 	defer upstream.Close()
 
 	cfg := &Config{PolicyManagerURL: upstream.URL, AllowWrites: true}
-	proxy, err := NewProxyHandler(cfg, nil, zap.NewNop())
+	proxy, err := NewProxyHandler(cfg, nil, zap.NewNop(), nil)
 	if err != nil {
 		t.Fatalf("NewProxyHandler: %v", err)
 	}
@@ -291,7 +291,7 @@ func TestProxy_ReadOnlyRPC_BypassesVerbGate(t *testing.T) {
 	// no server-side mutation. They MUST bypass the AllowWrites gate so
 	// the Playground UX works in the default read-only deployment.
 	cfg := &Config{PolicyManagerURL: "http://upstream.invalid", AllowWrites: false}
-	proxy, err := NewProxyHandler(cfg, nil, zap.NewNop())
+	proxy, err := NewProxyHandler(cfg, nil, zap.NewNop(), nil)
 	if err != nil {
 		t.Fatalf("NewProxyHandler: %v", err)
 	}
@@ -523,7 +523,7 @@ func TestProxy_VerbGate_AllowsWritesWhenEnabled_ButUpstreamDown(t *testing.T) {
 	// which then fails with 502 because http://upstream.invalid doesn't
 	// resolve. That distinguishes "gate blocked" (403) from "gate passed".
 	cfg := &Config{PolicyManagerURL: "http://upstream.invalid", AllowWrites: true}
-	proxy, err := NewProxyHandler(cfg, nil, zap.NewNop())
+	proxy, err := NewProxyHandler(cfg, nil, zap.NewNop(), nil)
 	if err != nil {
 		t.Fatalf("NewProxyHandler: %v", err)
 	}

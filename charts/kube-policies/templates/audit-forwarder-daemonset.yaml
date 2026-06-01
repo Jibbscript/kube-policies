@@ -1,0 +1,210 @@
+{{- if .Values.audit.forwarder.enabled }}
+{{- /*
+AUD-WU-10 (NIST AU-6): audit log-shipping DaemonSet (Fluent Bit).
+
+HONEST source model: this forwarder tails the file audit log on a volume that
+MUST be shared with the admission-webhook pods. Under the restricted Pod
+Security Standard a node-level hostPath tail of /var/log/containers is NOT
+permitted (hostPath is disallowed), so the only restricted-PSS-compliant shared
+source is the audit PVC. We therefore REQUIRE audit.persistence.enabled with a
+cross-node-capable access mode (ReadWriteMany) — otherwise the forwarder would
+tail its own empty per-pod directory and ship nothing. The render fails fast
+rather than deploy a silent no-op. For clusters that prefer stdout-based
+shipping, set the webhook audit backend to "stdout" and use a cluster-wide log
+collector instead of this DaemonSet.
+
+Restricted-PSS controls enforced below: seccomp RuntimeDefault; runAsNonRoot +
+runAsUser/runAsGroup 65534; readOnlyRootFilesystem (writable state via emptyDir);
+allowPrivilegeEscalation false; drop ALL caps; cpu+memory requests AND limits;
+no host namespaces. The pod carries app.kubernetes.io/component=admission-webhook
+so the conftest restricted.pss gate evaluates it.
+*/ -}}
+{{- if not .Values.audit.persistence.enabled }}
+{{- fail "audit.forwarder.enabled=true requires audit.persistence.enabled=true (a shared audit PVC, accessMode ReadWriteMany for multi-node): the forwarder tails the webhook's audit log on a shared volume. Under restricted PSS a hostPath stdout tail is not allowed. To ship via stdout instead, set the webhook audit backend to 'stdout' and use a cluster log collector. See docs/audit/forwarding.md." }}
+{{- end }}
+{{- if and .Values.audit.forwarder.destination.splunk.enabled (not .Values.audit.forwarder.destination.splunk.token) }}
+{{- fail "audit.forwarder.destination.splunk.enabled=true requires audit.forwarder.destination.splunk.token (the Splunk HEC token). Set it (ideally via a value sourced from a Secret) or disable the splunk destination." }}
+{{- end }}
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: {{ include "kube-policies.fullname" . }}-audit-forwarder
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kube-policies.labels" . | nindent 4 }}
+    app.kubernetes.io/component: admission-webhook
+spec:
+  selector:
+    # Distinct app name so the webhook Deployment's selector does not adopt these
+    # pods; component label keeps it in scope for the restricted.pss gate. Built
+    # explicitly (NOT via selectorLabels) so app.kubernetes.io/name appears once.
+    matchLabels:
+      app.kubernetes.io/name: audit-forwarder
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: admission-webhook
+  updateStrategy:
+    type: RollingUpdate
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: audit-forwarder
+        app.kubernetes.io/instance: {{ .Release.Name }}
+        app.kubernetes.io/component: admission-webhook
+    spec:
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        runAsGroup: 65534
+        fsGroup: 65534
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: fluent-bit
+          image: "{{ .Values.audit.forwarder.image.repository }}:{{ .Values.audit.forwarder.image.tag }}"
+          imagePullPolicy: {{ .Values.audit.forwarder.image.pullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 65534
+            runAsGroup: 65534
+            capabilities:
+              drop:
+                - ALL
+            seccompProfile:
+              type: RuntimeDefault
+          resources:
+            {{- toYaml .Values.audit.forwarder.resources | nindent 12 }}
+          volumeMounts:
+            # Read-only mount of the shared audit PVC the webhook writes to.
+            - name: audit-log
+              mountPath: /var/log/kube-policies
+              readOnly: true
+            # Writable buffer/state dir for Fluent Bit internal state.
+            - name: fluent-bit-state
+              mountPath: /fluent-bit/state
+            - name: fluent-bit-config
+              mountPath: /fluent-bit/etc
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        # Audit log source — the SAME PVC the webhook writes (must be RWX for the
+        # webhook and this DaemonSet to share it across nodes; see NOTES.txt).
+        - name: audit-log
+          persistentVolumeClaim:
+            claimName: {{ include "kube-policies.fullname" . }}-audit
+            readOnly: true
+        # Writable buffer for Fluent Bit (tail position DB, internal buffers).
+        - name: fluent-bit-state
+          emptyDir: {}
+        - name: tmp
+          emptyDir: {}
+        - name: fluent-bit-config
+          configMap:
+            name: {{ include "kube-policies.fullname" . }}-audit-forwarder-config
+      {{- with .Values.audit.forwarder.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.audit.forwarder.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.audit.forwarder.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+---
+# Fluent Bit ConfigMap for the audit forwarder.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "kube-policies.fullname" . }}-audit-forwarder-config
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kube-policies.labels" . | nindent 4 }}
+    app.kubernetes.io/component: admission-webhook
+data:
+  fluent-bit.conf: |
+    [SERVICE]
+        Flush         5
+        Daemon        Off
+        Log_Level     info
+        Parsers_File  parsers.conf
+        storage.path  /fluent-bit/state/
+
+    [INPUT]
+        Name          tail
+        Path          /var/log/kube-policies/audit.log
+        Tag           kube-policies.audit
+        DB            /fluent-bit/state/tail.db
+        Read_from_Head True
+        Refresh_Interval 10
+
+    [FILTER]
+        Name          record_modifier
+        Match         kube-policies.audit
+        Record        source kube-policies-admission-webhook
+        Record        namespace {{ .Release.Namespace }}
+{{- if .Values.audit.forwarder.destination.loki.enabled }}
+
+    [OUTPUT]
+        Name          loki
+        Match         kube-policies.audit
+        Host          {{ .Values.audit.forwarder.destination.loki.host }}
+        Port          {{ .Values.audit.forwarder.destination.loki.port }}
+        Labels        {{ .Values.audit.forwarder.destination.loki.labels }}
+        auto_kubernetes_labels off
+{{- end }}
+{{- if .Values.audit.forwarder.destination.elasticsearch.enabled }}
+
+    [OUTPUT]
+        Name          es
+        Match         kube-policies.audit
+        Host          {{ .Values.audit.forwarder.destination.elasticsearch.host }}
+        Port          {{ .Values.audit.forwarder.destination.elasticsearch.port }}
+        Index         {{ .Values.audit.forwarder.destination.elasticsearch.index }}
+        tls           {{ if .Values.audit.forwarder.destination.elasticsearch.tls }}On{{ else }}Off{{ end }}
+{{- end }}
+{{- if .Values.audit.forwarder.destination.splunk.enabled }}
+
+    [OUTPUT]
+        Name          splunk
+        Match         kube-policies.audit
+        Host          {{ .Values.audit.forwarder.destination.splunk.host }}
+        Port          {{ .Values.audit.forwarder.destination.splunk.port }}
+        Splunk_Token  {{ .Values.audit.forwarder.destination.splunk.token }}
+        tls           {{ if .Values.audit.forwarder.destination.splunk.tls }}On{{ else }}Off{{ end }}
+{{- end }}
+{{- if .Values.audit.forwarder.destination.syslog.enabled }}
+
+    [OUTPUT]
+        Name          syslog
+        Match         kube-policies.audit
+        Host          {{ .Values.audit.forwarder.destination.syslog.host }}
+        Port          {{ .Values.audit.forwarder.destination.syslog.port }}
+        Mode          {{ .Values.audit.forwarder.destination.syslog.mode }}
+{{- end }}
+{{- if not (or .Values.audit.forwarder.destination.loki.enabled .Values.audit.forwarder.destination.elasticsearch.enabled .Values.audit.forwarder.destination.splunk.enabled .Values.audit.forwarder.destination.syslog.enabled) }}
+
+    # No destination enabled — logging to stdout as a safe default.
+    # Enable one of audit.forwarder.destination.{loki,elasticsearch,splunk,syslog}
+    # to ship logs to a real backend.
+    [OUTPUT]
+        Name          stdout
+        Match         kube-policies.audit
+{{- end }}
+
+  parsers.conf: |
+    [PARSER]
+        Name          json
+        Format        json
+        Time_Key      timestamp
+        Time_Format   %Y-%m-%dT%H:%M:%S.%LZ
+{{- end }}

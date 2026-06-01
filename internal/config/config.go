@@ -3,10 +3,91 @@ package config
 import (
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/spf13/viper"
 )
+
+// ParseRetention parses an audit-retention duration. It accepts any value
+// time.ParseDuration understands (e.g. "2160h") plus a 'd' (days) suffix
+// (e.g. "90d") that the stdlib parser rejects. Days are exactly 24h. This is
+// the single source of truth for retention parsing across config validation
+// and the audit file backend (AUD-WU-07, AU-11).
+func ParseRetention(s string) (time.Duration, error) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return 0, fmt.Errorf("empty retention")
+	}
+	if strings.HasSuffix(s, "d") {
+		days, err := strconv.Atoi(strings.TrimSuffix(s, "d"))
+		if err != nil {
+			return 0, fmt.Errorf("invalid days value %q: %w", s, err)
+		}
+		if days < 0 {
+			return 0, fmt.Errorf("negative retention %q", s)
+		}
+		return time.Duration(days) * 24 * time.Hour, nil
+	}
+	return time.ParseDuration(s)
+}
+
+// validateAudit validates the audit stanza (AUD-WU-06/07/09/14). Split out from
+// validateConfig so it can be unit-tested without a fully-populated Config.
+func validateAudit(a *AuditConfig) error {
+	if !a.Enabled {
+		return nil
+	}
+	validBackends := []string{"file", "stdout", "forward"}
+	valid := false
+	for _, backend := range validBackends {
+		if a.Backend == backend {
+			valid = true
+			break
+		}
+	}
+	if !valid {
+		return fmt.Errorf("invalid audit backend: %s (supported: file, stdout, forward)", a.Backend)
+	}
+	// Audit integrity (AUD-WU-04/05): if integrity_key_path is present it must be
+	// non-empty — an empty path means the HMAC chain would be silently disabled,
+	// so fail fast rather than ship un-chained "tamper-evident" logs.
+	if v, ok := a.Config["integrity_key_path"]; ok && strings.TrimSpace(v) == "" {
+		return fmt.Errorf("audit integrity_key_path is set but empty; provide the mounted HMAC key path or remove the key")
+	}
+	// AUD-WU-09: the forwarding backend must have a destination, else it would
+	// silently drop every record — the exact failure mode that got the original
+	// webhook/elasticsearch stubs removed.
+	if a.Backend == "forward" && strings.TrimSpace(a.Config["forward_address"]) == "" {
+		return fmt.Errorf("audit backend 'forward' requires config.forward_address (host:port of the SIEM/syslog-TLS receiver)")
+	}
+	// AUD-WU-07 (AU-11): enforce the FedRAMP-Moderate 90-day online-retention
+	// floor. Parsing supports a 'd' suffix that time.ParseDuration does not.
+	if strings.TrimSpace(a.Retention) != "" {
+		d, err := ParseRetention(a.Retention)
+		if err != nil {
+			return fmt.Errorf("invalid audit.retention %q: %w", a.Retention, err)
+		}
+		if d < 90*24*time.Hour {
+			return fmt.Errorf("audit.retention %q is below the FedRAMP-Moderate minimum of 90d (AU-11)", a.Retention)
+		}
+	}
+	// AUD-WU-14: only drop|block are meaningful overflow policies.
+	switch a.OverflowPolicy {
+	case "", "drop", "block":
+	default:
+		return fmt.Errorf("invalid audit.overflow_policy %q (supported: drop, block)", a.OverflowPolicy)
+	}
+	// AUD-WU-06 (AU-4 capacity): negative rotation bounds are invalid.
+	if a.MaxSizeMB < 0 {
+		return fmt.Errorf("audit.max_size_mb must be >= 0, got %d", a.MaxSizeMB)
+	}
+	if a.MaxBackups < 0 {
+		return fmt.Errorf("audit.max_backups must be >= 0, got %d", a.MaxBackups)
+	}
+	return nil
+}
 
 // Config represents the application configuration
 type Config struct {
@@ -36,11 +117,26 @@ type PolicyConfig struct {
 // AuditConfig represents audit logging configuration
 type AuditConfig struct {
 	Enabled       bool              `mapstructure:"enabled"`
-	Backend       string            `mapstructure:"backend"` // "file" or "stdout"
+	Backend       string            `mapstructure:"backend"` // "file", "stdout", or "forward"
 	Config        map[string]string `mapstructure:"config"`
 	BufferSize    int               `mapstructure:"buffer_size"`
 	FlushInterval string            `mapstructure:"flush_interval"`
-	Retention     string            `mapstructure:"retention"`
+	// Retention is the minimum online-retention window for audit records
+	// (AU-11). Accepts Go durations plus a 'd' (days) suffix, e.g. "90d".
+	// FedRAMP-Moderate requires >= 90 days; validateConfig rejects shorter.
+	Retention string `mapstructure:"retention"`
+	// MaxSizeMB caps a single audit file before rotation (AU-4 capacity).
+	MaxSizeMB int `mapstructure:"max_size_mb"`
+	// MaxBackups bounds the number of rotated files kept on disk. 0 keeps all
+	// (retention/age governs deletion instead).
+	MaxBackups int `mapstructure:"max_backups"`
+	// OverflowPolicy controls behavior when the in-memory buffer is full:
+	// "drop" (default, never blocks the hot path) or "block" (fail-closed —
+	// apply backpressure so no audit record is silently lost, AU-5/AU-9).
+	OverflowPolicy string `mapstructure:"overflow_policy"`
+	// RedactObjects redacts Secret/PII payloads (Object/OldObject) before they
+	// are persisted to the durable backend (AU-3(1)/SI-12). Default true.
+	RedactObjects bool `mapstructure:"redact_objects"`
 }
 
 // MetricsConfig represents metrics configuration
@@ -219,6 +315,10 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("audit.buffer_size", 1000)
 	v.SetDefault("audit.flush_interval", "10s")
 	v.SetDefault("audit.retention", "90d")
+	v.SetDefault("audit.max_size_mb", 100)
+	v.SetDefault("audit.max_backups", 0) // 0 = keep all; retention/age governs deletion
+	v.SetDefault("audit.overflow_policy", "drop")
+	v.SetDefault("audit.redact_objects", true)
 
 	// Metrics defaults
 	v.SetDefault("metrics.enabled", true)
@@ -291,25 +391,9 @@ func validateConfig(config *Config) error {
 		return fmt.Errorf("invalid failure mode: %s", config.Policy.FailureMode)
 	}
 
-	// Validate audit configuration
-	if config.Audit.Enabled {
-		validBackends := []string{"file", "stdout"}
-		valid := false
-		for _, backend := range validBackends {
-			if config.Audit.Backend == backend {
-				valid = true
-				break
-			}
-		}
-		if !valid {
-			return fmt.Errorf("invalid audit backend: %s (supported: file, stdout)", config.Audit.Backend)
-		}
-		// Audit integrity (AUD-WU-04/05): if integrity_key_path is present it must
-		// be non-empty — an empty path means the HMAC chain would be silently
-		// disabled, so fail fast rather than ship un-chained "tamper-evident" logs.
-		if v, ok := config.Audit.Config["integrity_key_path"]; ok && strings.TrimSpace(v) == "" {
-			return fmt.Errorf("audit integrity_key_path is set but empty; provide the mounted HMAC key path or remove the key")
-		}
+	// Validate audit configuration (AUD-WU-06/07/09/14).
+	if err := validateAudit(&config.Audit); err != nil {
+		return err
 	}
 
 	// Validate the TLS stanza (min_version, cipher_suites, client_auth) so a

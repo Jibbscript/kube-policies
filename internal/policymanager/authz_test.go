@@ -61,8 +61,8 @@ func doRBACRequest(t *testing.T, router http.Handler, method, path, token string
 
 // TestRBACMiddleware_RoleVerbMatrix asserts the EXACT status returned per route
 // for each role through the real NewAPIRouter (FIX I/J). Allowed cells assert
-// the real handler's status (200/201/204, or 501 for the deploy and
-// compliance-report-generate stubs) so a no-op middleware that simply passed
+// the real handler's status (200/201/204, or 501 for the deploy stub) so a
+// no-op middleware that simply passed
 // every request through could not satisfy the denied cells, and a broken
 // handler wiring could not satisfy the allowed cells. Denied cells assert 403.
 //
@@ -109,8 +109,8 @@ func TestRBACMiddleware_RoleVerbMatrix(t *testing.T) {
 		{"viewer", http.MethodGet, "/api/v1/bundles", "", http.StatusOK},
 		{"none", http.MethodGet, "/api/v1/bundles", "", http.StatusForbidden},
 		{"viewer", http.MethodGet, "/api/v1/exceptions", "", http.StatusOK},
-		{"viewer", http.MethodGet, "/api/v1/compliance/reports", "", http.StatusNotImplemented},
-		{"viewer", http.MethodGet, "/api/v1/compliance/frameworks", "", http.StatusNotImplemented},
+		{"viewer", http.MethodGet, "/api/v1/compliance/reports", "", http.StatusOK},
+		{"viewer", http.MethodGet, "/api/v1/compliance/frameworks", "", http.StatusOK},
 
 		// ---- viewer-tier POST RPCs (the ONLY viewer-level POSTs) ----
 		// boundary: none => 403, viewer => real handler status.
@@ -135,11 +135,13 @@ func TestRBACMiddleware_RoleVerbMatrix(t *testing.T) {
 		{"editor", http.MethodPost, "/api/v1/exceptions", `{"id":"e","name":"e"}`, http.StatusCreated},
 
 		// ---- admin-tier privileged ops (require RoleAdmin) ----
-		// boundary: editor => 403, admin => real handler status (501 stubs).
+		// boundary: editor => 403, admin => real handler status. deploy is still a
+		// 501 stub; compliance-report generation is now implemented (AUD-WU-19) and
+		// returns 201 for an admin principal.
 		{"editor", http.MethodPost, "/api/v1/policies/test-no-privileged/deploy", "", http.StatusForbidden},
 		{"admin", http.MethodPost, "/api/v1/policies/test-no-privileged/deploy", "", http.StatusNotImplemented},
 		{"editor", http.MethodPost, "/api/v1/compliance/reports", `{"framework":"cis"}`, http.StatusForbidden},
-		{"admin", http.MethodPost, "/api/v1/compliance/reports", `{"framework":"cis"}`, http.StatusNotImplemented},
+		{"admin", http.MethodPost, "/api/v1/compliance/reports", `{"framework":"cis"}`, http.StatusCreated},
 	}
 
 	for _, c := range cases {

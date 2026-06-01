@@ -1,0 +1,36 @@
+{{- if .Values.audit.persistence.enabled }}
+# AUD-WU-08 (NIST AU-9/AU-11): durable audit storage PVC.
+# This PVC is DISTINCT from the policy-manager data PVC (<fullname>-data).
+# It provides write-durable audit log storage beyond pod lifetime.
+#
+# IMPORTANT — RWO + replicaCount > 1:
+#   The admission-webhook defaults to replicaCount: 2. A ReadWriteOnce PVC
+#   can only be mounted by pods on a single node simultaneously. If replicas
+#   land on different nodes the second pod will fail to schedule.
+#   Solutions:
+#   a) accessMode: ReadWriteMany — requires an RWX-capable StorageClass.
+#   b) admissionWebhook.replicaCount: 1 — single-node safe with RWO.
+#   c) Preferred at scale: audit.forwarder.enabled=true (DaemonSet ships logs
+#      off-pod; no shared storage required).
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "kube-policies.fullname" . }}-audit
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kube-policies.labels" . | nindent 4 }}
+    app.kubernetes.io/component: admission-webhook
+  {{- with .Values.audit.persistence.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  accessModes:
+    - {{ .Values.audit.persistence.accessMode | default "ReadWriteOnce" | quote }}
+  resources:
+    requests:
+      storage: {{ .Values.audit.persistence.size | default "5Gi" | quote }}
+  {{- if .Values.audit.persistence.storageClass }}
+  storageClassName: {{ .Values.audit.persistence.storageClass | quote }}
+  {{- end }}
+{{- end }}

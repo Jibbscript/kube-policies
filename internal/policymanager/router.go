@@ -4,12 +4,65 @@ import (
 	"net/http"
 
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
 	"github.com/Jibbscript/kube-policies/internal/auth"
 	"github.com/Jibbscript/kube-policies/internal/config"
 	"github.com/Jibbscript/kube-policies/internal/middleware"
 )
+
+// correlationContextKey is the gin.Context key under which the per-request
+// correlation id is stashed by CorrelationMiddleware (AUD-WU-20, AU-12(1)).
+const correlationContextKey = "correlation_id"
+
+// correlationHeader / correlationFallbackHeader are the inbound headers a caller
+// may use to propagate a correlation id across the admission -> policy-manager ->
+// dashboard request chain. X-Correlation-Id wins; X-Request-Id is the fallback.
+const (
+	correlationHeader         = "X-Correlation-Id"
+	correlationFallbackHeader = "X-Request-Id"
+)
+
+// CorrelationMiddleware reads an inbound X-Correlation-Id (or X-Request-Id)
+// header, synthesizing a uuid when neither is present, stashes it on the gin
+// context under correlationContextKey, and echoes it back as the
+// X-Correlation-Id response header (AUD-WU-20, AU-12(1)). Every management-plane
+// mutation handler folds this id into its audit changes map via
+// correlationIDFromContext so a single logical request is traceable across
+// components.
+//
+// Trusting a caller-supplied header here is a NEW, explicit opt-in and does not
+// reopen the source_ip spoofing concern that motivates router.SetTrustedProxies(nil):
+// the correlation id is a non-authoritative trace key, never an authorization or
+// attribution input.
+func CorrelationMiddleware() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		id := c.GetHeader(correlationHeader)
+		if id == "" {
+			id = c.GetHeader(correlationFallbackHeader)
+		}
+		if id == "" {
+			id = uuid.NewString()
+		}
+		c.Set(correlationContextKey, id)
+		c.Header(correlationHeader, id)
+		c.Next()
+	}
+}
+
+// correlationIDFromContext returns the correlation id stashed by
+// CorrelationMiddleware, or "" when none is present (e.g. a route mounted
+// without the middleware). Callers fold the returned id into the audit changes
+// map under "correlation_id" so audit.Logger hoists it onto Event.CorrelationID.
+func correlationIDFromContext(c *gin.Context) string {
+	if v, ok := c.Get(correlationContextKey); ok {
+		if id, ok := v.(string); ok {
+			return id
+		}
+	}
+	return ""
+}
 
 // NewAPIRouter returns the gin.Engine that backs the policy-manager API on
 // :8080. It is exported so integration tests can mount the real route table
@@ -74,6 +127,11 @@ func NewAPIRouter(m *Manager, authCfg config.AuthConfig, rbacCfg config.RBACConf
 	// RBAC when enabled, and the rate-limit middleware always.
 	mgmt := router.Group("/api/v1")
 	mgmt.Use(requestLimit)
+	// Correlation id propagation (AUD-WU-20, AU-12(1)): stash an inbound
+	// X-Correlation-Id / X-Request-Id (or a synthesized uuid) so every persisting
+	// mutation handler can fold it into its audit changes map. Installed before
+	// authN so even rejected requests carry a trace id in their response header.
+	mgmt.Use(CorrelationMiddleware())
 	if authCfg.Enabled && verifier != nil {
 		mgmt.Use(OIDCAuthMiddleware(verifier, authCfg), RBACMiddleware(rbacCfg))
 	}

@@ -135,6 +135,26 @@ but block nothing there.
 {{- end }}
 {{- end }}
 
+{{- if .Values.audit.persistence.enabled }}
+{{- if and (gt (int .Values.admissionWebhook.replicaCount) 1) (ne .Values.audit.persistence.accessMode "ReadWriteMany") }}
+  ⚠ AUDIT PERSISTENCE WARNING (AUD-WU-08):
+    audit.persistence.enabled=true with replicaCount={{ .Values.admissionWebhook.replicaCount }} and
+    accessMode={{ .Values.audit.persistence.accessMode }}.
+    A ReadWriteOnce PVC can only be mounted on ONE node at a time. If the
+    {{ .Values.admissionWebhook.replicaCount }} webhook replicas land on different nodes, the second pod
+    will fail to schedule with a VolumeMount conflict.
+    Solutions:
+      a) Set audit.persistence.accessMode=ReadWriteMany (requires RWX StorageClass).
+      b) Set admissionWebhook.replicaCount=1.
+      c) Preferred at scale: set audit.forwarder.enabled=true (DaemonSet log-shipping
+         requires no shared storage and works with any replicaCount).
+{{- end }}
+{{- end }}
+
+Node time synchronization prerequisite (AUD-WU-03, NIST AU-8/AU-8(1)): every
+cluster node MUST run NTP/chrony so container clocks are accurate. Audit
+timestamps are RFC 3339 UTC. See docs/audit/time-synchronization.md.
+
 Workload hardening (CFG-WU-01/02/03/05/10/21 — restricted Pod Security Standard):
   All three workloads render seccompProfile=RuntimeDefault, runAsGroup (non-root),
   drop ALL capabilities, readOnlyRootFilesystem, runAsNonRoot, and CPU/memory

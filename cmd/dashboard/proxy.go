@@ -10,6 +10,8 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
+
+	"github.com/Jibbscript/kube-policies/internal/audit"
 )
 
 // upstreamTokenKeyType is the private context key under which the proxy handler
@@ -117,9 +119,14 @@ func newProxyResponseWriter(w gin.ResponseWriter) http.ResponseWriter {
 //     isReadOnlyRPC exempts non-mutating RPC POSTs (validate/evaluate/test) from
 //     the verb gate only — they are still authenticated and authorized upstream.
 //
+// auditLog receives a DashboardWriteAttempt record for every mutating request
+// (AUD-WU-13), including denied attempts (ALLOW_WRITES=false → 403). It may be
+// nil or a no-op logger when auditing is disabled. Read-only RPC POSTs
+// (validate/evaluate/test) and GET/HEAD requests are never audited.
+//
 // The handler expects to be mounted with a wildcard route capturing the
 // upstream subpath in the "proxyPath" parameter (e.g. /api/v1/*proxyPath).
-func NewProxyHandler(cfg *Config, clientTLS *tls.Config, log *zap.Logger) (gin.HandlerFunc, error) {
+func NewProxyHandler(cfg *Config, clientTLS *tls.Config, log *zap.Logger, auditLog *audit.Logger) (gin.HandlerFunc, error) {
 	target, err := url.Parse(cfg.PolicyManagerURL)
 	if err != nil {
 		return nil, err
@@ -169,7 +176,36 @@ func NewProxyHandler(cfg *Config, clientTLS *tls.Config, log *zap.Logger) (gin.H
 			suffix = "/"
 		}
 
-		if !cfg.AllowWrites && isWriteMethod(c.Request.Method) && !isReadOnlyRPC(c.Request.Method, suffix) {
+		// Audit mutating requests at the boundary (AUD-WU-13). The audit set
+		// equals the mutation set: isWriteMethod && !isReadOnlyRPC. Read-only
+		// RPC POSTs (validate/evaluate/test) and GET/HEAD are never audited.
+		// The record is emitted BEFORE the gate so denied attempts (ALLOW_WRITES=
+		// false → 403) are captured — only a dashboard-side record can log them.
+		isWrite := isWriteMethod(c.Request.Method) && !isReadOnlyRPC(c.Request.Method, suffix)
+		if isWrite && auditLog != nil {
+			// IDENTITY: derive the user from the authenticated principal.
+			// In authModeDisabled principalFromContext returns false → degrade to
+			// "system:unauthenticated" (mirrors policymanager.userInfoFromContext).
+			// In forward-auth mode IDToken may be empty but Username IS set; we
+			// audit on Username. NEVER gate the emit on IDToken != "".
+			// NEVER log p.IDToken (raw OIDC bearer token).
+			username := "system:unauthenticated"
+			if p, ok := principalFromContext(c); ok {
+				username = p.Username
+			}
+			meta := map[string]interface{}{
+				"user":         username,
+				"method":       c.Request.Method,
+				"path":         suffix,
+				"allow_writes": cfg.AllowWrites,
+			}
+			if rid := c.GetHeader("X-Request-Id"); rid != "" {
+				meta["correlation_id"] = rid
+			}
+			auditLog.LogSystemEvent("DashboardWriteAttempt", "dashboard write attempt", meta)
+		}
+
+		if !cfg.AllowWrites && isWrite {
 			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{
 				"error": "writes disabled (ALLOW_WRITES=false)",
 			})

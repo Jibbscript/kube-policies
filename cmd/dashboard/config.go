@@ -165,6 +165,20 @@ type Config struct {
 	// GET /api/decisions/stream (the N+1th gets 429), separately from the general
 	// request concurrency cap since SSE connections are long-lived. Default 100.
 	MaxSSEConnections int
+
+	// --- Audit logging (AUD-WU-13) ---
+
+	// AuditEnabled enables dashboard-side audit emission (AUD-WU-13). Default
+	// false: no audit records are produced (no-op). Set true to emit a
+	// DashboardWriteAttempt record for every mutating proxied request, including
+	// denied attempts (ALLOW_WRITES=false → 403) that only the dashboard can record.
+	AuditEnabled bool
+	// AuditBackend selects the audit output backend: "stdout" (default) or "file".
+	// "file" requires DASHBOARD_AUDIT_FILE to be set.
+	AuditBackend string
+	// AuditFile is the path of the rotating audit log file when
+	// AuditBackend="file". Ignored for other backends.
+	AuditFile string
 }
 
 // LoadConfig reads dashboard configuration from environment variables.
@@ -227,6 +241,10 @@ func LoadConfig() (*Config, error) {
 		RateLimitMaxConcurrent: envIntOr("DASHBOARD_RATELIMIT_MAX_CONCURRENT", 100),
 		RateLimitMaxBodyBytes:  int64(envIntOr("DASHBOARD_RATELIMIT_MAX_BODY_BYTES", 3145728)), // 3 MiB
 		MaxSSEConnections:      envIntOr("DASHBOARD_MAX_SSE_CONNECTIONS", 100),
+
+		AuditEnabled:  envBool("DASHBOARD_AUDIT_ENABLED", false),
+		AuditBackend:  envOr("DASHBOARD_AUDIT_BACKEND", "stdout"),
+		AuditFile:     os.Getenv("DASHBOARD_AUDIT_FILE"),
 	}
 	if err := cfg.validateAuth(); err != nil {
 		return nil, err

@@ -457,12 +457,26 @@ func main() {
 		log.Error("Failed to shutdown metrics server", zap.Error(err))
 	}
 
+	// AUD-WU-14 (AU-5/AU-9): flush the audit pipeline BEFORE exit so events for
+	// in-flight requests (already drained by the webhook server shutdown above)
+	// are persisted rather than lost on SIGTERM. Close drains the buffer, flushes
+	// the backend, and is idempotent.
+	if err := auditLogger.Close(); err != nil {
+		log.Error("Failed to flush/close audit logger", zap.Error(err))
+	}
+
 	log.Info("Servers stopped")
 }
 
 func setupWebhookServer(controller *admission.Controller, tlsCfg *config.TLSConfig, requireClientCert bool, rlCfg config.RateLimitConfig, m middleware.Metrics, log *zap.Logger) (*http.Server, error) {
 	gin.SetMode(gin.ReleaseMode)
 	router := gin.New()
+	// AUD-WU-01 (AU-3): distrust X-Forwarded-For so c.ClientIP() returns the real
+	// TCP peer (the apiserver/proxy hop) and the audited source_ip cannot be
+	// spoofed by a client-supplied forwarding header.
+	if err := router.SetTrustedProxies(nil); err != nil {
+		return nil, fmt.Errorf("failed to set trusted proxies: %w", err)
+	}
 	router.Use(gin.Recovery())
 
 	// Health check endpoints. These are registered BEFORE the rate-limit

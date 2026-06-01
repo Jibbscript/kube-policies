@@ -16,6 +16,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"go.uber.org/zap"
 
+	"github.com/Jibbscript/kube-policies/internal/audit"
 	"github.com/Jibbscript/kube-policies/internal/auth"
 	"github.com/Jibbscript/kube-policies/internal/config"
 	"github.com/Jibbscript/kube-policies/internal/cryptofips"
@@ -69,7 +70,7 @@ func main() {
 	svcCtx, svcCancel := context.WithCancel(context.Background())
 	defer svcCancel()
 
-	apiServer, err := newAPIServer(svcCtx, cfg, log)
+	apiServer, auditLog, err := newAPIServer(svcCtx, cfg, log)
 	if err != nil {
 		log.Fatal("failed to construct API server", zap.Error(err))
 	}
@@ -152,10 +153,13 @@ func main() {
 	if err := metricsServer.Shutdown(shutdownCtx); err != nil {
 		log.Error("metrics server shutdown error", zap.Error(err))
 	}
+	if err := auditLog.Close(); err != nil {
+		log.Error("audit logger close error", zap.Error(err))
+	}
 	log.Info("dashboard stopped")
 }
 
-func newAPIServer(ctx context.Context, cfg *Config, log *zap.Logger) (*http.Server, error) {
+func newAPIServer(ctx context.Context, cfg *Config, log *zap.Logger) (*http.Server, *audit.Logger, error) {
 	gin.SetMode(gin.ReleaseMode)
 	router := gin.New()
 	router.Use(gin.Recovery())
@@ -221,7 +225,7 @@ func newAPIServer(ctx context.Context, cfg *Config, log *zap.Logger) (*http.Serv
 	if cfg.PolicyManagerClientCertPath != "" && cfg.PolicyManagerClientKeyPath != "" {
 		clientCertReloader, cerr := tlsreload.New(cfg.PolicyManagerClientCertPath, cfg.PolicyManagerClientKeyPath, log.Named("pm-client-cert"))
 		if cerr != nil {
-			return nil, fmt.Errorf("load policy-manager client certificate: %w", cerr)
+			return nil, nil, fmt.Errorf("load policy-manager client certificate: %w", cerr)
 		}
 		go func() {
 			if rerr := clientCertReloader.Start(ctx); rerr != nil {
@@ -254,7 +258,7 @@ func newAPIServer(ctx context.Context, cfg *Config, log *zap.Logger) (*http.Serv
 	// the read + proxy endpoints below are gated.
 	authn, err := newAuthenticator(ctx, cfg, log)
 	if err != nil {
-		return nil, fmt.Errorf("auth init: %w", err)
+		return nil, nil, fmt.Errorf("auth init: %w", err)
 	}
 	if authn.mode == authModeDisabled {
 		log.Warn("dashboard user authentication DISABLED (DASHBOARD_AUTH_MODE=disabled) — the /api read + proxy endpoints are served UNAUTHENTICATED. Dev posture and a tracked gap; set DASHBOARD_AUTH_MODE=oidc (or forward-auth) in production.")
@@ -268,9 +272,26 @@ func newAPIServer(ctx context.Context, cfg *Config, log *zap.Logger) (*http.Serv
 	// the user-auth group.
 	router.POST("/api/decisions/internal", NewIngestHandler(cfg, ring, log))
 
-	proxy, err := NewProxyHandler(cfg, upstreamTLS, log)
+	// Audit logger (AUD-WU-13): emit DashboardWriteAttempt records for every
+	// mutating proxied request, including denied attempts (ALLOW_WRITES=false →
+	// 403). No-op when AuditEnabled=false (NewLogger with Enabled=false returns
+	// a safe no-op whose Close() is a no-op too). The file backend is created
+	// here and closed via the shutdown path below.
+	auditCfg := &config.AuditConfig{
+		Enabled:    cfg.AuditEnabled,
+		Backend:    cfg.AuditBackend,
+		BufferSize: 256,
+		Config:     map[string]string{"filename": cfg.AuditFile},
+	}
+	auditLogger, err := audit.NewLogger(auditCfg, audit.WithLogger(log.Named("audit")))
 	if err != nil {
-		return nil, fmt.Errorf("proxy init: %w", err)
+		return nil, nil, fmt.Errorf("audit logger init: %w", err)
+	}
+
+	proxy, err := NewProxyHandler(cfg, upstreamTLS, log, auditLogger)
+	if err != nil {
+		_ = auditLogger.Close()
+		return nil, nil, fmt.Errorf("proxy init: %w", err)
 	}
 
 	// PROTECTED: the read endpoints and the policy-manager reverse proxy require an
@@ -307,7 +328,7 @@ func newAPIServer(ctx context.Context, cfg *Config, log *zap.Logger) (*http.Serv
 		ReadTimeout:       30 * time.Second,
 		WriteTimeout:      30 * time.Second,
 		IdleTimeout:       60 * time.Second,
-	}, nil
+	}, auditLogger, nil
 }
 
 // newMetricsServer builds the dashboard :9092 metrics server. When verifier is

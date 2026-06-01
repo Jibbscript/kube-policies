@@ -111,10 +111,10 @@ audit tamper-evidence on `emptyDir` storage (AU-9), and the untrustworthy CI Go-
 | POAM-007 | SC-7 | Critical | Moderate | P4 | 2026-10-15 | No NetworkPolicy (P4: default-deny + allow-list ship in chart + base; requires enforcing CNI; live e2e proof pending — Open) |
 | POAM-008 | CM-6 | Critical | High | P10 | 2026-10-31 | Policy-engine `spec.template.spec` blindness |
 | POAM-009 | SI-10 | High | Moderate | P10 | 2026-10-31 | Unvalidated Rego in CRD; no compile check |
-| POAM-010 | AU-9 | Critical | High | P7 | 2026-11-30 | No audit tamper-evidence; emptyDir storage |
-| POAM-011 | AU-4 | High | Moderate | P7 | 2026-11-30 | Audit retention/capacity not enforced |
-| POAM-012 | AU-6 | High | Moderate | P7 | 2026-11-30 | No SIEM forwarding / audit reduction |
-| POAM-013 | AU-3 | Moderate | Moderate | P7 | 2026-11-30 | Incomplete audit source/identity attribution |
+| POAM-010 | AU-9 | Critical | High | P7 | 2026-11-30 | No audit tamper-evidence; emptyDir storage (P7: HMAC+sequence integrity chain verifies across rotated files (VerifyChainFiles); lumberjack rotation; durable storage via opt-in audit.persistence PVC + base manifest writable-mount fix; redaction-before-seal so Secret payloads never hit disk under a valid HMAC — tested; live-cluster PVC/forwarder proof pending — Open) |
+| POAM-011 | AU-4 | High | Moderate | P7 | 2026-11-30 | Audit retention/capacity not enforced (P7: file backend size/age rotation (max_size_mb/max_backups); Retention now ENFORCED — 'd'-aware parser maps 90d→max-age and validateAudit REJECTS <90d (FedRAMP floor); tested — Open) |
+| POAM-012 | AU-6 | High | Moderate | P7 | 2026-11-30 | No SIEM forwarding / audit reduction (P7: TLS 'forward' backend with disk-spool fallback + ordered, spool-coherent replay (unit-tested vs mock TLS SIEM); Fluent Bit forwarder DaemonSet (restricted-PSS, requires shared RWX PVC); compliance reduction/report handlers real (not 501); live-cluster forwarding proof pending — Open) |
+| POAM-013 | AU-3 | Moderate | Moderate | P7 | 2026-11-30 | Incomplete audit source/identity attribution (P7: source_ip/user_agent/request_uri on each record (SetTrustedProxies(nil) anti-spoof) + dual UTC timestamps + schema_version + versioned JSON schema + Secret/PII redaction; apiserver_id/admission_webhook_config correlated from the cluster apiserver audit policy, not webhook-asserted — Open) |
 | POAM-014 | SA-11 | Critical | High | P1 | 2026-07-15 | Untrustworthy CI from Go-version skew |
 | POAM-015 | SR-4 | High | High | P6 | 2026-11-15 | Signing theater — no OIDC, no SLSA provenance (P6: keyless cosign OIDC signing BY DIGEST + SPDX SBOM attestation + SLSA provenance (actions/attest-build-provenance) implemented in release.yml, gated behind the Trivy scan; reproducible builds verified locally (identical SHA256); live attestation verification pending the first signed tag — Open) |
 | POAM-016 | CP-9 | High | Moderate | P8 | 2026-12-15 | No automated/verified backup of policy state |
@@ -129,7 +129,7 @@ audit tamper-evidence on `emptyDir` storage (AU-9), and the untrustworthy CI Go-
 | POAM-025 | RA-5 | High | Moderate | P11 | 2026-12-31 | Vulnerability scanning does not gate the build |
 | POAM-026 | SI-2 | Moderate | Moderate | P11 | 2026-12-31 | No flaw-remediation program / SLAs |
 | POAM-027 | SC-5 | Moderate | Low | P4 | 2026-10-15 | No DoS / resource-availability protection (P4: app-layer rate-limit/body/concurrency/SSE caps on by default; ResourceQuota/LimitRange ship off; HPA in P8 — Open) |
-| POAM-028 | AU-12 | Moderate | Moderate | P7 | 2026-11-30 | No system-wide time-correlated audit trail |
+| POAM-028 | AU-12 | Moderate | Moderate | P7 | 2026-11-30 | No system-wide time-correlated audit trail (P7: correlation_id on every event type; admission uses the AdmissionRequest UID; policy-manager CorrelationMiddleware propagates X-Correlation-Id/X-Request-Id into management-plane + dashboard records; reconcile/exception-lifecycle audited (dedup'd via observedGeneration) — Open) |
 | POAM-029 | AU-5 | Moderate | Low | P9 | 2026-12-31 | No alerting on audit-processing failure |
 | POAM-030 | SI-4 | High | Moderate | P9 | 2026-12-31 | No detection/monitoring safety net |
 | POAM-031 | IR-8 | High | Moderate | P9 | 2026-12-31 | No Incident Response Plan or runbooks |
@@ -139,7 +139,7 @@ audit tamper-evidence on `emptyDir` storage (AU-9), and the untrustworthy CI Go-
 | POAM-035 | CM-14 | High | Moderate | P6 | 2026-11-15 | No admission-time image signature verification (P6: opt-in image-provenance webhook policy [allowed-registries + require-digest, unit-tested] + chart Sigstore ClusterImagePolicy [imageVerification.enabled, default off] implemented; cryptographic verification requires Sigstore policy-controller install; in-cluster enforce-mode proof pending — Open) |
 | POAM-036 | AC-12 | Low | Low | P3 | 2026-09-15 | No dashboard session management |
 | POAM-037 | CM-8 | Moderate | Low | P10 | 2026-10-31 | No customer-posture inventory enforcement |
-| POAM-038 | AU-7 | Low | Low | P7 | 2026-11-30 | No audit reduction/report generation |
+| POAM-038 | AU-7 | Low | Low | P7 | 2026-11-30 | No audit reduction/report generation (P7: compliance handlers real (not 501) — read-only NDJSON query layer over the audit file with time-range/namespace/decision/policy filters; ListComplianceFrameworks returns cis+nist-800-53; reads only the LOCAL file backend (rotated/forwarded records out of scope) — Open) |
 
 The authoritative, parseable record (full weakness text, remediation detail, milestones, and
 source) is [poam.csv](poam.csv). Where this table and the CSV disagree, **the CSV governs**.

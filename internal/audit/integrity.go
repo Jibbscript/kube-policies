@@ -97,6 +97,38 @@ func (c *Chainer) Seal(e *Event) ([]byte, error) {
 	return envelope, nil
 }
 
+// VerifyChainFiles verifies a hash-chain that spans multiple rotated audit
+// files (AUD-WU-06). The integrity chain's sequence/prev-hash state lives in the
+// in-memory Chainer, so rotation is transparent at write time, but a single
+// rotated tail file fails a standalone VerifyChain (its first record's Sequence
+// is not 1). Pass the files in OLDEST-FIRST order (the rotated backups, ascending
+// by rotation time, followed by the active file); they are concatenated into one
+// logical stream and verified end-to-end.
+func VerifyChainFiles(key []byte, paths ...string) error {
+	if len(paths) == 0 {
+		return fmt.Errorf("audit integrity: no files to verify")
+	}
+	readers := make([]io.Reader, 0, len(paths)*2)
+	closers := make([]io.Closer, 0, len(paths))
+	defer func() {
+		for _, c := range closers {
+			_ = c.Close()
+		}
+	}()
+	for _, p := range paths {
+		f, err := os.Open(p)
+		if err != nil {
+			return fmt.Errorf("audit integrity: open %q: %w", p, err)
+		}
+		closers = append(closers, f)
+		readers = append(readers, f)
+		// Guarantee a newline boundary between files so the last record of one
+		// file and the first of the next are never glued into one scanner line.
+		readers = append(readers, bytes.NewReader([]byte{'\n'}))
+	}
+	return VerifyChain(io.MultiReader(readers...), key)
+}
+
 func computeHMAC(key, data []byte) string {
 	mac := hmac.New(sha256.New, key)
 	mac.Write(data)

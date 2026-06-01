@@ -151,6 +151,15 @@ spec:
           readOnly: true
         - name: tmp
           mountPath: /tmp
+        # AUD-WU-08 (NIST AU-9/AU-11): writable mount for the file audit backend.
+        # readOnlyRootFilesystem: true blocks mkdir on the overlay; this emptyDir
+        # gives the audit logger a writable directory at the path the config
+        # targets (audit.config.filename: /var/log/kube-policies/audit.log).
+        # For persistence beyond pod lifetime use the Helm chart with
+        # audit.persistence.enabled=true (PVC) or audit.forwarder.enabled=true
+        # (log-shipping DaemonSet, preferred for multi-replica deployments).
+        - name: audit-log
+          mountPath: /var/log/kube-policies
       volumes:
       - name: certs
         secret:
@@ -160,6 +169,8 @@ spec:
         configMap:
           name: kube-policies-config
       - name: tmp
+        emptyDir: {}
+      - name: audit-log
         emptyDir: {}
       terminationGracePeriodSeconds: 30
       dnsPolicy: ClusterFirst
