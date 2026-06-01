@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"crypto/tls"
 	"net/http"
 	"net/http/httputil"
@@ -10,6 +11,14 @@ import (
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
 )
+
+// upstreamTokenKeyType is the private context key under which the proxy handler
+// stashes the authenticated user's bearer token for the Director to forward
+// upstream (IAM-WU-05). A distinct type avoids collisions with other context
+// values.
+type upstreamTokenKeyType struct{}
+
+var upstreamTokenKey upstreamTokenKeyType
 
 // writeMethods is the set of HTTP verbs gated by ALLOW_WRITES.
 var writeMethods = map[string]struct{}{
@@ -93,9 +102,20 @@ func newProxyResponseWriter(w gin.ResponseWriter) http.ResponseWriter {
 }
 
 // NewProxyHandler returns a Gin handler that reverse-proxies /api/v1/* to
-// cfg.PolicyManagerURL. When cfg.AllowWrites is false, write verbs are
-// rejected with 403 BEFORE the proxy runs — there is no upstream contact for
-// disallowed requests.
+// cfg.PolicyManagerURL.
+//
+// Authorization is layered (IAM-WU-05):
+//   - PRIMARY: per-user authorization is enforced UPSTREAM by the policy-manager.
+//     The handler forwards the authenticated user's bearer token (set by the auth
+//     middleware) so the policy-manager's own OIDC+RBAC decides what the real user
+//     may do — e.g. a viewer's mutation is rejected 403 by the policy-manager even
+//     when ALLOW_WRITES=true.
+//   - KILL-SWITCH / defense-in-depth: when cfg.AllowWrites is false, write verbs
+//     are rejected with 403 BEFORE the proxy runs (no upstream contact). This is a
+//     coarse cluster-wide off switch, NOT a substitute for per-user authZ; it is
+//     deliberately retained so writes can be globally disabled regardless of role.
+//     isReadOnlyRPC exempts non-mutating RPC POSTs (validate/evaluate/test) from
+//     the verb gate only — they are still authenticated and authorized upstream.
 //
 // The handler expects to be mounted with a wildcard route capturing the
 // upstream subpath in the "proxyPath" parameter (e.g. /api/v1/*proxyPath).
@@ -123,6 +143,16 @@ func NewProxyHandler(cfg *Config, clientTLS *tls.Config, log *zap.Logger) (gin.H
 		origDirector(req)
 		req.Host = target.Host
 		req.Header.Set("X-Forwarded-By", "kube-policies-dashboard")
+		// Per-user authorization (IAM-WU-05): forward the authenticated user's
+		// bearer token so the policy-manager authenticates the REAL user and
+		// enforces its own OIDC+RBAC, rather than acting on the dashboard's
+		// service identity. Always strip any client-supplied Authorization first
+		// so a browser cannot smuggle a credential of its choosing to the PM; the
+		// dashboard is the sole authority for what token reaches the upstream.
+		req.Header.Del("Authorization")
+		if tok, _ := req.Context().Value(upstreamTokenKey).(string); tok != "" {
+			req.Header.Set("Authorization", "Bearer "+tok)
+		}
 	}
 
 	proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
@@ -144,6 +174,14 @@ func NewProxyHandler(cfg *Config, clientTLS *tls.Config, log *zap.Logger) (gin.H
 				"error": "writes disabled (ALLOW_WRITES=false)",
 			})
 			return
+		}
+
+		// Carry the authenticated user's token to the Director (IAM-WU-05) so it
+		// is forwarded upstream as the bearer credential. The Director only sees
+		// the *http.Request, so the token rides on the request context. Empty in
+		// disabled auth mode (no principal) — the Director then sends no token.
+		if p, ok := principalFromContext(c); ok && p.IDToken != "" {
+			c.Request = c.Request.WithContext(context.WithValue(c.Request.Context(), upstreamTokenKey, p.IDToken))
 		}
 
 		// Rewrite the request path: Gin's *proxyPath captures the suffix

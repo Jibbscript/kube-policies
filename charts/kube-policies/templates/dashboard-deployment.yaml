@@ -1,4 +1,9 @@
 {{- if .Values.dashboard.enabled }}
+{{- if eq .Values.dashboard.auth.mode "oidc" }}
+{{- if or (empty .Values.dashboard.auth.oidc.issuer) (empty .Values.dashboard.auth.oidc.clientID) (empty .Values.dashboard.auth.oidc.redirectURL) (empty .Values.dashboard.auth.oidc.existingSecret) }}
+{{- fail "dashboard.auth.mode=oidc requires dashboard.auth.oidc.issuer, .clientID, .redirectURL, and .existingSecret (a Secret with keys client-secret + session-key)" }}
+{{- end }}
+{{- end }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -119,6 +124,55 @@ spec:
               # and would coerce an explicit false back to true, making the
               # opt-out non-functional. values.yaml always defines this key.
               value: {{ .Values.dashboard.tls.hsts.includeSubdomains | quote }}
+            # User authentication (IAM-WU-04/16, NET-WU-18). mode=disabled (default)
+            # leaves the dashboard unauthenticated (dev). oidc/forward-auth enable the
+            # gate; per-user authZ is then enforced upstream by the policy-manager.
+            - name: DASHBOARD_AUTH_MODE
+              value: {{ .Values.dashboard.auth.mode | quote }}
+            {{- if eq .Values.dashboard.auth.mode "oidc" }}
+            - name: DASHBOARD_OIDC_ISSUER
+              value: {{ .Values.dashboard.auth.oidc.issuer | quote }}
+            - name: DASHBOARD_OIDC_CLIENT_ID
+              value: {{ .Values.dashboard.auth.oidc.clientID | quote }}
+            - name: DASHBOARD_OIDC_REDIRECT_URL
+              value: {{ .Values.dashboard.auth.oidc.redirectURL | quote }}
+            - name: DASHBOARD_OIDC_SCOPES
+              value: {{ .Values.dashboard.auth.oidc.scopes | quote }}
+            - name: DASHBOARD_OIDC_USERNAME_CLAIM
+              value: {{ .Values.dashboard.auth.oidc.usernameClaim | quote }}
+            - name: DASHBOARD_OIDC_GROUPS_CLAIM
+              value: {{ .Values.dashboard.auth.oidc.groupsClaim | quote }}
+            - name: DASHBOARD_SESSION_IDLE_TIMEOUT
+              value: {{ .Values.dashboard.auth.session.idleTimeout | quote }}
+            - name: DASHBOARD_SESSION_ABSOLUTE_TIMEOUT
+              value: {{ .Values.dashboard.auth.session.absoluteTimeout | quote }}
+            # Sensitive: the OIDC client secret + AES-256 session key from a Secret.
+            - name: DASHBOARD_OIDC_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.dashboard.auth.oidc.existingSecret }}
+                  key: client-secret
+            - name: DASHBOARD_SESSION_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.dashboard.auth.oidc.existingSecret }}
+                  key: session-key
+            - name: DASHBOARD_SESSION_KEY_PREVIOUS
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.dashboard.auth.oidc.existingSecret }}
+                  key: session-key-previous
+                  optional: true
+            {{- else if eq .Values.dashboard.auth.mode "forward-auth" }}
+            - name: DASHBOARD_FORWARD_AUTH_USER_HEADER
+              value: {{ .Values.dashboard.auth.forwardAuth.userHeader | quote }}
+            - name: DASHBOARD_FORWARD_AUTH_EMAIL_HEADER
+              value: {{ .Values.dashboard.auth.forwardAuth.emailHeader | quote }}
+            - name: DASHBOARD_FORWARD_AUTH_GROUPS_HEADER
+              value: {{ .Values.dashboard.auth.forwardAuth.groupsHeader | quote }}
+            - name: DASHBOARD_FORWARD_AUTH_TOKEN_HEADER
+              value: {{ .Values.dashboard.auth.forwardAuth.tokenHeader | quote }}
+            {{- end }}
           # Probe scheme follows in-pod TLS: when the dashboard terminates TLS,
           # the kubelet httpGet probe must use HTTPS (it skips cert verification
           # and presents no client cert; server-auth-only TLS handshakes succeed).

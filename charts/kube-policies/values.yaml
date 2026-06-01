@@ -409,8 +409,40 @@ dashboard:
   # Off by default; set enabled=true to deploy the read-only Svelte SPA + Go BFF.
   enabled: false
 
-  # Two-flag write gate: ALLOW_WRITES env is only "true" when this AND enabled are both true.
+  # Two-flag write gate: ALLOW_WRITES env is only "true" when this AND enabled are
+  # both true. With user auth enabled (auth.mode below), ALLOW_WRITES is a coarse
+  # cluster-wide kill-switch / defense-in-depth, NOT per-user authorization —
+  # per-user authZ is enforced upstream by the policy-manager (IAM-WU-05).
   allowWrites: false
+
+  # User authentication for the dashboard BFF (IAM-WU-04 / NET-WU-18 / IAM-WU-16).
+  auth:
+    # disabled (default; unauthenticated dev posture) | oidc | forward-auth.
+    mode: disabled
+    oidc:
+      # Required when mode=oidc (the chart fails the render otherwise).
+      issuer: ""
+      clientID: ""
+      redirectURL: "" # e.g. https://dashboard.example.com/auth/callback
+      scopes: "openid profile email groups"
+      usernameClaim: sub
+      groupsClaim: groups
+      # Sensitive material (the OIDC client secret + a 32-byte AES-256 session key,
+      # base64) is read from an existing Secret with keys: client-secret,
+      # session-key, and optionally session-key-previous (zero-downtime rotation).
+      existingSecret: ""
+    session:
+      idleTimeout: 15m # FedRAMP AC-11/AC-12 inactivity timeout
+      absoluteTimeout: 12h # hard maximum session lifetime
+    # forward-auth trusts identity headers from an upstream identity-aware proxy.
+    # SECURITY: only safe when the dashboard is NOT directly reachable and the
+    # proxy strips client-supplied copies of these headers (enforce with a
+    # NetworkPolicy so only the proxy can reach the dashboard).
+    forwardAuth:
+      userHeader: X-Forwarded-User
+      emailHeader: X-Forwarded-Email
+      groupsHeader: X-Forwarded-Groups
+      tokenHeader: X-Forwarded-Access-Token
 
   replicaCount: 1
 

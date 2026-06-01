@@ -235,6 +235,56 @@ func TestProxy_VerbGate_RejectsWritesWhenDisabled(t *testing.T) {
 	}
 }
 
+func TestProxy_ForwardsUserTokenUpstream(t *testing.T) {
+	var gotAuth string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	defer upstream.Close()
+
+	cfg := &Config{PolicyManagerURL: upstream.URL, AllowWrites: true}
+	proxy, err := NewProxyHandler(cfg, nil, zap.NewNop())
+	if err != nil {
+		t.Fatalf("NewProxyHandler: %v", err)
+	}
+	gin.SetMode(gin.TestMode)
+	routerWith := func(p *principal) *gin.Engine {
+		r := gin.New()
+		r.Use(func(c *gin.Context) {
+			if p != nil {
+				c.Set(principalContextKey, p)
+			}
+			c.Next()
+		})
+		r.Handle(http.MethodGet, "/api/v1/*proxyPath", proxy)
+		return r
+	}
+
+	t.Run("forwards the user's token and strips a client-supplied Authorization", func(t *testing.T) {
+		gotAuth = ""
+		r := routerWith(&principal{Username: "alice", IDToken: "USER-ID-TOKEN"})
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/policies", nil)
+		req.Header.Set("Authorization", "Bearer ATTACKER-SMUGGLED") // must NOT reach upstream
+		r.ServeHTTP(httptest.NewRecorder(), req)
+		if gotAuth != "Bearer USER-ID-TOKEN" {
+			t.Fatalf("upstream Authorization = %q, want the user's token (client-supplied must be stripped)", gotAuth)
+		}
+	})
+
+	t.Run("no authenticated user forwards no Authorization", func(t *testing.T) {
+		gotAuth = "sentinel"
+		r := routerWith(nil)
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/policies", nil)
+		req.Header.Set("Authorization", "Bearer ATTACKER-SMUGGLED")
+		r.ServeHTTP(httptest.NewRecorder(), req)
+		if gotAuth != "" {
+			t.Fatalf("with no authenticated user, no Authorization may reach upstream, got %q", gotAuth)
+		}
+	})
+}
+
 func TestProxy_ReadOnlyRPC_BypassesVerbGate(t *testing.T) {
 	// /policies/<id>/test and /policies/validate are POSTs that perform
 	// no server-side mutation. They MUST bypass the AllowWrites gate so
