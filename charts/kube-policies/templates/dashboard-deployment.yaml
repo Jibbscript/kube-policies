@@ -38,6 +38,9 @@ spec:
         {{- toYaml . | nindent 8 }}
       {{- end }}
       serviceAccountName: {{ include "kube-policies.fullname" . }}-dashboard
+      # IAM-WU-10 (CIS 5.1.5/5.1.6): the dashboard never calls the apiserver at runtime,
+      # so it does not mount an SA token. Defaults false; an operator can override.
+      automountServiceAccountToken: {{ dig "automountServiceAccountToken" false .Values.dashboard }}
       securityContext:
         runAsNonRoot: true
         runAsUser: 65532

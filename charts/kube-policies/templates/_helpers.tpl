@@ -51,21 +51,37 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end }}
 
 {{/*
-Create the name of the service account to use
+Per-component ServiceAccount name helpers live below (IAM-WU-09). The former shared
+"kube-policies.serviceAccountName" helper was removed: collapsing the webhook and
+policy-manager onto one identity would undo the separation of duties.
 */}}
-{{- define "kube-policies.serviceAccountName" -}}
-{{- if .Values.rbac.serviceAccount.create }}
-{{- default (include "kube-policies.fullname" .) .Values.rbac.serviceAccount.name }}
-{{- else }}
-{{- default "default" .Values.rbac.serviceAccount.name }}
-{{- end }}
-{{- end }}
 
 {{/*
 Create the name of the admission webhook
 */}}
 {{- define "kube-policies.admissionWebhookName" -}}
 {{- printf "%s-admission-webhook" (include "kube-policies.fullname" .) }}
+{{- end }}
+
+{{/*
+Create the name of the admission-webhook ServiceAccount (IAM-WU-09). Separation of
+duties: the enforcement plane gets its own identity, distinct from the management
+plane. Honors an optional override at rbac.serviceAccount.webhookName, else defaults
+to <fullname>-admission-webhook.
+*/}}
+{{- define "kube-policies.webhookServiceAccountName" -}}
+{{- $sa := .Values.rbac.serviceAccount | default dict -}}
+{{- default (printf "%s-admission-webhook" (include "kube-policies.fullname" .)) $sa.webhookName }}
+{{- end }}
+
+{{/*
+Create the name of the policy-manager ServiceAccount (IAM-WU-09). Honors an optional
+override at rbac.serviceAccount.policyManagerName, else defaults to
+<fullname>-policy-manager.
+*/}}
+{{- define "kube-policies.policyManagerServiceAccountName" -}}
+{{- $sa := .Values.rbac.serviceAccount | default dict -}}
+{{- default (printf "%s-policy-manager" (include "kube-policies.fullname" .)) $sa.policyManagerName }}
 {{- end }}
 
 {{/*

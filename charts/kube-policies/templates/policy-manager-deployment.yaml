@@ -32,7 +32,11 @@ spec:
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
       {{- end }}
-      serviceAccountName: {{ include "kube-policies.serviceAccountName" . }}
+      serviceAccountName: {{ include "kube-policies.policyManagerServiceAccountName" . }}
+      # IAM-WU-10 (CIS 5.1.5/5.1.6): the SA defaults automount off; the policy-manager
+      # opts the token back in here because the controller-runtime client + leader
+      # election authenticate to the apiserver with it.
+      automountServiceAccountToken: {{ dig "automountServiceAccountToken" true .Values.policyManager }}
       securityContext:
         {{- toYaml .Values.policyManager.podSecurityContext | nindent 8 }}
       containers:

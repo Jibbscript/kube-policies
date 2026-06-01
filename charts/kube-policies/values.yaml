@@ -60,7 +60,11 @@ admissionWebhook:
   enabled: true
   name: admission-webhook
   replicaCount: 2
-  
+  # IAM-WU-10 (CIS 5.1.5/5.1.6): SA tokens are off by default on the SA; the webhook
+  # opts back in at pod level because the controller-runtime client + leader election
+  # need an apiserver token. Set false only if the pod no longer talks to the apiserver.
+  automountServiceAccountToken: true
+
   image:
     registry: docker.io
     repository: kube-policies/admission-webhook
@@ -162,7 +166,11 @@ policyManager:
   enabled: true
   name: policy-manager
   replicaCount: 1
-  
+  # IAM-WU-10 (CIS 5.1.5/5.1.6): SA tokens are off by default on the SA; the
+  # policy-manager opts back in at pod level because the controller-runtime client +
+  # leader election need an apiserver token.
+  automountServiceAccountToken: true
+
   image:
     registry: docker.io
     repository: kube-policies/policy-manager
@@ -289,12 +297,19 @@ rbac:
   # Create RBAC resources
   create: true
   
-  # Service account configuration
+  # Service account configuration. Each component has its OWN ServiceAccount
+  # (IAM-WU-09 separation of duties): <fullname>-admission-webhook,
+  # <fullname>-policy-manager, and <fullname>-dashboard.
   serviceAccount:
-    # Create service account
+    # Create the webhook + policy-manager ServiceAccounts. When false you MUST
+    # pre-create ServiceAccounts named like the defaults below (or set the
+    # *Name overrides to your pre-created names) — there is no fallback to the
+    # cluster "default" SA, which would defeat least-privilege.
     create: true
-    # Service account name (auto-generated if not specified)
-    name: ""
+    # Optional name overrides for the per-component SAs (default to
+    # <fullname>-admission-webhook / <fullname>-policy-manager when empty).
+    webhookName: ""
+    policyManagerName: ""
     # Service account annotations
     annotations: {}
 
@@ -308,7 +323,11 @@ metrics:
   tls:
     enabled: false
 
-# Monitoring Configuration
+# Monitoring Configuration.
+# NOTE: this flag is currently inert in the chart — the over-privileged monitoring
+# ClusterRole it used to gate (cluster-wide nodes/pods/services read bound to the app
+# SA) was removed as dead privilege (IAM-WU-08). A real Prometheus ships its own RBAC
+# (see deployments/kubernetes/monitoring/). Reserved for a future ServiceMonitor gate.
 monitoring:
   # Enable monitoring stack
   enabled: true
@@ -408,6 +427,11 @@ grafana:
 dashboard:
   # Off by default; set enabled=true to deploy the read-only Svelte SPA + Go BFF.
   enabled: false
+
+  # IAM-WU-10 (CIS 5.1.5/5.1.6): the dashboard never calls the apiserver at runtime,
+  # so no SA token is mounted. Keep false; the webhook/manager need the token, the
+  # dashboard does not.
+  automountServiceAccountToken: false
 
   # Two-flag write gate: ALLOW_WRITES env is only "true" when this AND enabled are
   # both true. With user auth enabled (auth.mode below), ALLOW_WRITES is a coarse

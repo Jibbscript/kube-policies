@@ -1,77 +1,60 @@
 {{- if .Values.rbac.create }}
+{{- if .Values.rbac.serviceAccount.create }}
+# Admission-webhook ServiceAccount (IAM-WU-09): the enforcement plane's identity.
+# automountServiceAccountToken: false (IAM-WU-10, CIS 5.1.5/5.1.6) — the SA default
+# is off; the webhook Deployment opts the token back IN at pod level because the
+# controller-runtime client + leader election need it.
 apiVersion: v1
 kind: ServiceAccount
 metadata:
-  name: {{ include "kube-policies.serviceAccountName" . }}
+  name: {{ include "kube-policies.webhookServiceAccountName" . }}
   namespace: {{ .Release.Namespace }}
   labels:
     {{- include "kube-policies.labels" . | nindent 4 }}
+    app.kubernetes.io/component: admission-webhook
   {{- with .Values.rbac.serviceAccount.annotations }}
   annotations:
     {{- toYaml . | nindent 4 }}
   {{- end }}
+automountServiceAccountToken: false
 ---
+# Policy-manager ServiceAccount (IAM-WU-09): the management plane's identity,
+# distinct from the webhook for separation of duties (NIST AC-5).
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "kube-policies.policyManagerServiceAccountName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kube-policies.labels" . | nindent 4 }}
+    app.kubernetes.io/component: policy-manager
+  {{- with .Values.rbac.serviceAccount.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+automountServiceAccountToken: false
+---
+{{- end }}
+# Least-privilege ClusterRole for the admission-webhook (IAM-WU-08). The reconcilers
+# watch policies/policyexceptions across all namespaces (Namespaced CRDs, cluster-wide
+# watch) and patch their /status; nothing else in the apiserver is read or written at
+# runtime. No core/apps/rbac/networking/admissionregistration grants — the webhook does
+# NOT self-register webhook configs and the engine does not fetch related cluster
+# objects during evaluation (TLS certs are volume-mounted, not API-fetched).
 apiVersion: {{ include "kube-policies.rbac.apiVersion" . }}
 kind: ClusterRole
 metadata:
-  name: {{ include "kube-policies.fullname" . }}
+  name: {{ include "kube-policies.fullname" . }}-admission-webhook
   labels:
     {{- include "kube-policies.labels" . | nindent 4 }}
+    app.kubernetes.io/component: admission-webhook
 rules:
-# Core Kubernetes resources
-- apiGroups: [""]
-  resources:
-  - pods
-  - services
-  - endpoints
-  - persistentvolumeclaims
-  - configmaps
-  - secrets
-  - serviceaccounts
-  - namespaces
-  - nodes
-  verbs: ["get", "list", "watch"]
-
-# Apps resources
-- apiGroups: ["apps"]
-  resources:
-  - deployments
-  - replicasets
-  - daemonsets
-  - statefulsets
-  verbs: ["get", "list", "watch"]
-
-# Extensions resources
-- apiGroups: ["extensions"]
-  resources:
-  - deployments
-  - replicasets
-  - daemonsets
-  - ingresses
-  verbs: ["get", "list", "watch"]
-
-# Networking resources
-- apiGroups: ["networking.k8s.io"]
-  resources:
-  - networkpolicies
-  - ingresses
-  verbs: ["get", "list", "watch"]
-
-# RBAC resources
-- apiGroups: ["rbac.authorization.k8s.io"]
-  resources:
-  - roles
-  - rolebindings
-  - clusterroles
-  - clusterrolebindings
-  verbs: ["get", "list", "watch"]
-
 # Policy resources
 - apiGroups: ["policies.kube-policies.io"]
   resources:
   - policies
   - policyexceptions
-  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  verbs: ["get", "list", "watch"]
 
 # Policy status subresources.
 # PolicyReconciler.publishPolicyStatus / PolicyExceptionReconciler.publishExceptionStatus
@@ -85,84 +68,151 @@ rules:
   - policies/status
   - policyexceptions/status
   verbs: ["get", "update", "patch"]
-
-# Admission registration
-- apiGroups: ["admissionregistration.k8s.io"]
+---
+# Separate ClusterRole for the policy-manager (IAM-WU-08), distinct object for
+# separation of duties even though the rule set matches the webhook's: both planes
+# reconcile the same CRDs with the same minimal apiserver footprint.
+apiVersion: {{ include "kube-policies.rbac.apiVersion" . }}
+kind: ClusterRole
+metadata:
+  name: {{ include "kube-policies.fullname" . }}-policy-manager
+  labels:
+    {{- include "kube-policies.labels" . | nindent 4 }}
+    app.kubernetes.io/component: policy-manager
+rules:
+# Policy resources
+- apiGroups: ["policies.kube-policies.io"]
   resources:
-  - validatingwebhookconfigurations
-  - mutatingwebhookconfigurations
-  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - policies
+  - policyexceptions
+  verbs: ["get", "list", "watch"]
 
-# Events
+# Policy status subresources (see the webhook ClusterRole above for why the
+# /status subresource needs its own rule).
+- apiGroups: ["policies.kube-policies.io"]
+  resources:
+  - policies/status
+  - policyexceptions/status
+  verbs: ["get", "update", "patch"]
+---
+apiVersion: {{ include "kube-policies.rbac.apiVersion" . }}
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "kube-policies.fullname" . }}-admission-webhook
+  labels:
+    {{- include "kube-policies.labels" . | nindent 4 }}
+    app.kubernetes.io/component: admission-webhook
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "kube-policies.fullname" . }}-admission-webhook
+subjects:
+- kind: ServiceAccount
+  name: {{ include "kube-policies.webhookServiceAccountName" . }}
+  namespace: {{ .Release.Namespace }}
+---
+apiVersion: {{ include "kube-policies.rbac.apiVersion" . }}
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "kube-policies.fullname" . }}-policy-manager
+  labels:
+    {{- include "kube-policies.labels" . | nindent 4 }}
+    app.kubernetes.io/component: policy-manager
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "kube-policies.fullname" . }}-policy-manager
+subjects:
+- kind: ServiceAccount
+  name: {{ include "kube-policies.policyManagerServiceAccountName" . }}
+  namespace: {{ .Release.Namespace }}
+---
+# Leader-election Role (IAM-WU-08, namespaced). The coordination.k8s.io/Lease is
+# created only in {{ .Release.Namespace }}, so the grant is a namespaced Role rather
+# than a ClusterRole. Distinct lease IDs (kube-policies-admission-webhook vs
+# kube-policies-policy-manager) mean each plane elects its own leader.
+apiVersion: {{ include "kube-policies.rbac.apiVersion" . }}
+kind: Role
+metadata:
+  name: {{ include "kube-policies.fullname" . }}-admission-webhook-leader-election
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kube-policies.labels" . | nindent 4 }}
+    app.kubernetes.io/component: admission-webhook
+rules:
+- apiGroups: ["coordination.k8s.io"]
+  resources:
+  - leases
+  verbs: ["get", "list", "watch", "create", "update", "patch"]
+# controller-runtime leader election emits a namespaced "became leader" Event through
+# the client-go EventRecorder (resourcelock.RecordEvent) — a call inside the library,
+# not project code. Without this the apiserver Forbids the Event (a stray klog warning,
+# not a crashloop) and the leadership-change audit breadcrumb is lost. Namespaced, not
+# the cluster-wide events grant the old shared ClusterRole carried (IAM-WU-08).
 - apiGroups: [""]
   resources:
   - events
   verbs: ["create", "patch"]
-
-# Leader election (coordination.k8s.io/Lease resource).
-# The Lease is namespaced; this ClusterRole grants the verbs globally
-# but the actual Lease is only created in {{ .Release.Namespace }}.
+---
+apiVersion: {{ include "kube-policies.rbac.apiVersion" . }}
+kind: Role
+metadata:
+  name: {{ include "kube-policies.fullname" . }}-policy-manager-leader-election
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kube-policies.labels" . | nindent 4 }}
+    app.kubernetes.io/component: policy-manager
+rules:
 - apiGroups: ["coordination.k8s.io"]
   resources:
   - leases
-  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
-
-# Metrics
-- nonResourceURLs: ["/metrics"]
-  verbs: ["get"]
----
-apiVersion: {{ include "kube-policies.rbac.apiVersion" . }}
-kind: ClusterRoleBinding
-metadata:
-  name: {{ include "kube-policies.fullname" . }}
-  labels:
-    {{- include "kube-policies.labels" . | nindent 4 }}
-roleRef:
-  apiGroup: rbac.authorization.k8s.io
-  kind: ClusterRole
-  name: {{ include "kube-policies.fullname" . }}
-subjects:
-- kind: ServiceAccount
-  name: {{ include "kube-policies.serviceAccountName" . }}
-  namespace: {{ .Release.Namespace }}
----
-{{- if .Values.monitoring.enabled }}
-apiVersion: {{ include "kube-policies.rbac.apiVersion" . }}
-kind: ClusterRole
-metadata:
-  name: {{ include "kube-policies.fullname" . }}-monitoring
-  labels:
-    {{- include "kube-policies.labels" . | nindent 4 }}
-rules:
-# Prometheus monitoring
+  verbs: ["get", "list", "watch", "create", "update", "patch"]
+# controller-runtime leader election emits a namespaced "became leader" Event through
+# the client-go EventRecorder (resourcelock.RecordEvent) — a call inside the library,
+# not project code. Without this the apiserver Forbids the Event (a stray klog warning,
+# not a crashloop) and the leadership-change audit breadcrumb is lost. Namespaced, not
+# the cluster-wide events grant the old shared ClusterRole carried (IAM-WU-08).
 - apiGroups: [""]
   resources:
-  - nodes
-  - nodes/proxy
-  - services
-  - endpoints
-  - pods
-  verbs: ["get", "list", "watch"]
-- apiGroups: ["extensions"]
-  resources:
-  - ingresses
-  verbs: ["get", "list", "watch"]
-- nonResourceURLs: ["/metrics"]
-  verbs: ["get"]
+  - events
+  verbs: ["create", "patch"]
 ---
 apiVersion: {{ include "kube-policies.rbac.apiVersion" . }}
-kind: ClusterRoleBinding
+kind: RoleBinding
 metadata:
-  name: {{ include "kube-policies.fullname" . }}-monitoring
+  name: {{ include "kube-policies.fullname" . }}-admission-webhook-leader-election
+  namespace: {{ .Release.Namespace }}
   labels:
     {{- include "kube-policies.labels" . | nindent 4 }}
+    app.kubernetes.io/component: admission-webhook
 roleRef:
   apiGroup: rbac.authorization.k8s.io
-  kind: ClusterRole
-  name: {{ include "kube-policies.fullname" . }}-monitoring
+  kind: Role
+  name: {{ include "kube-policies.fullname" . }}-admission-webhook-leader-election
 subjects:
 - kind: ServiceAccount
-  name: {{ include "kube-policies.serviceAccountName" . }}
+  name: {{ include "kube-policies.webhookServiceAccountName" . }}
   namespace: {{ .Release.Namespace }}
-{{- end }}
+---
+apiVersion: {{ include "kube-policies.rbac.apiVersion" . }}
+kind: RoleBinding
+metadata:
+  name: {{ include "kube-policies.fullname" . }}-policy-manager-leader-election
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kube-policies.labels" . | nindent 4 }}
+    app.kubernetes.io/component: policy-manager
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "kube-policies.fullname" . }}-policy-manager-leader-election
+subjects:
+- kind: ServiceAccount
+  name: {{ include "kube-policies.policyManagerServiceAccountName" . }}
+  namespace: {{ .Release.Namespace }}
+# NOTE: no monitoring ClusterRole here. The previous {{ "{{" }} monitoring.enabled {{ "}}" }}
+# block granted cluster-wide read on nodes/pods/services/endpoints bound to the app
+# SA but had no consumer (no ServiceMonitor/Prometheus template ships with this
+# chart). A real Prometheus deployment ships its own RBAC; kube-policies does not
+# need to grant it on the operator's behalf.
 {{- end }}
