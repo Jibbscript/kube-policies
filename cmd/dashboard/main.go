@@ -214,15 +214,40 @@ func newAPIServer(ctx context.Context, cfg *Config, log *zap.Logger) (*http.Serv
 	subscriber := NewStreamSubscriber(ctx, cfg, upstreamTLS, ring, log)
 	subscriber.Start()
 
-	router.GET("/api/metrics/summary", NewMetricsHandler(cfg, log))
-	router.GET("/api/decisions/recent", NewRecentHandler(ring, log))
-	router.GET("/api/decisions/stream", subscriber.Handler())
+	// User authentication (IAM-WU-04 / NET-WU-18 / IAM-WU-16). In oidc mode this
+	// performs OIDC discovery and fails closed on error rather than serving an
+	// unprotected dashboard. The /auth/* endpoints and the SPA assets stay public;
+	// the read + proxy endpoints below are gated.
+	authn, err := newAuthenticator(ctx, cfg, log)
+	if err != nil {
+		return nil, fmt.Errorf("auth init: %w", err)
+	}
+	if authn.mode == authModeDisabled {
+		log.Warn("dashboard user authentication DISABLED (DASHBOARD_AUTH_MODE=disabled) — the /api read + proxy endpoints are served UNAUTHENTICATED. Dev posture and a tracked gap; set DASHBOARD_AUTH_MODE=oidc (or forward-auth) in production.")
+	} else {
+		log.Info("dashboard user authentication enabled", zap.String("mode", string(authn.mode)))
+	}
+	authn.registerRoutes(router)
+
+	// PUBLIC: machine ingest stays gated by the symmetric internal token only
+	// (decisions.go), a separate trust domain from user auth — never placed under
+	// the user-auth group.
 	router.POST("/api/decisions/internal", NewIngestHandler(cfg, ring, log))
 
 	proxy, err := NewProxyHandler(cfg, upstreamTLS, log)
 	if err != nil {
 		return nil, fmt.Errorf("proxy init: %w", err)
 	}
+
+	// PROTECTED: the read endpoints and the policy-manager reverse proxy require an
+	// authenticated user (NET-WU-18). EventSource cannot send an Authorization
+	// header, so the gate is cookie-based; an unauthenticated XHR gets 401, a
+	// top-level navigation a 302 to /auth/login.
+	authed := router.Group("")
+	authed.Use(authn.middleware())
+	authed.GET("/api/metrics/summary", NewMetricsHandler(cfg, log))
+	authed.GET("/api/decisions/recent", NewRecentHandler(ring, log))
+	authed.GET("/api/decisions/stream", subscriber.Handler())
 	// Wildcard match — Gin requires distinct method registration for the
 	// shared prefix, so we register the common verbs explicitly. Disallowed
 	// verbs are rejected inside the proxy handler (verb gate); unknown verbs
@@ -231,7 +256,7 @@ func newAPIServer(ctx context.Context, cfg *Config, log *zap.Logger) (*http.Serv
 		http.MethodGet, http.MethodHead, http.MethodPost,
 		http.MethodPut, http.MethodPatch, http.MethodDelete,
 	} {
-		router.Handle(m, "/api/v1/*proxyPath", proxy)
+		authed.Handle(m, "/api/v1/*proxyPath", proxy)
 	}
 
 	// SPA fallback: any route the API layer didn't claim falls through to the

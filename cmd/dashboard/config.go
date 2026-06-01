@@ -1,9 +1,11 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // Config is the runtime configuration for the dashboard binary.
@@ -89,13 +91,52 @@ type Config struct {
 	HSTSEnabled           bool
 	HSTSMaxAge            int
 	HSTSIncludeSubdomains bool
+
+	// --- User authentication (IAM-WU-04 / NET-WU-18 / IAM-WU-16) ---
+
+	// AuthMode selects dashboard user authentication: "disabled" (default; the
+	// legacy unauthenticated dev posture), "oidc" (Authorization Code + PKCE login
+	// in the BFF with a sealed session cookie), or "forward-auth" (trust identity
+	// headers from an upstream identity-aware proxy).
+	AuthMode string
+
+	// OIDC* configure the "oidc" mode. Issuer/ClientID/ClientSecret/RedirectURL +
+	// SessionKey are required when AuthMode=oidc (LoadConfig fails closed otherwise).
+	OIDCIssuer        string
+	OIDCClientID      string
+	OIDCClientSecret  string
+	OIDCRedirectURL   string
+	OIDCScopes        []string
+	OIDCUsernameClaim string
+	OIDCGroupsClaim   string
+
+	// SessionKey / SessionKeyPrevious are base64-encoded 32-byte AES-256 keys that
+	// seal the session cookie; the previous key is accepted during rotation.
+	SessionKey         string
+	SessionKeyPrevious string
+
+	// SessionIdleTimeout / SessionAbsoluteTimeout bound the session per FedRAMP
+	// AC-11/AC-12 (defaults 15m idle, 12h absolute).
+	SessionIdleTimeout     time.Duration
+	SessionAbsoluteTimeout time.Duration
+
+	// SessionCookieInsecure drops the Secure attribute + __Host- prefix on the
+	// session cookies for plaintext local development. Default false (secure).
+	SessionCookieInsecure bool
+
+	// ForwardAuth*Header name the trusted identity headers in "forward-auth" mode
+	// (defaults match oauth2-proxy: X-Forwarded-User/Email/Groups/Access-Token).
+	ForwardAuthUserHeader   string
+	ForwardAuthEmailHeader  string
+	ForwardAuthGroupsHeader string
+	ForwardAuthTokenHeader  string
 }
 
 // LoadConfig reads dashboard configuration from environment variables.
 //
 // Defaults match the in-cluster service names produced by the Helm chart.
 func LoadConfig() (*Config, error) {
-	return &Config{
+	cfg := &Config{
 		// The policy-manager API/stream serve TLS 1.3 (CRY-WU-05); default to
 		// https. The metrics-URL defaults are http; the chart flips them to
 		// https when metrics.tls.enabled (CRY-WU-08) and supplies the scrape token.
@@ -117,7 +158,85 @@ func LoadConfig() (*Config, error) {
 		HSTSEnabled:                 envBool("DASHBOARD_HSTS_ENABLED", false),
 		HSTSMaxAge:                  envIntOr("DASHBOARD_HSTS_MAX_AGE", 31536000),
 		HSTSIncludeSubdomains:       envBool("DASHBOARD_HSTS_INCLUDE_SUBDOMAINS", true),
-	}, nil
+
+		AuthMode:                envOr("DASHBOARD_AUTH_MODE", "disabled"),
+		OIDCIssuer:              os.Getenv("DASHBOARD_OIDC_ISSUER"),
+		OIDCClientID:            os.Getenv("DASHBOARD_OIDC_CLIENT_ID"),
+		OIDCClientSecret:        os.Getenv("DASHBOARD_OIDC_CLIENT_SECRET"),
+		OIDCRedirectURL:         os.Getenv("DASHBOARD_OIDC_REDIRECT_URL"),
+		OIDCScopes:              splitScopes(envOr("DASHBOARD_OIDC_SCOPES", "openid profile email groups")),
+		OIDCUsernameClaim:       envOr("DASHBOARD_OIDC_USERNAME_CLAIM", "sub"),
+		OIDCGroupsClaim:         envOr("DASHBOARD_OIDC_GROUPS_CLAIM", "groups"),
+		SessionKey:              os.Getenv("DASHBOARD_SESSION_KEY"),
+		SessionKeyPrevious:      os.Getenv("DASHBOARD_SESSION_KEY_PREVIOUS"),
+		SessionIdleTimeout:      envDurationOr("DASHBOARD_SESSION_IDLE_TIMEOUT", 15*time.Minute),
+		SessionAbsoluteTimeout:  envDurationOr("DASHBOARD_SESSION_ABSOLUTE_TIMEOUT", 12*time.Hour),
+		SessionCookieInsecure:   envBool("DASHBOARD_SESSION_COOKIE_INSECURE", false),
+		ForwardAuthUserHeader:   envOr("DASHBOARD_FORWARD_AUTH_USER_HEADER", "X-Forwarded-User"),
+		ForwardAuthEmailHeader:  envOr("DASHBOARD_FORWARD_AUTH_EMAIL_HEADER", "X-Forwarded-Email"),
+		ForwardAuthGroupsHeader: envOr("DASHBOARD_FORWARD_AUTH_GROUPS_HEADER", "X-Forwarded-Groups"),
+		ForwardAuthTokenHeader:  envOr("DASHBOARD_FORWARD_AUTH_TOKEN_HEADER", "X-Forwarded-Access-Token"),
+	}
+	if err := cfg.validateAuth(); err != nil {
+		return nil, err
+	}
+	return cfg, nil
+}
+
+// validateAuth fails closed when oidc mode is selected without the credentials
+// it needs, so a half-configured deployment refuses to start rather than serving
+// an unprotected dashboard while claiming auth is on.
+func (c *Config) validateAuth() error {
+	switch c.AuthMode {
+	case "", "disabled", "forward-auth":
+		return nil
+	case "oidc":
+		var missing []string
+		if c.OIDCIssuer == "" {
+			missing = append(missing, "DASHBOARD_OIDC_ISSUER")
+		}
+		if c.OIDCClientID == "" {
+			missing = append(missing, "DASHBOARD_OIDC_CLIENT_ID")
+		}
+		if c.OIDCClientSecret == "" {
+			missing = append(missing, "DASHBOARD_OIDC_CLIENT_SECRET")
+		}
+		if c.OIDCRedirectURL == "" {
+			missing = append(missing, "DASHBOARD_OIDC_REDIRECT_URL")
+		}
+		if c.SessionKey == "" {
+			missing = append(missing, "DASHBOARD_SESSION_KEY")
+		}
+		if len(missing) > 0 {
+			return fmt.Errorf("DASHBOARD_AUTH_MODE=oidc requires: %s", strings.Join(missing, ", "))
+		}
+		return nil
+	default:
+		return fmt.Errorf("invalid DASHBOARD_AUTH_MODE %q (want disabled|oidc|forward-auth)", c.AuthMode)
+	}
+}
+
+// splitScopes splits a space-separated OIDC scope list, dropping empties.
+func splitScopes(raw string) []string {
+	out := []string{}
+	for _, s := range strings.Fields(raw) {
+		out = append(out, s)
+	}
+	return out
+}
+
+// envDurationOr parses a Go duration (e.g. "15m", "12h") from key, or returns
+// fallback when unset/invalid.
+func envDurationOr(key string, fallback time.Duration) time.Duration {
+	v, ok := os.LookupEnv(key)
+	if !ok || strings.TrimSpace(v) == "" {
+		return fallback
+	}
+	d, err := time.ParseDuration(strings.TrimSpace(v))
+	if err != nil || d <= 0 {
+		return fallback
+	}
+	return d
 }
 
 // envIntOr returns the integer value of key, or fallback when unset/invalid.
