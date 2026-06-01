@@ -43,6 +43,19 @@ type Manager struct {
 	// (static-token only).
 	internalReviewer *InternalTokenAuthenticator
 
+	// decisionsReadReviewer validates the inbound projected ServiceAccount token
+	// on the READ side of the decisions plane — GET /api/v1/decisions/stream and
+	// /recent — via the Kubernetes TokenReview API (IAM-WU-11, Inc7 Stream A).
+	// It is a SEPARATE authenticator from internalReviewer: same audience
+	// (policy-manager) but pinned to the DASHBOARD SA rather than the webhook SA,
+	// so the dashboard's upstream subscriber can authenticate to these read feeds
+	// without weakening the /internal ingest pin. When non-nil it is the primary,
+	// audience+subject-bound authenticator for the reads; internalToken remains
+	// the opt-in static fallback (static mode). nil leaves the reads on the
+	// static-token-only path (the DecisionsReadAuth middleware still requires a
+	// configured token, so an unconfigured manager returns 401).
+	decisionsReadReviewer *InternalTokenAuthenticator
+
 	// auditLogger records a ConfigurationChange audit event for every persisting
 	// management-plane mutation (IAM-WU-14, AU-2/AU-3/AC-6). It is installed via
 	// SetAuditLogger after construction so existing NewManager(cfg, log) callers
@@ -185,6 +198,18 @@ func (m *Manager) SetInternalTokens(current, previous string) {
 // unchanged so the static fallback is always available.
 func (m *Manager) SetInternalTokenReviewer(reviewer *InternalTokenAuthenticator) {
 	m.internalReviewer = reviewer
+}
+
+// SetDecisionsReadAuthenticator installs the audience+subject-bound TokenReview
+// authenticator for the READ side of the decisions plane — GET
+// /api/v1/decisions/stream and /recent (IAM-WU-11, Inc7 Stream A). It mirrors
+// SetInternalTokenReviewer but is pinned to the DASHBOARD SA, so the dashboard's
+// upstream subscriber authenticates to the read feeds while /internal keeps its
+// webhook-SA pin. A clean negative verdict may then fall through to the static
+// internalToken (static mode); a TokenReview API error always rejects (fail
+// closed). A nil reviewer leaves the reads on the static-token-only path.
+func (m *Manager) SetDecisionsReadAuthenticator(reviewer *InternalTokenAuthenticator) {
+	m.decisionsReadReviewer = reviewer
 }
 
 // SetAuditLogger installs the audit.Logger that records a ConfigurationChange

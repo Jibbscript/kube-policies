@@ -56,11 +56,14 @@ Each CSV row is one Moderate control or enhancement. Columns:
 - **Not-Applicable** — no in-boundary component exercises the control (e.g. `AC-18` wireless, `SC-15` collaborative computing, `SI-8` spam).
 
 > **Honesty note.** This is a proof-of-concept on the path to ATO. Of 300 in-scope
-> rows, only **2 are Implemented** (`RA-2` categorization, `PL-10` baseline
-> selection) and **40 are Partial**. The Partial rows are real, code-backed bright
-> spots — they are not aspirational. Everything else is **Planned** or **Inherited**
-> and is traceable to a remediation phase and, where it is a known open weakness, a
-> POA&M item.
+> rows, only **3 are Implemented** (`RA-2` categorization, `PL-10` baseline
+> selection, `AC-1` access-control policy) and **47 are Partial**. The Partial rows
+> are real, code-backed bright spots — they are not aspirational; several IAM rows
+> (`AC-2/3/5/17`, `IA-2`) are **Partial because their enforcement is config-gated**
+> on `security.authentication.enabled` (chart default off = management plane
+> unauthenticated, a dev-only tracked gap), not because they are fully met.
+> Everything else is **Planned** or **Inherited** and is traceable to a remediation
+> phase and, where it is a known open weakness, a POA&M item.
 
 ## Coverage summary
 
@@ -68,13 +71,13 @@ Each CSV row is one Moderate control or enhancement. Columns:
 
 | Family | Controls | Implemented | Partial | Planned | Inherited | N/A |
 |---|---|---|---|---|---|---|
-| AC — Access Control | 38 | 0 | 2 | 29 | 4 | 3 |
+| AC — Access Control | 38 | 1 | 6 | 24 | 4 | 3 |
 | AT — Awareness and Training | 6 | 0 | 0 | 6 | 0 | 0 |
 | AU — Audit and Accountability | 19 | 0 | 4 | 15 | 0 | 0 |
 | CA — Assessment, Authorization, and Monitoring | 13 | 0 | 1 | 12 | 0 | 0 |
 | CM — Configuration Management | 22 | 0 | 4 | 18 | 0 | 0 |
 | CP — Contingency Planning | 22 | 0 | 2 | 10 | 10 | 0 |
-| IA — Identification and Authentication | 22 | 0 | 0 | 16 | 6 | 0 |
+| IA — Identification and Authentication | 22 | 0 | 3 | 13 | 6 | 0 |
 | IR — Incident Response | 12 | 0 | 0 | 12 | 0 | 0 |
 | MA — Maintenance | 9 | 0 | 0 | 4 | 5 | 0 |
 | MP — Media Protection | 7 | 0 | 0 | 2 | 5 | 0 |
@@ -87,7 +90,7 @@ Each CSV row is one Moderate control or enhancement. Columns:
 | SI — System and Information Integrity | 17 | 0 | 5 | 11 | 0 | 1 |
 | SR — Supply Chain Risk Management | 14 | 0 | 1 | 13 | 0 | 0 |
 | PM — Program Management | 10 | 0 | 2 | 8 | 0 | 0 |
-| **Total** | **300** | **2** | **40** | **200** | **53** | **5** |
+| **Total** | **300** | **3** | **47** | **192** | **53** | **5** |
 
 > The per-family **control selection** above is a working approximation of the
 > FedRAMP Moderate baseline and **must be reconciled against the official OSCAL
@@ -104,10 +107,16 @@ deliberately marked **Partial** (or **Implemented**) and cite the exact artifact
   (kube-apiserver → `AST-WH:8443`). The management/metrics planes
   (`AST-PM:8080/9091`, `AST-DB:8090/9092`, `ICX-02/03/04/05`) are still plaintext —
   in-cluster TLS/mTLS lands in **P3/P4** (open weakness **POAM-003**).
-- **AC-6 — Least privilege (Partial).** Pods run `runAsNonRoot`,
-  `allowPrivilegeEscalation:false`, `readOnlyRootFilesystem`, capabilities
-  `drop:[ALL]` (`charts/kube-policies/values.yaml`, `…/templates/rbac.yaml`). The
-  shared, over-broad ServiceAccount is split to least privilege in **P3** (**POAM-001**).
+- **AC-3 / AC-5 / AC-6 — Access enforcement, separation of duties, least privilege (Partial).**
+  Each plane runs under its **own** ServiceAccount bound to its **own** (Cluster)Role
+  (`charts/kube-policies/templates/rbac.yaml`, `…/dashboard-rbac.yaml`): webhook and
+  policy-manager get only CRD `get/list/watch` + `/status` patch, the TokenReview
+  `create` grant is on the policy-manager only, and the dashboard Role is read-only on
+  two named Services. The decision plane is authenticated unconditionally via
+  TokenReview (Inc7). The **management-plane** OIDC + deny-by-default RBAC
+  (`internal/policymanager/authz.go`) is **config-gated** on
+  `security.authentication.enabled` (chart default off = unauthenticated, dev-gap),
+  which is why these stay **Partial**. See [iam-control-narrative.md](iam-control-narrative.md).
 - **AU-2 / AU-3 / AU-12 — Audit (Partial).** The webhook logs **every** allow/deny
   decision with who/what/when via `internal/audit/logger.go`. Missing record fields
   (source IP, user-agent, request-URI), tamper protection, durability, and
@@ -125,9 +134,18 @@ deliberately marked **Partial** (or **Implemented**) and cite the exact artifact
   and unit tests exist (`.github/workflows/release.yml`, `ci.yml`) but are
   unverified/non-gating; signing, provenance, and gated scans land in **P6/P11**
   (**POAM-006**, **POAM-008**).
-- **RA-2 (Implemented), PL-10 (Implemented).** Categorization and baseline
-  selection are complete; baseline selection still carries an OSCAL-reconciliation
-  obligation (**POAM-009**).
+- **IA-2 / IA-3 / IA-5 — Identification & authentication (Partial).** OIDC ID-token
+  bearer authN (`internal/policymanager/auth_middleware.go`, config-gated),
+  audience+subject-bound projected SA tokens via TokenReview
+  (`internal/policymanager/tokenreview.go`, `tokenreview` mode is the chart default),
+  and managed bearer/cert authenticator lifecycles (`internal/auth/token.go`,
+  cert-manager + `internal/tlsreload`). MFA/PIV and the remaining chart-side CSPRNG
+  token generation are tracked. See [iam-control-narrative.md](iam-control-narrative.md).
+- **RA-2 (Implemented), PL-10 (Implemented), AC-1 (Implemented).** Categorization,
+  baseline selection, and the AC-1 access-control policy + procedures
+  ([policies/AC-policy.md](policies/AC-policy.md),
+  [procedures/AC-procedures.md](procedures/AC-procedures.md)) are complete; baseline
+  selection still carries an OSCAL-reconciliation obligation (**POAM-009**).
 
 ## Inherited and Not-Applicable rationale
 

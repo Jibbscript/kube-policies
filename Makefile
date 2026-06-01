@@ -263,6 +263,54 @@ validate-manifests: ## Validate Helm, Kubernetes, Prometheus, Alertmanager, and 
 	bash scripts/validate/manifests.sh
 	@echo "$(GREEN)Deployment artifact validation completed$(NC)"
 
+.PHONY: validate-rbac
+validate-rbac: ## Gate RBAC + ServiceAccount-token least-privilege (IAM-WU-17) via conftest on the rendered chart
+	@echo "$(BLUE)Gating RBAC/SA-token least-privilege (IAM-WU-17)...$(NC)"
+	@command -v conftest >/dev/null 2>&1 || { echo "$(RED)conftest not found — install conftest (https://www.conftest.dev) and rerun$(NC)"; exit 127; }
+	@tmp="$$(mktemp -d)"; trap 'rm -rf "$$tmp"' EXIT; \
+	helm template kube-policies $(CHARTS_DIR)/kube-policies \
+		--set policyManager.internalAuth.mode=tokenreview --set dashboard.enabled=true >"$$tmp/rendered-tokenreview.yaml"; \
+	helm template kube-policies $(CHARTS_DIR)/kube-policies \
+		--set policyManager.internalAuth.mode=static --set dashboard.enabled=true >"$$tmp/rendered-static.yaml"; \
+	for f in "$$tmp/rendered-tokenreview.yaml" "$$tmp/rendered-static.yaml"; do \
+		echo "==> conftest (per-document) $$f"; \
+		conftest test --policy test/policy --namespace rbac.leastprivilege --namespace sa.token "$$f"; \
+		echo "==> conftest (--combine) $$f"; \
+		conftest test --combine --policy test/policy --namespace sa.shared "$$f"; \
+	done; \
+	echo "$(BLUE)==> Policy self-test: each fail fixture must be denied$(NC)"; \
+	broken=0; \
+	for fx in \
+		test/policy/fixtures/fail/secrets-clusterrole.yaml \
+		test/policy/fixtures/fail/secrets-subresource.yaml \
+		test/policy/fixtures/fail/missing-automount.yaml; do \
+		echo "  self-test (per-doc): $$fx"; \
+		if conftest test --policy test/policy \
+			--namespace rbac.leastprivilege --namespace sa.token "$$fx" 2>&1; then \
+			echo "$(RED)  POLICY SELF-TEST FAILED: $$fx produced 0 denies — deny rule is broken$(NC)" >&2; \
+			broken=1; \
+		else \
+			echo "  OK — $$fx correctly denied"; \
+		fi; \
+	done; \
+	for fx in \
+		test/policy/fixtures/fail/shared-sa.yaml \
+		test/policy/fixtures/fail/label-drift.yaml; do \
+		echo "  self-test (--combine): $$fx"; \
+		if conftest test --combine --policy test/policy \
+			--namespace sa.shared "$$fx" 2>&1; then \
+			echo "$(RED)  POLICY SELF-TEST FAILED: $$fx produced 0 denies — deny rule is broken$(NC)" >&2; \
+			broken=1; \
+		else \
+			echo "  OK — $$fx correctly denied"; \
+		fi; \
+	done; \
+	if [ "$$broken" -ne 0 ]; then \
+		echo "$(RED)Policy self-test failed — a deny rule is not firing. Fix the Rego.$(NC)" >&2; \
+		exit 1; \
+	fi
+	@echo "$(GREEN)RBAC/SA-token least-privilege gate passed (policy self-test green)$(NC)"
+
 .PHONY: validate-compliance
 validate-compliance: ## Validate compliance artifacts (control matrix, POA&M, inventory, doc links) offline
 	@echo "$(BLUE)Validating compliance artifacts offline...$(NC)"

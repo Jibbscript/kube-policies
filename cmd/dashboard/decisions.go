@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -258,7 +259,23 @@ type StreamSubscriber struct {
 	ring   *Ring
 	ctx    context.Context
 	client *http.Client
+	// tokenSource, when non-nil, resolves the bearer presented on the upstream
+	// SSE subscription per-connect (IAM-WU-11, Inc7 Stream A): the projected SA
+	// token read from StreamTokenPath (re-read to follow kubelet rotation) or the
+	// static StreamToken. It returns "" when no token is available (a transiently
+	// absent token file or dev with nothing configured) — fetchAndStream then
+	// omits the Authorization header rather than crashing; a 401 upstream is a
+	// normal error that drives the existing backoff. Token material is never
+	// logged.
+	tokenSource func() (string, error)
 }
+
+// streamTokenFileCacheTTL bounds how long a projected token read from
+// StreamTokenPath is reused before the file is re-read. The kubelet rotates the
+// projected token well before its short TTL elapses, so a 60s cache keeps the
+// presented token fresh while avoiding a disk read on every reconnect. Mirrors
+// the webhook publisher's tokenFileCacheTTL (internal/admission/decision_publisher.go).
+const streamTokenFileCacheTTL = 60 * time.Second
 
 // NewStreamSubscriber constructs a subscriber that, once Start() is called,
 // maintains a single upstream SSE connection to cfg.PolicyManagerStreamURL
@@ -277,12 +294,70 @@ func NewStreamSubscriber(ctx context.Context, cfg *Config, clientTLS *tls.Config
 		client.Transport = &http.Transport{TLSClientConfig: clientTLS}
 	}
 	return &StreamSubscriber{
-		cfg:    cfg,
-		log:    log,
-		hub:    newStreamHub(256, log),
-		ring:   ring,
-		ctx:    ctx,
-		client: client,
+		cfg:         cfg,
+		log:         log,
+		hub:         newStreamHub(256, log),
+		ring:        ring,
+		ctx:         ctx,
+		client:      client,
+		tokenSource: newStreamTokenSource(cfg),
+	}
+}
+
+// newStreamTokenSource returns the bearer-token resolver for the upstream SSE
+// subscription (IAM-WU-11, Inc7 Stream A), or nil when nothing is configured
+// (dev posture — the subscription is then unauthenticated). A projected token
+// path (tokenreview mode) takes precedence over a static token (static mode):
+//   - StreamTokenPath set: re-read the file per cache TTL so kubelet rotation is
+//     observed; a transient read error returns the last-good value (or "") and
+//     is non-fatal, mirroring the webhook publisher's WithTokenFile reader.
+//   - StreamToken set: a constant source returning the static shared bearer.
+func newStreamTokenSource(cfg *Config) func() (string, error) {
+	if cfg.StreamTokenPath != "" {
+		return newCachedStreamTokenFileReader(cfg.StreamTokenPath, streamTokenFileCacheTTL)
+	}
+	if cfg.StreamToken != "" {
+		tok := cfg.StreamToken
+		return func() (string, error) { return tok, nil }
+	}
+	return nil
+}
+
+// newCachedStreamTokenFileReader reads path, caching the last value for ttl.
+// It mirrors the webhook publisher's newCachedTokenFileReader
+// (internal/admission/decision_publisher.go): it re-reads the path string (NOT a
+// cached fd or resolved symlink — the kubelet atomic-swaps ..data, so following
+// the path is required to observe rotations), TrimSpace strips a trailing
+// newline, and a transient read error (e.g. ENOENT mid-swap) is non-fatal —
+// the last-good value (or "") is returned and lastRead is not advanced so the
+// next call retries promptly. Token material is never logged.
+func newCachedStreamTokenFileReader(path string, ttl time.Duration) func() (string, error) {
+	var (
+		mu       sync.RWMutex
+		last     string
+		lastRead time.Time
+	)
+	return func() (string, error) {
+		mu.RLock()
+		if !lastRead.IsZero() && time.Since(lastRead) <= ttl {
+			v := last
+			mu.RUnlock()
+			return v, nil
+		}
+		mu.RUnlock()
+
+		mu.Lock()
+		defer mu.Unlock()
+		if !lastRead.IsZero() && time.Since(lastRead) <= ttl {
+			return last, nil
+		}
+		b, err := os.ReadFile(path)
+		if err != nil {
+			return last, nil
+		}
+		last = strings.TrimSpace(string(b))
+		lastRead = time.Now()
+		return last, nil
 	}
 }
 
@@ -397,6 +472,23 @@ func (s *StreamSubscriber) fetchAndStream() (connected bool, err error) {
 		return false, fmt.Errorf("build request: %w", err)
 	}
 	req.Header.Set("Accept", "text/event-stream")
+
+	// Present the service bearer so the policy-manager's TokenReview gate on
+	// /api/v1/decisions/stream accepts the subscription (IAM-WU-11, Inc7 Stream A).
+	// A nil source (dev posture) or an empty/absent token leaves the header off:
+	// a misconfigured token file must not crash the ticker — the upstream 401 is
+	// a normal error that the runUpstream backoff already handles. Never log the
+	// token.
+	if s.tokenSource != nil {
+		tok, terr := s.tokenSource()
+		if terr != nil {
+			s.log.Warn("upstream SSE: could not resolve subscription token; connecting without Authorization (will 401 if the policy-manager requires it)",
+				zap.Error(terr),
+			)
+		} else if tok != "" {
+			req.Header.Set("Authorization", "Bearer "+tok)
+		}
+	}
 
 	resp, err := s.client.Do(req)
 	if err != nil {

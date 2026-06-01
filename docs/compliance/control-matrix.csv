@@ -1,6 +1,6 @@
 control_id,title,family,baseline,status,responsible_party,implementing_artifact,remediating_phase,poam_id,notes
-AC-1,Policy and Procedures,AC,Moderate,Planned,CSP,see P12,P12,POAM-010,Access-control -1 policy not yet authored; drafted at SSP finalization.
-AC-2,Account Management,AC,Moderate,Planned,System,see P3,P3,POAM-001,No app-plane account model; OIDC principals + lifecycle defined in P3.
+AC-1,Policy and Procedures,AC,Moderate,Implemented,System,docs/compliance/policies/AC-policy.md,P12,POAM-010,AC-1 access-control policy + procedures authored (AC-policy.md/AC-procedures.md); annual-review cadence set.
+AC-2,Account Management,AC,Moderate,Partial,System,internal/policymanager/authz.go,P3,POAM-001,"Group->role model (viewer/editor/admin) maps OIDC groups via RoleBindings, but enforcement is config-gated (security.authentication.enabled; chart default false=UNAUTHENTICATED dev-gap). Automated account lifecycle still IdP/P3."
 AC-2(1),Account Management | Automated System Account Management,AC,Moderate,Planned,System,see P3,P3,POAM-001,Automated account mgmt depends on P3 IdP integration.
 AC-2(2),Account Management | Automated Temporary and Emergency Account Management,AC,Moderate,Planned,System,see P3,P3,,Temporary/emergency account expiry handled by inherited IdP + P3.
 AC-2(3),Account Management | Disable Accounts,AC,Moderate,Planned,System,see P3,P3,,Account disablement via IdP; integrated in P3.
@@ -8,10 +8,10 @@ AC-2(4),Account Management | Automated Audit Actions,AC,Moderate,Planned,System,
 AC-2(5),Account Management | Inactivity Logout,AC,Moderate,Planned,System,see P3,P3,,Session inactivity logout to be enforced by dashboard OIDC session (P3).
 AC-2(12),Account Management | Account Monitoring for Atypical Usage,AC,Moderate,Planned,Shared,see P9,P9,,Atypical-usage detection via SIEM/alerting in P9.
 AC-2(13),Account Management | Disable Accounts for High-Risk Individuals,AC,Moderate,Planned,CSP,see P12,P12,,Procedural; depends on CSP HR/IdP process.
-AC-3,Access Enforcement,AC,Moderate,Planned,System,see P3,P3,POAM-001,Data-plane unauthenticated today; authZ middleware + RBAC least-priv in P3.
+AC-3,Access Enforcement,AC,Moderate,Partial,System,internal/policymanager/authz.go,P3,POAM-001,Deny-by-default RBAC (requiredRoles + RBACMiddleware) on mgmt plane is config-gated (chart default auth.enabled=false=UNAUTHENTICATED dev-gap); decision plane (/decisions/*) authed unconditionally via TokenReview (Inc7). See iam-control-narrative.md.
 AC-4,Information Flow Enforcement,AC,Moderate,Planned,System,"charts/kube-policies/templates/ (NetworkPolicy, P4)",P4,POAM-004,No NetworkPolicy exists; default-deny + scoped flows in P4.
-AC-5,Separation of Duties,AC,Moderate,Planned,System,see P3,P3,,Role separation defined alongside RBAC split in P3.
-AC-6,Least Privilege,AC,Moderate,Partial,System,charts/kube-policies/templates/rbac.yaml,P3,POAM-001,Bright spot: pods runAsNonRoot/drop-ALL caps; SA RBAC still over-broad/shared (P3).
+AC-5,Separation of Duties,AC,Moderate,Partial,System,charts/kube-policies/templates/rbac.yaml,P3,,Workload split is enforced unconditionally (3 distinct SAs / 3 ClusterRoles; TokenReview grant on PM only); app-layer viewer/editor/admin separation is config-gated. See iam-control-narrative.md.
+AC-6,Least Privilege,AC,Moderate,Partial,System,charts/kube-policies/templates/rbac.yaml,P3,POAM-001,Per-plane least-privilege RBAC enforced (CRD get/list/watch + status patch only; TokenReview create on PM only; dashboard Role read-only on 2 Services). App-layer least-priv (requiredRoles) config-gated. See iam-control-narrative.md.
 AC-6(1),Least Privilege | Authorize Access to Security Functions,AC,Moderate,Planned,System,charts/kube-policies/templates/rbac.yaml,P3,,Security-function authZ refined in P3 RBAC split.
 AC-6(2),Least Privilege | Non-Privileged Access for Nonsecurity Functions,AC,Moderate,Partial,System,charts/kube-policies/values.yaml,P5,,"Bright spot: containers run non-root, no privilege escalation; formalized in P5."
 AC-6(5),Least Privilege | Privileged Accounts,AC,Moderate,Planned,System,see P3,P3,,Privileged-account restriction handled by RBAC least-priv in P3.
@@ -24,7 +24,7 @@ AC-11,Device Lock,AC,Moderate,Inherited,Customer,Inherited from operator endpoin
 AC-11(1),Device Lock | Pattern-Hiding Displays,AC,Moderate,Inherited,Customer,Inherited from operator endpoints,P12,,Endpoint control; inherited.
 AC-12,Session Termination,AC,Moderate,Planned,System,see P3,P3,,Automatic session termination via dashboard OIDC session mgmt (P3).
 AC-14,Permitted Actions Without Identification or Authentication,AC,Moderate,Planned,System,cmd/dashboard/proxy.go,P3,,Define unauthenticated-allowed actions (healthz/readyz); rest gated in P3.
-AC-17,Remote Access,AC,Moderate,Planned,System,see P3,P3,POAM-003,Dashboard/API reachable without TLS+authn today; remote-access protection in P3.
+AC-17,Remote Access,AC,Moderate,Partial,System,internal/policymanager/auth_middleware.go,P3,POAM-003,"No general remote-access service; reachable planes served TLS 1.3, mgmt plane adds OIDC bearer (config-gated, chart default off=dev-gap) + optional mTLS (IAM-WU-03). Remote-access monitoring (AC-17(1)) in P9."
 AC-17(1),Remote Access | Monitoring and Control,AC,Moderate,Planned,Shared,see P9,P9,,Remote-access monitoring via ConMon/SIEM in P9.
 AC-17(2),Remote Access | Protection of Confidentiality and Integrity Using Encryption,AC,Moderate,Planned,System,see P3,P3,POAM-003,TLS termination for management plane added in P3.
 AC-17(3),Remote Access | Managed Access Control Points,AC,Moderate,Planned,Shared,see P4,P4,,Managed access points via ingress + NetworkPolicy in P4.
@@ -120,14 +120,14 @@ CP-9(1),System Backup | Testing for Reliability and Integrity,CP,Moderate,Planne
 CP-10,System Recovery and Reconstitution,CP,Moderate,Partial,System,cmd/admission-webhook/main.go (leader election),P8,,Leader election + replicas aid recovery; full reconstitution/RTO-RPO in P8.
 CP-10(2),System Recovery and Reconstitution | Transaction Recovery,CP,Moderate,Planned,System,see P8,P8,,Decision/transaction recovery semantics defined in P8.
 IA-1,Policy and Procedures,IA,Moderate,Planned,CSP,see P12,P12,POAM-010,IA -1 policy authored in P12.
-IA-2,Identification and Authentication (Organizational Users),IA,Moderate,Planned,System,see P3,P3,POAM-001,No user authn on planes today; OIDC bearer auth on every /api/v1 route in P3.
+IA-2,Identification and Authentication (Organizational Users),IA,Moderate,Partial,System,internal/policymanager/auth_middleware.go,P3,POAM-001,OIDC ID-token bearer authN (issuer/JWKS/FIPS-alg allow-list/audience) on mgmt API is config-gated (security.authentication.enabled; chart default false=UNAUTHENTICATED dev-gap). MFA/PIV/replay (IA-2 enh) inherited from IdP.
 IA-2(1),IA (Organizational Users) | MFA to Privileged Accounts,IA,Moderate,Planned,Shared,see P3,P3,,MFA enforced by federated IdP; integrated in P3.
 IA-2(2),IA (Organizational Users) | MFA to Non-Privileged Accounts,IA,Moderate,Planned,Shared,see P3,P3,,MFA via federated IdP; integrated in P3.
 IA-2(8),IA (Organizational Users) | Access to Accounts - Replay Resistant,IA,Moderate,Planned,System,see P3,P3,,Replay-resistant OIDC tokens (nonce/aud) verified in P3.
 IA-2(12),IA (Organizational Users) | Acceptance of PIV Credentials,IA,Moderate,Planned,Shared,see P3,P3,,PIV acceptance via IdP federation; verified in P3.
-IA-3,Device Identification and Authentication,IA,Moderate,Planned,System,charts/kube-policies/templates/admission-webhook-tls.yaml,P3,POAM-003,mTLS to apiserver + audience-bound service tokens (ICX-01/02) in P3.
+IA-3,Device Identification and Authentication,IA,Moderate,Partial,System,internal/policymanager/tokenreview.go,P3,POAM-003,Service identity enforced: audience+subject-bound projected SA tokens via TokenReview (tokenreview mode is chart default) + optional mTLS client certs. Static shared-secret fallback is demo/non-cluster only.
 IA-4,Identifier Management,IA,Moderate,Planned,Shared,see P3,P3,,Identifier mgmt via IdP; service identities in P3.
-IA-5,Authenticator Management,IA,Moderate,Planned,System,see P2,P2,POAM-003,Static bearer token today; cert/secret lifecycle + rotation in P2.
+IA-5,Authenticator Management,IA,Moderate,Partial,System,internal/auth/token.go,P2,POAM-003,"Bearer-token (FIPS CSPRNG gen, constant-time verify, 2-token rotation window) + cert (cert-manager ECDSA P-256, hot reload) lifecycles implemented; remaining Helm chart-side CSPRNG token generation is a tracked gap. See IA-policy.md."
 IA-5(1),Authenticator Management | Password-Based Authentication,IA,Moderate,Inherited,Customer,Inherited from IdP,P3,,Password policy inherited from federated IdP.
 IA-5(2),Authenticator Management | Public Key-Based Authentication,IA,Moderate,Planned,System,see P2,P2,,PKI cert lifecycle (webhook/mTLS certs) in P2.
 IA-6,Authentication Feedback,IA,Moderate,Inherited,Customer,Inherited from IdP,P3,,Authn feedback obscuring inherited from IdP login UI.

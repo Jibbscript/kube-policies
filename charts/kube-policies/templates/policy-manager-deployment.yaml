@@ -95,6 +95,13 @@ spec:
               value: {{ include "kube-policies.internalAuthAudience" . | quote }}
             - name: POLICY_MANAGER_INTERNAL_SUBJECT
               value: "system:serviceaccount:{{ .Release.Namespace }}:{{ include "kube-policies.webhookServiceAccountName" . }}"
+            # Read side of the decisions plane (GET /stream + /recent): pin the
+            # TokenReview to the DASHBOARD SA so the dashboard's upstream
+            # subscriber authenticates to the read feeds without weakening the
+            # webhook-SA pin on /internal (IAM-WU-11, Inc7 Stream A). Same audience
+            # as POLICY_MANAGER_INTERNAL_AUDIENCE above.
+            - name: POLICY_MANAGER_DECISIONS_READER_SUBJECT
+              value: "system:serviceaccount:{{ .Release.Namespace }}:{{ include "kube-policies.fullname" . }}-dashboard"
             {{- else }}
             # Static shared bearer token (IAM-WU-11 escape hatch, mode=static
             # only). The binary defaults to tokenreview, so mode=static must be

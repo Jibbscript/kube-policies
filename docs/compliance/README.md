@@ -51,6 +51,7 @@ This index is reviewed at least **annually** (next review **2027-05-29**) and on
 | Artifact | Description |
 |---|---|
 | [ssp/SSP.md](ssp/SSP.md) | System Security Plan: system description and control-implementation narratives. |
+| [iam-control-narrative.md](iam-control-narrative.md) | IAM control narrative (AC-2/3/5/6/17, IA-2/3/5/8): code-grounded view of authenticators, the viewer/editor/admin + ServiceAccount role model, and a control→artifact map. |
 | [control-matrix.csv](control-matrix.csv) | FedRAMP-Moderate control matrix (NIST SP 800-53 Rev 5) — machine-readable spine with status, responsible party, implementing artifact, and POA&M linkage. |
 | [control-matrix.md](control-matrix.md) | Human-readable summary view of the control matrix. |
 | [CRM.md](CRM.md) | Control Implementation Summary / Customer Responsibility Matrix: shared, customer, and inherited responsibilities. |
@@ -73,8 +74,10 @@ This index is reviewed at least **annually** (next review **2027-05-29**) and on
 | [policies/PS-policy.md](policies/PS-policy.md) | Personnel security policy (PS). |
 | [policies/MP-policy.md](policies/MP-policy.md) | Media protection policy (MP). |
 | [policies/PE-policy.md](policies/PE-policy.md) | Physical and environmental protection policy (PE). |
+| [policies/AC-policy.md](policies/AC-policy.md) | Access control policy (AC-1/AC-2/AC-3/AC-5/AC-6/AC-17): deny-by-default RBAC, viewer/editor/admin model, ALLOW_WRITES kill-switch, least privilege. |
 | [policies/IA-policy.md](policies/IA-policy.md) | Identification & authentication policy (IA-1/IA-2/IA-5). |
 | [policies/SC-policy.md](policies/SC-policy.md) | System & communications protection policy (SC-1/SC-7/SC-8/SC-12/SC-13). |
+| [procedures/AC-procedures.md](procedures/AC-procedures.md) | AC operational procedures (RBAC management, role-binding lifecycle, authenticator provisioning, periodic access review). |
 | [procedures/IA-procedures.md](procedures/IA-procedures.md) | IA operational procedures (token rotation, mTLS/CA management). |
 | [procedures/SC-procedures.md](procedures/SC-procedures.md) | SC operational procedures (TLS enforcement verification, certificate management). |
 | [roles-raci.md](roles-raci.md) | ATO roles and RACI matrix (System Owner, ISSO, AO, Independent Assessor — all TBD, assign before assessment). |

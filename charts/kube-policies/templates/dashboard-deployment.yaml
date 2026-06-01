@@ -98,6 +98,28 @@ spec:
               value: {{ .Values.dashboard.allowWrites | default false | quote }}
             - name: POLICY_MANAGER_STREAM_URL
               value: "https://{{ include "kube-policies.fullname" . }}-policy-manager:8080/api/v1/decisions/stream"
+            {{- if eq (include "kube-policies.internalAuthMode" .) "tokenreview" }}
+            # Present an audience-bound, short-TTL projected ServiceAccount token
+            # on the upstream SSE subscription so the policy-manager's TokenReview
+            # gate on /api/v1/decisions/stream + /recent accepts it (IAM-WU-11,
+            # Inc7 Stream A). Gate on mode only — not policyManager.enabled — so a
+            # split deploy (PM external) still presents the credential, mirroring
+            # the webhook's pm-internal-token. The subscriber re-reads the file
+            # per connect to follow kubelet rotation.
+            - name: POLICY_MANAGER_STREAM_TOKEN_PATH
+              value: /var/run/secrets/kube-policies/pm-stream-token/token
+            {{- else }}
+            # Static shared bearer for the SSE subscription (IAM-WU-11 escape
+            # hatch, mode=static only). The dashboard presents it on the upstream
+            # stream; the policy-manager accepts it via the static fallback. Reuses
+            # the same internal-token Secret the webhook/PM static path uses.
+            - name: POLICY_MANAGER_STREAM_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "kube-policies.fullname" . }}-internal-token
+                  key: token
+                  optional: true
+            {{- end }}
             {{- if .Values.policyManager.enabled }}
             - name: POLICY_MANAGER_CA_PATH
               value: "/etc/policy-manager-ca/ca.crt"
@@ -210,6 +232,14 @@ spec:
           volumeMounts:
             - name: tmp
               mountPath: /tmp
+            {{- if eq (include "kube-policies.internalAuthMode" .) "tokenreview" }}
+            # Projected SA token the dashboard presents on the upstream SSE
+            # subscription (IAM-WU-11, Inc7 Stream A). Gate on mode only so a
+            # split/PM-external deploy still mounts it.
+            - name: pm-stream-token
+              mountPath: /var/run/secrets/kube-policies/pm-stream-token
+              readOnly: true
+            {{- end }}
             {{- if .Values.dashboard.tls.enabled }}
             - name: dashboard-certs
               mountPath: /etc/dashboard-certs
@@ -228,6 +258,26 @@ spec:
       volumes:
         - name: tmp
           emptyDir: {}
+        {{- if eq (include "kube-policies.internalAuthMode" .) "tokenreview" }}
+        # Audience-bound, short-TTL projected ServiceAccount token for the
+        # dashboard -> policy-manager SSE read subscription (IAM-WU-11, Inc7
+        # Stream A). Gated on mode only (mirrors the webhook's pm-internal-token).
+        # The dashboard SA (kube-policies.fullname-dashboard) backs this projected
+        # volume; projected serviceAccountToken sources do NOT require
+        # automountServiceAccountToken, so the dashboard automount stays false
+        # (IAM-WU-10). The kubelet mints a token scoped to
+        # audience=<internalAuth.audience> with the configured TTL and atomically
+        # swaps it as it rotates. Reuses the same audience + default TTL as the
+        # webhook's projected token.
+        - name: pm-stream-token
+          projected:
+            defaultMode: 0440
+            sources:
+              - serviceAccountToken:
+                  path: token
+                  audience: {{ include "kube-policies.internalAuthAudience" . | quote }}
+                  expirationSeconds: {{ dig "internalAuth" "expirationSeconds" 3600 .Values.policyManager }}
+        {{- end }}
         {{- if .Values.dashboard.tls.enabled }}
         - name: dashboard-certs
           secret:

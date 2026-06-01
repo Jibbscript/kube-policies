@@ -541,16 +541,146 @@ jobs:
         branch: prepare-release
         delete-branch: true
 
+  # RBAC / ServiceAccount-token least-privilege gate (IAM-WU-17). Pure static
+  # render-then-scan (no cluster, no images) so it runs in parallel with lint —
+  # NO needs:. Renders the chart in both internal-auth modes and fails the build
+  # on any RBAC wildcard / cluster-wide Secrets grant, any ServiceAccount that
+  # does not disable token automounting, or a shared admission-webhook /
+  # policy-manager ServiceAccount. Mirrors scripts/validate/manifests.sh.
+  rbac-sa-gate:
+    name: RBAC / SA-Token Least-Privilege Gate
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      CONFTEST_VERSION: '0.68.2'
+      # sha256 of conftest_${CONFTEST_VERSION}_Linux_x86_64.tar.gz, from the
+      # published checksums.txt of the pinned release. Verified with sha256sum -c.
+      CONFTEST_SHA256: 'e8144c6d6d2ae0260b869caa60c7c262a1f95ac63ec1e5d2fb19be452d606347'
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+
+    - name: Install Helm
+      uses: azure/setup-helm@dda3372f752e03dde6b3237bc9431cdc2f7a02a2  # v5.0.0
+
+    - name: Install conftest (pinned, checksum-verified)
+      run: |
+        set -euo pipefail
+        asset="conftest_${CONFTEST_VERSION}_Linux_x86_64.tar.gz"
+        url="https://github.com/open-policy-agent/conftest/releases/download/v${CONFTEST_VERSION}/${asset}"
+        curl -fsSL -o "${asset}" "${url}"
+        echo "${CONFTEST_SHA256}  ${asset}" | sha256sum -c -
+        tar -xzf "${asset}" conftest
+        sudo install -m 0755 conftest /usr/local/bin/conftest
+        conftest --version
+
+    - name: Render chart (tokenreview mode, default)
+      run: |
+        helm template kube-policies charts/kube-policies \
+          --set policyManager.internalAuth.mode=tokenreview \
+          --set dashboard.enabled=true > rendered-tokenreview.yaml
+
+    - name: Render chart (static mode)
+      run: |
+        helm template kube-policies charts/kube-policies \
+          --set policyManager.internalAuth.mode=static \
+          --set dashboard.enabled=true > rendered-static.yaml
+
+    - name: Conftest — RBAC + SA-token (per-document, both modes)
+      run: |
+        set -euo pipefail
+        for f in rendered-tokenreview.yaml rendered-static.yaml; do
+          echo "==> per-document scan: ${f}"
+          conftest test --policy test/policy \
+            --namespace rbac.leastprivilege --namespace sa.token "${f}"
+        done
+
+    - name: Conftest — shared ServiceAccount (--combine, both modes)
+      run: |
+        set -euo pipefail
+        for f in rendered-tokenreview.yaml rendered-static.yaml; do
+          echo "==> --combine scan: ${f}"
+          conftest test --combine --policy test/policy \
+            --namespace sa.shared "${f}"
+        done
+
+    # CONF-1: Policy self-test — each negative fixture MUST make conftest exit
+    # non-zero. If a fixture exits 0 the deny rule is silently broken and we
+    # must fail the build immediately (a passing fail-fixture == dead gate).
+    - name: Policy self-test (fail fixtures must be denied)
+      run: |
+        set -euo pipefail
+        broken=0
+
+        # Per-document fixtures: rbac.leastprivilege + sa.token
+        for fx in \
+            test/policy/fixtures/fail/secrets-clusterrole.yaml \
+            test/policy/fixtures/fail/secrets-subresource.yaml \
+            test/policy/fixtures/fail/missing-automount.yaml; do
+          echo "==> self-test (per-doc): ${fx}"
+          if conftest test --policy test/policy \
+              --namespace rbac.leastprivilege --namespace sa.token "${fx}"; then
+            echo "::error::POLICY SELF-TEST FAILED: ${fx} produced 0 denies — the deny rule is broken"
+            broken=1
+          else
+            echo "    OK — conftest correctly denied ${fx}"
+          fi
+        done
+
+        # --combine fixtures: sa.shared (shared-SA regression + label-drift guard)
+        for fx in \
+            test/policy/fixtures/fail/shared-sa.yaml \
+            test/policy/fixtures/fail/label-drift.yaml; do
+          echo "==> self-test (--combine): ${fx}"
+          if conftest test --combine --policy test/policy \
+              --namespace sa.shared "${fx}"; then
+            echo "::error::POLICY SELF-TEST FAILED: ${fx} produced 0 denies — the deny rule is broken"
+            broken=1
+          else
+            echo "    OK — conftest correctly denied ${fx}"
+          fi
+        done
+
+        if [ "${broken}" -ne 0 ]; then
+          echo "::error::One or more policy self-tests failed — a deny rule is not firing. Fix the Rego before merging."
+          exit 1
+        fi
+        echo "All policy self-tests passed — every fail fixture was correctly denied."
+
+    - name: Generate conftest report
+      if: always()
+      run: |
+        set -uo pipefail
+        for mode in tokenreview static; do
+          f="rendered-${mode}.yaml"
+          [ -f "${f}" ] || continue
+          conftest test --policy test/policy \
+            --namespace rbac.leastprivilege --namespace sa.token \
+            --output json "${f}" > "report-perdoc-${mode}.json" || true
+          conftest test --combine --policy test/policy \
+            --namespace sa.shared \
+            --output json "${f}" > "report-combine-${mode}.json" || true
+        done
+
+    - name: Upload conftest report
+      if: always()
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+      with:
+        name: rbac-sa-gate-report
+        path: report-*.json
+        if-no-files-found: ignore
+
   # Aggregate gate — single required check for branch protection.
   ci-gate:
     name: CI Gate
     runs-on: ubuntu-latest
     if: always()
-    needs: [lint, unit-tests, fips-verify, build-images, integration-tests, e2e-kind, e2e-k3s, security-scan, helm-tests, docs-tests]
+    needs: [lint, unit-tests, fips-verify, build-images, integration-tests, e2e-kind, e2e-k3s, security-scan, helm-tests, docs-tests, rbac-sa-gate]
     steps:
     - name: Verify all required jobs succeeded
       run: |
-        results="${{ needs.lint.result }} ${{ needs.unit-tests.result }} ${{ needs.fips-verify.result }} ${{ needs.build-images.result }} ${{ needs.integration-tests.result }} ${{ needs.e2e-kind.result }} ${{ needs.e2e-k3s.result }} ${{ needs.security-scan.result }} ${{ needs.helm-tests.result }} ${{ needs.docs-tests.result }}"
+        results="${{ needs.lint.result }} ${{ needs.unit-tests.result }} ${{ needs.fips-verify.result }} ${{ needs.build-images.result }} ${{ needs.integration-tests.result }} ${{ needs.e2e-kind.result }} ${{ needs.e2e-k3s.result }} ${{ needs.security-scan.result }} ${{ needs.helm-tests.result }} ${{ needs.docs-tests.result }} ${{ needs.rbac-sa-gate.result }}"
         echo "job results: ${results}"
         # shellcheck disable=SC2086
         for r in ${results}; do

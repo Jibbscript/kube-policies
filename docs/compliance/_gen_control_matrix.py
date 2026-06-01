@@ -67,10 +67,10 @@ def add(cid, title, status, rp=None, art=None, phase=None, poam="", notes=""):
 # ---------------------------------------------------------------------------
 # AC - Access Control
 # ---------------------------------------------------------------------------
-add("AC-1", "Policy and Procedures", "Planned", "CSP", "see P12", "P12", "POAM-010",
-    "Access-control -1 policy not yet authored; drafted at SSP finalization.")
-add("AC-2", "Account Management", "Planned", "System", "see P3", "P3", "POAM-001",
-    "No app-plane account model; OIDC principals + lifecycle defined in P3.")
+add("AC-1", "Policy and Procedures", "Implemented", "System", "docs/compliance/policies/AC-policy.md", "P12", "POAM-010",
+    "AC-1 access-control policy + procedures authored (AC-policy.md/AC-procedures.md); annual-review cadence set.")
+add("AC-2", "Account Management", "Partial", "System", "internal/policymanager/authz.go", "P3", "POAM-001",
+    "Group->role model (viewer/editor/admin) maps OIDC groups via RoleBindings, but enforcement is config-gated (security.authentication.enabled; chart default false=UNAUTHENTICATED dev-gap). Automated account lifecycle still IdP/P3.")
 add("AC-2(1)", "Account Management | Automated System Account Management", "Planned",
     "System", "see P3", "P3", "POAM-001", "Automated account mgmt depends on P3 IdP integration.")
 add("AC-2(2)", "Account Management | Automated Temporary and Emergency Account Management",
@@ -85,15 +85,15 @@ add("AC-2(12)", "Account Management | Account Monitoring for Atypical Usage", "P
     "Shared", "see P9", "P9", "", "Atypical-usage detection via SIEM/alerting in P9.")
 add("AC-2(13)", "Account Management | Disable Accounts for High-Risk Individuals", "Planned",
     "CSP", "see P12", "P12", "", "Procedural; depends on CSP HR/IdP process.")
-add("AC-3", "Access Enforcement", "Planned", "System", "see P3", "P3", "POAM-001",
-    "Data-plane unauthenticated today; authZ middleware + RBAC least-priv in P3.")
+add("AC-3", "Access Enforcement", "Partial", "System", "internal/policymanager/authz.go", "P3", "POAM-001",
+    "Deny-by-default RBAC (requiredRoles + RBACMiddleware) on mgmt plane is config-gated (chart default auth.enabled=false=UNAUTHENTICATED dev-gap); decision plane (/decisions/*) authed unconditionally via TokenReview (Inc7). See iam-control-narrative.md.")
 add("AC-4", "Information Flow Enforcement", "Planned", "System",
     "charts/kube-policies/templates/ (NetworkPolicy, P4)", "P4", "POAM-004",
     "No NetworkPolicy exists; default-deny + scoped flows in P4.")
-add("AC-5", "Separation of Duties", "Planned", "System", "see P3", "P3", "",
-    "Role separation defined alongside RBAC split in P3.")
+add("AC-5", "Separation of Duties", "Partial", "System", "charts/kube-policies/templates/rbac.yaml", "P3", "",
+    "Workload split is enforced unconditionally (3 distinct SAs / 3 ClusterRoles; TokenReview grant on PM only); app-layer viewer/editor/admin separation is config-gated. See iam-control-narrative.md.")
 add("AC-6", "Least Privilege", "Partial", "System", "charts/kube-policies/templates/rbac.yaml", "P3",
-    "POAM-001", "Bright spot: pods runAsNonRoot/drop-ALL caps; SA RBAC still over-broad/shared (P3).")
+    "POAM-001", "Per-plane least-privilege RBAC enforced (CRD get/list/watch + status patch only; TokenReview create on PM only; dashboard Role read-only on 2 Services). App-layer least-priv (requiredRoles) config-gated. See iam-control-narrative.md.")
 add("AC-6(1)", "Least Privilege | Authorize Access to Security Functions", "Planned",
     "System", "charts/kube-policies/templates/rbac.yaml", "P3", "", "Security-function authZ refined in P3 RBAC split.")
 add("AC-6(2)", "Least Privilege | Non-Privileged Access for Nonsecurity Functions", "Partial",
@@ -120,8 +120,8 @@ add("AC-12", "Session Termination", "Planned", "System", "see P3", "P3", "",
 add("AC-14", "Permitted Actions Without Identification or Authentication", "Planned",
     "System", "cmd/dashboard/proxy.go", "P3", "",
     "Define unauthenticated-allowed actions (healthz/readyz); rest gated in P3.")
-add("AC-17", "Remote Access", "Planned", "System", "see P3", "P3", "POAM-003",
-    "Dashboard/API reachable without TLS+authn today; remote-access protection in P3.")
+add("AC-17", "Remote Access", "Partial", "System", "internal/policymanager/auth_middleware.go", "P3", "POAM-003",
+    "No general remote-access service; reachable planes served TLS 1.3, mgmt plane adds OIDC bearer (config-gated, chart default off=dev-gap) + optional mTLS (IAM-WU-03). Remote-access monitoring (AC-17(1)) in P9.")
 add("AC-17(1)", "Remote Access | Monitoring and Control", "Planned", "Shared", "see P9", "P9", "",
     "Remote-access monitoring via ConMon/SIEM in P9.")
 add("AC-17(2)", "Remote Access | Protection of Confidentiality and Integrity Using Encryption",
@@ -318,8 +318,8 @@ add("CP-10(2)", "System Recovery and Reconstitution | Transaction Recovery", "Pl
 # IA - Identification and Authentication
 # ---------------------------------------------------------------------------
 add("IA-1", "Policy and Procedures", "Planned", "CSP", "see P12", "P12", "POAM-010", "IA -1 policy authored in P12.")
-add("IA-2", "Identification and Authentication (Organizational Users)", "Planned", "System", "see P3", "P3", "POAM-001",
-    "No user authn on planes today; OIDC bearer auth on every /api/v1 route in P3.")
+add("IA-2", "Identification and Authentication (Organizational Users)", "Partial", "System", "internal/policymanager/auth_middleware.go", "P3", "POAM-001",
+    "OIDC ID-token bearer authN (issuer/JWKS/FIPS-alg allow-list/audience) on mgmt API is config-gated (security.authentication.enabled; chart default false=UNAUTHENTICATED dev-gap). MFA/PIV/replay (IA-2 enh) inherited from IdP.")
 add("IA-2(1)", "IA (Organizational Users) | MFA to Privileged Accounts", "Planned", "Shared", "see P3", "P3", "",
     "MFA enforced by federated IdP; integrated in P3.")
 add("IA-2(2)", "IA (Organizational Users) | MFA to Non-Privileged Accounts", "Planned", "Shared", "see P3", "P3", "",
@@ -328,11 +328,11 @@ add("IA-2(8)", "IA (Organizational Users) | Access to Accounts - Replay Resistan
     "Replay-resistant OIDC tokens (nonce/aud) verified in P3.")
 add("IA-2(12)", "IA (Organizational Users) | Acceptance of PIV Credentials", "Planned", "Shared", "see P3", "P3", "",
     "PIV acceptance via IdP federation; verified in P3.")
-add("IA-3", "Device Identification and Authentication", "Planned", "System", "charts/kube-policies/templates/admission-webhook-tls.yaml", "P3", "POAM-003",
-    "mTLS to apiserver + audience-bound service tokens (ICX-01/02) in P3.")
+add("IA-3", "Device Identification and Authentication", "Partial", "System", "internal/policymanager/tokenreview.go", "P3", "POAM-003",
+    "Service identity enforced: audience+subject-bound projected SA tokens via TokenReview (tokenreview mode is chart default) + optional mTLS client certs. Static shared-secret fallback is demo/non-cluster only.")
 add("IA-4", "Identifier Management", "Planned", "Shared", "see P3", "P3", "", "Identifier mgmt via IdP; service identities in P3.")
-add("IA-5", "Authenticator Management", "Planned", "System", "see P2", "P2", "POAM-003",
-    "Static bearer token today; cert/secret lifecycle + rotation in P2.")
+add("IA-5", "Authenticator Management", "Partial", "System", "internal/auth/token.go", "P2", "POAM-003",
+    "Bearer-token (FIPS CSPRNG gen, constant-time verify, 2-token rotation window) + cert (cert-manager ECDSA P-256, hot reload) lifecycles implemented; remaining Helm chart-side CSPRNG token generation is a tracked gap. See IA-policy.md.")
 add("IA-5(1)", "Authenticator Management | Password-Based Authentication", "Inherited", "Customer", "Inherited from IdP", "P3", "",
     "Password policy inherited from federated IdP.")
 add("IA-5(2)", "Authenticator Management | Public Key-Based Authentication", "Planned", "System", "see P2", "P2", "",

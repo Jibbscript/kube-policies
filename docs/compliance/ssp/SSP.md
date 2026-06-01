@@ -126,7 +126,8 @@ phase.
 
 ### 7.1 AC — Access Control
 
-Implementation: see remediating phase; status tracked in ../control-matrix.csv
+Implementation: see the [IAM control narrative](../iam-control-narrative.md) and the
+[Access Control policy](../policies/AC-policy.md); per-control status tracked in ../control-matrix.csv.
 
 ### 7.2 AT — Awareness and Training
 
@@ -150,7 +151,8 @@ Implementation: see remediating phase; status tracked in ../control-matrix.csv
 
 ### 7.7 IA — Identification and Authentication
 
-Implementation: see remediating phase; status tracked in ../control-matrix.csv
+Implementation: see the [IAM control narrative](../iam-control-narrative.md) and the
+[Identification & Authentication policy](../policies/IA-policy.md); per-control status tracked in ../control-matrix.csv.
 
 ### 7.8 IR — Incident Response
 

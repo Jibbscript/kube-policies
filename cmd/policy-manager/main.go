@@ -144,6 +144,12 @@ func main() {
 		internalAudience = "policy-manager"
 	}
 	internalSubject := os.Getenv("POLICY_MANAGER_INTERNAL_SUBJECT")
+	// Reader subject for the READ side of the decisions plane — GET
+	// /api/v1/decisions/stream + /recent (IAM-WU-11, Inc7 Stream A). The dashboard
+	// SA username (system:serviceaccount:<ns>:<release>-dashboard). Empty disables
+	// the read subject pin (audience-only, with a one-time warn) — same semantics
+	// as an empty POLICY_MANAGER_INTERNAL_SUBJECT for /internal.
+	decisionsReaderSubject := os.Getenv("POLICY_MANAGER_DECISIONS_READER_SUBJECT")
 
 	switch internalAuthModeRaw {
 	case "static":
@@ -196,6 +202,25 @@ func main() {
 		log.Info("internal decisions channel auth: TokenReview (audience+subject-bound) ENABLED",
 			zap.String("expected_audience", internalAudience),
 			zap.String("expected_subject", internalSubject),
+		)
+
+		// Read side of the decisions plane (GET /stream + /recent): a SECOND
+		// authenticator over the SAME clientset and audience, pinned to the
+		// DASHBOARD SA so the dashboard's upstream subscriber authenticates to the
+		// read feeds without weakening the webhook-SA pin on /internal (IAM-WU-11,
+		// Inc7 Stream A). An empty reader subject disables the subject pin
+		// (audience-only) and NewInternalTokenAuthenticator logs a one-time warn.
+		policyManager.SetDecisionsReadAuthenticator(
+			policymanager.NewInternalTokenAuthenticator(
+				cs.AuthenticationV1().TokenReviews(),
+				internalAudience,
+				decisionsReaderSubject,
+				log.Named("decisions-read-tokenreview"),
+			),
+		)
+		log.Info("decisions read channel auth: TokenReview (audience+subject-bound) ENABLED",
+			zap.String("expected_audience", internalAudience),
+			zap.String("expected_subject", decisionsReaderSubject),
 		)
 
 	default:

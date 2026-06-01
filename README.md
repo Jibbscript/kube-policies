@@ -304,6 +304,7 @@ scripts/               Test, certificate, logger, and manifest validation tools
 - [Changelog](CHANGELOG.md)
 - [Dashboard README](web/README.md)
 - [Demo verification scripts](demo/verify/)
+- [Compliance evidence package](docs/compliance/README.md) — including the [IAM control narrative](docs/compliance/iam-control-narrative.md) (AC/IA), the [Access Control policy](docs/compliance/policies/AC-policy.md), and the [audit access-control model](docs/audit/access-control.md)
 
 ## Acknowledgments
 

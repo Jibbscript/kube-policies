@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"runtime"
 	"strings"
 	"sync"
@@ -831,5 +832,146 @@ func TestStreamHandler_BrowserDisconnect(t *testing.T) {
 	if after > before+tolerance {
 		t.Errorf("possible goroutine leak: before=%d after=%d (delta=%d, tolerance=%d)",
 			before, after, after-before, tolerance)
+	}
+}
+
+// --- Inc7 Stream A: upstream SSE subscriber bearer auth (IAM-WU-11) ---
+
+// TestStreamSubscriber_AttachesBearerWhenTokenConfigured proves the subscriber
+// presents Authorization: Bearer <token> on the upstream SSE connection when a
+// static StreamToken is configured, alongside the existing Accept header.
+func TestStreamSubscriber_AttachesBearerWhenTokenConfigured(t *testing.T) {
+	gotAuth := make(chan string, 1)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case gotAuth <- r.Header.Get("Authorization"):
+		default:
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+		}
+		<-r.Context().Done()
+	}))
+	defer upstream.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	cfg := &Config{PolicyManagerStreamURL: upstream.URL, StreamToken: "dashboard-static-token"}
+	sub := NewStreamSubscriber(ctx, cfg, nil, NewRing(8), zap.NewNop())
+	sub.Start()
+
+	select {
+	case auth := <-gotAuth:
+		if auth != "Bearer dashboard-static-token" {
+			t.Fatalf("upstream Authorization = %q, want %q", auth, "Bearer dashboard-static-token")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("subscriber did not connect upstream within 2s")
+	}
+}
+
+// TestStreamSubscriber_AttachesBearerFromTokenFile proves the projected-token
+// path: with StreamTokenPath set, the subscriber reads the file and presents its
+// contents (trimmed) as the bearer, and re-reads to observe kubelet rotation.
+func TestStreamSubscriber_AttachesBearerFromTokenFile(t *testing.T) {
+	dir := t.TempDir()
+	tokenPath := dir + "/token"
+	if err := os.WriteFile(tokenPath, []byte("projected-token-v1\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	gotAuth := make(chan string, 4)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case gotAuth <- r.Header.Get("Authorization"):
+		default:
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+		}
+		<-r.Context().Done()
+	}))
+	defer upstream.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	cfg := &Config{PolicyManagerStreamURL: upstream.URL, StreamTokenPath: tokenPath}
+	sub := NewStreamSubscriber(ctx, cfg, nil, NewRing(8), zap.NewNop())
+	sub.Start()
+
+	select {
+	case auth := <-gotAuth:
+		if auth != "Bearer projected-token-v1" {
+			t.Fatalf("upstream Authorization = %q, want %q (trimmed file contents)", auth, "Bearer projected-token-v1")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("subscriber did not connect upstream within 2s")
+	}
+}
+
+// TestStreamSubscriber_MissingTokenFileIsNonFatal proves a transiently absent
+// projected token file does NOT crash the subscriber: it connects without an
+// Authorization header (the upstream then returns 401, which drives the normal
+// backoff in runUpstream — exercised here via a direct fetchAndStream call).
+func TestStreamSubscriber_MissingTokenFileIsNonFatal(t *testing.T) {
+	requireAuth := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") == "" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		<-r.Context().Done()
+	}))
+	defer requireAuth.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Point at a token file that does not exist.
+	cfg := &Config{PolicyManagerStreamURL: requireAuth.URL, StreamTokenPath: t.TempDir() + "/does-not-exist"}
+	sub := NewStreamSubscriber(ctx, cfg, nil, NewRing(8), zap.NewNop())
+
+	// fetchAndStream must not panic; the absent token yields no header, the
+	// upstream 401s, and we get (false, err) which feeds the backoff path.
+	connected, err := sub.fetchAndStream()
+	if connected {
+		t.Fatalf("expected connected=false on a 401 upstream, got true")
+	}
+	if err == nil {
+		t.Fatalf("expected a non-nil error on the 401 upstream (drives backoff)")
+	}
+	if !strings.Contains(err.Error(), "401") {
+		t.Fatalf("expected the upstream-status error to mention 401, got %v", err)
+	}
+}
+
+// TestStreamSubscriber_401YieldsBackoffSignal proves a 401 upstream (token
+// rejected) returns (false, err) so runUpstream applies its connection-failed
+// backoff rather than treating it as a clean close.
+func TestStreamSubscriber_401YieldsBackoffSignal(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	defer upstream.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	cfg := &Config{PolicyManagerStreamURL: upstream.URL, StreamToken: "rejected-token"}
+	sub := NewStreamSubscriber(ctx, cfg, nil, NewRing(8), zap.NewNop())
+
+	connected, err := sub.fetchAndStream()
+	if connected {
+		t.Fatalf("a 401 must be reported as connected=false (dial/non-200), got true")
+	}
+	if err == nil || !strings.Contains(err.Error(), "401") {
+		t.Fatalf("expected a 401 upstream-status error, got %v", err)
 	}
 }

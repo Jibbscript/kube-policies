@@ -50,6 +50,22 @@ type Config struct {
 	// maintained per dashboard process and fanned out to all browser clients.
 	PolicyManagerStreamURL string
 
+	// StreamTokenPath is the in-pod path of a projected ServiceAccount token
+	// (audience=policy-manager, short-TTL, kubelet-rotated) the dashboard presents
+	// on the upstream SSE subscription so the policy-manager's TokenReview gate on
+	// /api/v1/decisions/stream + /recent accepts it (IAM-WU-11, Inc7 Stream A).
+	// Set in tokenreview mode; the file is re-read per connect to follow rotation.
+	// Empty in static mode (StreamToken is used instead) or in dev (no token; the
+	// subscriber simply omits the Authorization header and backs off on 401).
+	StreamTokenPath string
+
+	// StreamToken is the static shared bearer presented on the upstream SSE
+	// subscription in static mode (IAM-WU-11 escape hatch), the same trust domain
+	// as the webhook's static internal token. Ignored when StreamTokenPath is set
+	// (the projected token takes precedence). Empty leaves the subscription
+	// unauthenticated (dev posture).
+	StreamToken string
+
 	// PolicyManagerCAPath is the PEM CA bundle trusted when the dashboard
 	// connects to the (TLS 1.3) policy-manager API and SSE stream (CRY-WU-07).
 	// Empty falls back to system roots; the chart mounts the policy-manager
@@ -140,14 +156,20 @@ func LoadConfig() (*Config, error) {
 		// The policy-manager API/stream serve TLS 1.3 (CRY-WU-05); default to
 		// https. The metrics-URL defaults are http; the chart flips them to
 		// https when metrics.tls.enabled (CRY-WU-08) and supplies the scrape token.
-		PolicyManagerURL:            envOr("POLICY_MANAGER_URL", "https://policy-manager:8080"),
-		PolicyManagerMetricsURL:     envOr("POLICY_MANAGER_METRICS_URL", "http://policy-manager:9091/metrics"),
-		AdmissionWebhookMetricsURL:  envOr("ADMISSION_WEBHOOK_METRICS_URL", "http://admission-webhook:9090/metrics"),
-		AllowWrites:                 envBool("ALLOW_WRITES", false),
-		InternalToken:               os.Getenv("INTERNAL_TOKEN"),
-		InternalTokenPrevious:       os.Getenv("INTERNAL_TOKEN_PREVIOUS"),
-		CSPUnsafeInlineStyle:        envBool("DASHBOARD_CSP_UNSAFE_INLINE_STYLE", false),
-		PolicyManagerStreamURL:      envOr("POLICY_MANAGER_STREAM_URL", "https://policy-manager:8080/api/v1/decisions/stream"),
+		PolicyManagerURL:           envOr("POLICY_MANAGER_URL", "https://policy-manager:8080"),
+		PolicyManagerMetricsURL:    envOr("POLICY_MANAGER_METRICS_URL", "http://policy-manager:9091/metrics"),
+		AdmissionWebhookMetricsURL: envOr("ADMISSION_WEBHOOK_METRICS_URL", "http://admission-webhook:9090/metrics"),
+		AllowWrites:                envBool("ALLOW_WRITES", false),
+		InternalToken:              os.Getenv("INTERNAL_TOKEN"),
+		InternalTokenPrevious:      os.Getenv("INTERNAL_TOKEN_PREVIOUS"),
+		CSPUnsafeInlineStyle:       envBool("DASHBOARD_CSP_UNSAFE_INLINE_STYLE", false),
+		PolicyManagerStreamURL:     envOr("POLICY_MANAGER_STREAM_URL", "https://policy-manager:8080/api/v1/decisions/stream"),
+		StreamTokenPath:            os.Getenv("POLICY_MANAGER_STREAM_TOKEN_PATH"),
+		// Default to the shared internal token env so a static-mode deployment
+		// that already provides POLICY_MANAGER_INTERNAL_TOKEN authenticates the
+		// SSE subscription without a second secret; POLICY_MANAGER_STREAM_TOKEN
+		// overrides it when set.
+		StreamToken:                 envOr("POLICY_MANAGER_STREAM_TOKEN", os.Getenv("POLICY_MANAGER_INTERNAL_TOKEN")),
 		PolicyManagerCAPath:         os.Getenv("POLICY_MANAGER_CA_PATH"),
 		MetricsToken:                os.Getenv("POLICY_MANAGER_INTERNAL_TOKEN"),
 		PolicyManagerClientCertPath: os.Getenv("POLICY_MANAGER_CLIENT_CERT_PATH"),

@@ -88,18 +88,28 @@ func NewAPIRouter(m *Manager, authCfg config.AuthConfig, rbacCfg config.RBACConf
 	}
 
 	// Decisions machine-plane (M2): the live-ticker ingest/stream/recent
-	// endpoints. This group is intentionally NOT wrapped by the OIDC middleware
-	// — it is a service-to-service plane, not a human one. /decisions/internal
-	// authenticates the webhook via an audience-bound projected ServiceAccount
-	// token validated through the Kubernetes TokenReview API (IAM-WU-11), with
-	// the constant-time symmetric internal-token verifier (CRY-WU-13, IAM-WU-07)
-	// retained as an opt-in static fallback for non-cluster/demo deployments.
-	// stream/recent are read-only ticker feeds.
+	// endpoints. This group is intentionally NOT wrapped by the OIDC human-auth
+	// middleware — it is a service-to-service plane, not a human one. All three
+	// routes nonetheless require a valid SERVICE token (IAM-WU-11, Inc7 Stream A);
+	// none is unauthenticated:
+	//   - /decisions/internal authenticates the WEBHOOK SA (IngestInternal pins
+	//     m.internalReviewer to the webhook SA's audience-bound projected token
+	//     via the Kubernetes TokenReview API).
+	//   - /decisions/stream + /decisions/recent authenticate the DASHBOARD SA
+	//     (DecisionsReadAuth middleware pins m.decisionsReadReviewer to the
+	//     dashboard SA over the SAME audience).
+	// All paths fall through to the constant-time symmetric internal-token
+	// verifier (CRY-WU-13, IAM-WU-07) as an opt-in static fallback for
+	// non-cluster/demo (static-mode) deployments. Only OIDC human-auth is exempt
+	// here, NOT authentication itself.
 	decisions := router.Group("/api/v1")
 	{
 		decisions.POST("/decisions/internal", m.IngestInternal)
-		decisions.GET("/decisions/stream", m.StreamDecisions)
-		decisions.GET("/decisions/recent", m.RecentDecisions)
+		// The read feeds are service-authed via DecisionsReadAuth (dashboard-SA
+		// TokenReview + static fallback), applied per-route so /internal keeps
+		// its own webhook-SA pin in IngestInternal.
+		decisions.GET("/decisions/stream", m.DecisionsReadAuth(), m.StreamDecisions)
+		decisions.GET("/decisions/recent", m.DecisionsReadAuth(), m.RecentDecisions)
 	}
 
 	return router

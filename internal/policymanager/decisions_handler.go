@@ -13,74 +13,110 @@ import (
 	"github.com/Jibbscript/kube-policies/internal/auth"
 )
 
-// IngestInternal handles POST /api/v1/decisions/internal.
+// authenticateServiceBearer is the shared service-to-service auth preamble for
+// the decisions plane (IAM-WU-11). The inbound Authorization: Bearer <token> is
+// authenticated in one of two ways, in priority order:
 //
-// Auth (IAM-WU-11): the inbound Authorization: Bearer <token> is authenticated
-// in one of two ways, in priority order:
-//
-//  1. Audience-bound TokenReview (primary, when SetInternalTokenReviewer was
-//     called): the token is submitted to the Kubernetes TokenReview API bound to
-//     the expected audience. A TokenReview API error FAILS CLOSED — the request
-//     is rejected with 401 and never falls through to the static path, so a
-//     transient apiserver outage cannot widen what is admitted. A valid,
-//     correct-audience verdict admits the request.
+//  1. Audience-bound TokenReview (primary, when reviewer != nil): the token is
+//     submitted to the Kubernetes TokenReview API bound to the expected audience
+//     (and, when configured, subject-pinned to the expected SA). A TokenReview
+//     API error FAILS CLOSED — the request is rejected and never falls through
+//     to the static path, so a transient apiserver outage cannot widen what is
+//     admitted. A valid, correct-audience/subject verdict admits the request.
 //  2. Static shared bearer (fallback, opt-in for non-cluster/demo deployments):
 //     reached only on a CLEAN negative TokenReview verdict (token not
-//     authenticated / wrong audience), or when no reviewer is configured. The
-//     presented token is compared against the configured token(s) in constant
-//     time over fixed-length digests so neither contents nor length leak via
-//     timing (CRY-WU-13, IAM-WU-07). An unconfigured verifier returns 401 — an
-//     empty token must not act as a wildcard.
+//     authenticated / wrong audience / wrong subject), or when no reviewer is
+//     configured. The presented token is compared against the configured
+//     token(s) in constant time over fixed-length digests so neither contents
+//     nor length leak via timing (CRY-WU-13, IAM-WU-07). An unconfigured
+//     verifier returns false — an empty token must not act as a wildcard.
 //
-// Token material is never logged; only verdicts/usernames/errors are.
-func (m *Manager) IngestInternal(c *gin.Context) {
+// It returns true when the caller is authenticated. On a negative outcome it
+// has ALREADY written the 401 response (via AbortWithStatusJSON) and returns
+// false; the caller must simply return. Token material is never logged; only
+// verdicts/usernames/errors are. logPrefix names the channel in warn logs
+// (e.g. "internal decisions ingest" / "decisions read") so the two call sites
+// stay distinguishable without forking the fail-closed logic.
+func (m *Manager) authenticateServiceBearer(c *gin.Context, reviewer *InternalTokenAuthenticator, static *auth.TokenVerifier, logPrefix string) bool {
 	raw := auth.BearerToken(c.GetHeader("Authorization"))
 	if raw == "" {
 		c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{
 			"error": "missing bearer token",
 		})
-		return
+		return false
 	}
 
-	if m.internalReviewer != nil {
-		ok, _, err := m.internalReviewer.Authenticate(c.Request.Context(), raw)
+	if reviewer != nil {
+		ok, _, err := reviewer.Authenticate(c.Request.Context(), raw)
 		if err != nil {
 			// FAIL CLOSED: the TokenReview verdict could not be established.
 			// Reject and do NOT fall through to the static path — never log the
 			// token itself.
-			m.logger.Warn("internal decisions ingest: TokenReview failed; rejecting (fail closed)",
+			m.logger.Warn(logPrefix+": TokenReview failed; rejecting (fail closed)",
 				zap.Error(err),
 			)
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{
 				"error": "invalid bearer token",
 			})
-			return
+			return false
 		}
 		if ok {
 			// Authenticated and audience-bound: admit.
-			m.ingestEvent(c)
-			return
+			return true
 		}
 		// Clean negative verdict: fall through to the static fallback below.
 	}
 
 	// Static fallback (or the only path when no reviewer is configured).
-	if !m.internalToken.Configured() {
+	if static == nil || !static.Configured() {
 		c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{
 			"error": "internal token not configured",
 		})
-		return
+		return false
 	}
 	// Constant-time bearer-token verification (CRY-WU-13, IAM-WU-07): the
 	// presented token is compared against the configured token(s) over
 	// fixed-length digests so neither token contents nor length leak via timing.
-	if !m.internalToken.Verify(raw) {
+	if !static.Verify(raw) {
 		c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{
 			"error": "invalid bearer token",
 		})
+		return false
+	}
+	return true
+}
+
+// IngestInternal handles POST /api/v1/decisions/internal.
+//
+// Auth (IAM-WU-11): the inbound bearer is authenticated via the shared
+// service-to-service preamble (authenticateServiceBearer) pinned to the webhook
+// SA's TokenReview reviewer (m.internalReviewer) with the static internal token
+// as the opt-in fallback. The body is published only after authentication.
+func (m *Manager) IngestInternal(c *gin.Context) {
+	if !m.authenticateServiceBearer(c, m.internalReviewer, m.internalToken, "internal decisions ingest") {
 		return
 	}
 	m.ingestEvent(c)
+}
+
+// DecisionsReadAuth is the gin middleware that guards the read side of the
+// decisions plane — GET /api/v1/decisions/stream and /recent (IAM-WU-11,
+// Inc7 Stream A). It mirrors IngestInternal's auth, but the TokenReview reviewer
+// is pinned to the DASHBOARD ServiceAccount (m.decisionsReadReviewer) rather than
+// the webhook SA, so these read feeds reject unauthenticated callers while the
+// /internal ingest endpoint keeps its own webhook-SA pin. The static internal
+// token is the shared opt-in fallback (static mode), identical to /internal.
+//
+// AUTHED ENDPOINTS ARE NOT OIDC-PROTECTED: they remain in the service-to-service
+// decisions group (router.go), authenticated by a projected SA token via
+// TokenReview, not by a human OIDC bearer.
+func (m *Manager) DecisionsReadAuth() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if !m.authenticateServiceBearer(c, m.decisionsReadReviewer, m.internalToken, "decisions read") {
+			return
+		}
+		c.Next()
+	}
 }
 
 // ingestEvent decodes the PublicEvent body and publishes it to the bus + recent

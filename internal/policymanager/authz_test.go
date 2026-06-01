@@ -173,16 +173,54 @@ func TestAPIRouter_ManagementPlaneRequiresAuthN(t *testing.T) {
 }
 
 // TestAPIRouter_DecisionsPlaneIsOIDCExempt confirms the machine-plane boundary
-// (FIX I.3): through NewAPIRouter with auth ENABLED, GET /api/v1/decisions/recent
-// with NO bearer must NOT be 401 — the decisions plane is intentionally not
-// wrapped by the OIDC middleware (it is service-to-service, see router.go).
+// through NewAPIRouter with auth ENABLED (FIX I.3, updated Inc7 Stream A): the
+// decisions read feeds (/stream, /recent) and the ingest endpoint (/internal)
+// are NOT behind the human OIDC middleware — they are service-to-service. But
+// they are NOT unauthenticated either: each rejects via the SERVICE-token path
+// (TokenReview / static), so with NO bearer they return 401 from the decisions
+// auth layer, NOT from OIDC.
+//
+// Proof that 401 comes from the service path (not OIDC): a garbage OIDC bearer
+// passed to a management route 401s via OIDC; here we assert the decisions
+// routes 401 even though the group is constructed WITHOUT the OIDC middleware
+// (router.go puts them in a separate group). The companion full-route matrix
+// (TestAPIRouter_AllV1RoutesRequireServiceOrOIDCToken) proves the
+// reachable-without-token contract for /healthz + /readyz.
 func TestAPIRouter_DecisionsPlaneIsOIDCExempt(t *testing.T) {
 	v := newHermeticVerifier(t)
 	m := newTestManagerWithPolicy(t, newPrivilegedPolicy())
+	// No reviewer and no static token configured: the decisions auth layer must
+	// still reject an unauthenticated read (an empty verifier is not a wildcard).
 	router := NewAPIRouter(m, testAuthConfig(), rbacTestConfig(), v)
 
-	code := doRBACRequest(t, router, http.MethodGet, "/api/v1/decisions/recent", "", "")
-	assert.NotEqual(t, http.StatusUnauthorized, code, "decisions machine-plane must be OIDC-exempt, got %d", code)
+	// stream + recent are no longer unauthenticated: with no token they 401 via
+	// the DecisionsReadAuth service-token middleware.
+	for _, path := range []string{"/api/v1/decisions/recent", "/api/v1/decisions/stream"} {
+		code := doRBACRequest(t, router, http.MethodGet, path, "", "")
+		assert.Equal(t, http.StatusUnauthorized, code,
+			"%s must reject an unauthenticated read via the service-token path, got %d", path, code)
+	}
+
+	// /internal stays TokenReview/static-gated (its own webhook-SA pin); no token
+	// => 401, not OIDC.
+	code := doRBACRequest(t, router, http.MethodPost, "/api/v1/decisions/internal", "", "")
+	assert.Equal(t, http.StatusUnauthorized, code,
+		"decisions/internal must stay service-token-gated, got %d", code)
+
+	// Confirm the 401 is from the service-token layer, not OIDC: a request
+	// carrying a VALID OIDC bearer is still rejected by the decisions read layer
+	// (it does not consult OIDC at all), whereas a management route would admit
+	// the same valid OIDC token. This distinguishes "service-authed" from
+	// "OIDC human-authed".
+	validOIDC := tokenForGroups(t, []string{"grp-viewer"})
+	code = doRBACRequest(t, router, http.MethodGet, "/api/v1/decisions/recent", validOIDC, "")
+	assert.Equal(t, http.StatusUnauthorized, code,
+		"the decisions read path must NOT honor an OIDC human token (it is service-authed), got %d", code)
+	// Same OIDC token on a management read is admitted (200) — proves the token
+	// itself is valid and the difference is the auth lane, not the token.
+	code = doRBACRequest(t, router, http.MethodGet, "/api/v1/policies", validOIDC, "")
+	assert.Equal(t, http.StatusOK, code,
+		"the same OIDC token must be accepted on the OIDC-gated management plane, got %d", code)
 }
 
 // TestRBACMiddleware_UnmappedRouteDeniedByDefault confirms a method/path absent
