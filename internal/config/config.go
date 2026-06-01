@@ -289,6 +289,14 @@ func validateConfig(config *Config) error {
 		return fmt.Errorf("security.rbac.default_role %q is invalid (must be viewer, editor, or admin)", config.Security.RBAC.DefaultRole)
 	}
 
+	// Validate storage type (IAM-WU-13 honesty). Only "memory" is implemented;
+	// redis and etcd are future intent only. Accepting an unknown value here
+	// would silently ignore it while the in-memory store continues to be used,
+	// misleading the operator into believing a durable backend is active.
+	if t := strings.TrimSpace(config.Storage.Type); t != "memory" {
+		return fmt.Errorf("storage.type %q is not implemented (only \"memory\" is supported)", t)
+	}
+
 	return nil
 }
 

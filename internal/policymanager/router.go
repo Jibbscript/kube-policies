@@ -32,6 +32,12 @@ import (
 func NewAPIRouter(m *Manager, authCfg config.AuthConfig, rbacCfg config.RBACConfig, verifier oidcVerifier) *gin.Engine {
 	gin.SetMode(gin.ReleaseMode)
 	router := gin.New()
+	// Trust no proxy headers: c.ClientIP() returns the non-spoofable direct
+	// peer from RemoteAddr (IAM-WU-14 audit attribution). The policy-manager
+	// sits behind its own TLS listener; any X-Forwarded-For header from an
+	// untrusted upstream must not influence the audit record. This also
+	// silences gin's "trusted proxies" startup warning.
+	_ = router.SetTrustedProxies(nil)
 	router.Use(gin.Recovery())
 
 	router.GET("/healthz", func(c *gin.Context) {

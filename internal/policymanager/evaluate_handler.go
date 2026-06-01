@@ -105,6 +105,11 @@ func (m *Manager) EvaluatePolicy(c *gin.Context) {
 		Operation: admissionv1.Create,
 		Kind:      metav1.GroupVersionKind{Group: group, Version: version, Kind: kind},
 		Namespace: namespace,
+		// IAM-WU-14: this UserInfo is the EVALUATED-object actor that OPA sees as
+		// request.userInfo for the synthesized admission request — NOT the API
+		// caller. It is intentionally a fixed playground identity. This RPC
+		// persists nothing, so it emits no ConfigurationChange audit event; the
+		// caller's attribution is irrelevant here.
 		UserInfo: authenticationv1.UserInfo{
 			Username: "playground",
 			Groups:   []string{"system:unauthenticated"},

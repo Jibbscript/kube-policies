@@ -42,6 +42,14 @@ type Manager struct {
 	// non-cluster/demo deployments. nil leaves behavior exactly as before
 	// (static-token only).
 	internalReviewer *InternalTokenAuthenticator
+
+	// auditLogger records a ConfigurationChange audit event for every persisting
+	// management-plane mutation (IAM-WU-14, AU-2/AU-3/AC-6). It is installed via
+	// SetAuditLogger after construction so existing NewManager(cfg, log) callers
+	// (tests, alternate entry points) are unaffected. nil disables audit
+	// attribution entirely — every mutation handler guards on it — so a manager
+	// built without an audit logger behaves exactly as before.
+	auditLogger *audit.Logger
 }
 
 // PolicyBundle represents a collection of policies
@@ -179,6 +187,16 @@ func (m *Manager) SetInternalTokenReviewer(reviewer *InternalTokenAuthenticator)
 	m.internalReviewer = reviewer
 }
 
+// SetAuditLogger installs the audit.Logger that records a ConfigurationChange
+// event for every persisting management-plane mutation (IAM-WU-14). It is set
+// after construction (mirroring SetInternalToken*/SetInternalTokenReviewer) so
+// no existing NewManager(cfg, log) caller is forced to change. A nil logger —
+// or never calling this — leaves attribution off: every mutation handler guards
+// on m.auditLogger != nil, so behavior is identical to before.
+func (m *Manager) SetAuditLogger(l *audit.Logger) {
+	m.auditLogger = l
+}
+
 // Start starts the policy manager background processes
 func (m *Manager) Start(ctx context.Context) {
 	m.logger.Info("Starting policy manager")
@@ -310,6 +328,13 @@ func (m *Manager) CreatePolicy(c *gin.Context) {
 		zap.String("policy_name", newPolicy.Name),
 	)
 
+	if m.auditLogger != nil {
+		m.auditLogger.LogConfigChange(userInfoFromContext(c), "CREATE", "policy", newPolicy.ID, map[string]interface{}{
+			"source_ip":   c.ClientIP(),
+			"policy_name": newPolicy.Name,
+		})
+	}
+
 	c.JSON(http.StatusCreated, newPolicy)
 }
 
@@ -324,10 +349,10 @@ func (m *Manager) UpdatePolicy(c *gin.Context) {
 	}
 
 	m.mutex.Lock()
-	defer m.mutex.Unlock()
 
 	existingPolicy, exists := m.policies[id]
 	if !exists {
+		m.mutex.Unlock()
 		c.JSON(http.StatusNotFound, gin.H{"error": "Policy not found"})
 		return
 	}
@@ -339,16 +364,25 @@ func (m *Manager) UpdatePolicy(c *gin.Context) {
 
 	// Validate policy
 	if err := m.validatePolicy(&updatedPolicy); err != nil {
+		m.mutex.Unlock()
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
 	m.policies[id] = &updatedPolicy
+	m.mutex.Unlock()
 
 	m.logger.Info("Policy updated",
 		zap.String("policy_id", id),
 		zap.String("policy_name", updatedPolicy.Name),
 	)
+
+	if m.auditLogger != nil {
+		m.auditLogger.LogConfigChange(userInfoFromContext(c), "UPDATE", "policy", id, map[string]interface{}{
+			"source_ip":   c.ClientIP(),
+			"policy_name": updatedPolicy.Name,
+		})
+	}
 
 	c.JSON(http.StatusOK, updatedPolicy)
 }
@@ -358,16 +392,23 @@ func (m *Manager) DeletePolicy(c *gin.Context) {
 	id := c.Param("id")
 
 	m.mutex.Lock()
-	defer m.mutex.Unlock()
 
 	if _, exists := m.policies[id]; !exists {
+		m.mutex.Unlock()
 		c.JSON(http.StatusNotFound, gin.H{"error": "Policy not found"})
 		return
 	}
 
 	delete(m.policies, id)
+	m.mutex.Unlock()
 
 	m.logger.Info("Policy deleted", zap.String("policy_id", id))
+
+	if m.auditLogger != nil {
+		m.auditLogger.LogConfigChange(userInfoFromContext(c), "DELETE", "policy", id, map[string]interface{}{
+			"source_ip": c.ClientIP(),
+		})
+	}
 
 	c.JSON(http.StatusNoContent, nil)
 }
@@ -403,6 +444,12 @@ func (m *Manager) ValidatePolicy(c *gin.Context) {
 
 // DeployPolicy handles POST /api/v1/policies/:id/deploy.
 // Stub: cluster deployment is not yet implemented.
+//
+// IAM-WU-14: when this is un-stubbed and begins mutating cluster state, it MUST
+// emit m.auditLogger.LogConfigChange(userInfoFromContext(c), "DEPLOY", "policy",
+// id, ...) in the success path, like the seven CRUD handlers. No audit call is
+// added now because a 501 stub persists nothing — recording a ConfigurationChange
+// for a no-op would be a misleading event.
 func (m *Manager) DeployPolicy(c *gin.Context) {
 	c.JSON(http.StatusNotImplemented, gin.H{"error": "policy deployment is not yet implemented"})
 }
@@ -467,6 +514,13 @@ func (m *Manager) CreateBundle(c *gin.Context) {
 	m.bundles[newBundle.ID] = &newBundle
 	m.mutex.Unlock()
 
+	if m.auditLogger != nil {
+		m.auditLogger.LogConfigChange(userInfoFromContext(c), "CREATE", "bundle", newBundle.ID, map[string]interface{}{
+			"source_ip":   c.ClientIP(),
+			"bundle_name": newBundle.Name,
+		})
+	}
+
 	c.JSON(http.StatusCreated, newBundle)
 }
 
@@ -509,6 +563,13 @@ func (m *Manager) CreateException(c *gin.Context) {
 	m.exceptions[newException.ID] = &newException
 	m.mutex.Unlock()
 
+	if m.auditLogger != nil {
+		m.auditLogger.LogConfigChange(userInfoFromContext(c), "CREATE", "exception", newException.ID, map[string]interface{}{
+			"source_ip": c.ClientIP(),
+			"policy_id": newException.PolicyID,
+		})
+	}
+
 	c.JSON(http.StatusCreated, newException)
 }
 
@@ -523,10 +584,10 @@ func (m *Manager) UpdateException(c *gin.Context) {
 	}
 
 	m.mutex.Lock()
-	defer m.mutex.Unlock()
 
 	existingException, exists := m.exceptions[id]
 	if !exists {
+		m.mutex.Unlock()
 		c.JSON(http.StatusNotFound, gin.H{"error": "Exception not found"})
 		return
 	}
@@ -536,6 +597,14 @@ func (m *Manager) UpdateException(c *gin.Context) {
 	updatedException.UpdatedAt = time.Now()
 
 	m.exceptions[id] = &updatedException
+	m.mutex.Unlock()
+
+	if m.auditLogger != nil {
+		m.auditLogger.LogConfigChange(userInfoFromContext(c), "UPDATE", "exception", id, map[string]interface{}{
+			"source_ip": c.ClientIP(),
+			"policy_id": updatedException.PolicyID,
+		})
+	}
 
 	c.JSON(http.StatusOK, updatedException)
 }
@@ -545,14 +614,22 @@ func (m *Manager) DeleteException(c *gin.Context) {
 	id := c.Param("id")
 
 	m.mutex.Lock()
-	defer m.mutex.Unlock()
 
 	if _, exists := m.exceptions[id]; !exists {
+		m.mutex.Unlock()
 		c.JSON(http.StatusNotFound, gin.H{"error": "Exception not found"})
 		return
 	}
 
 	delete(m.exceptions, id)
+	m.mutex.Unlock()
+
+	if m.auditLogger != nil {
+		m.auditLogger.LogConfigChange(userInfoFromContext(c), "DELETE", "exception", id, map[string]interface{}{
+			"source_ip": c.ClientIP(),
+		})
+	}
+
 	c.JSON(http.StatusNoContent, nil)
 }
 
@@ -566,6 +643,11 @@ func (m *Manager) ListComplianceReports(c *gin.Context) {
 
 // GenerateComplianceReport handles POST /api/v1/compliance/reports.
 // Stub: report generation is not yet implemented.
+//
+// IAM-WU-14: when this is un-stubbed and begins persisting a generated report,
+// it MUST emit m.auditLogger.LogConfigChange(userInfoFromContext(c), "GENERATE",
+// "compliance_report", reportID, ...) in the success path. No audit call is
+// added now because a 501 stub persists nothing.
 func (m *Manager) GenerateComplianceReport(c *gin.Context) {
 	c.JSON(http.StatusNotImplemented, gin.H{"error": "compliance reporting is not yet implemented"})
 }

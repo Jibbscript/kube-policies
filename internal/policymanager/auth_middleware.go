@@ -6,6 +6,7 @@ import (
 
 	"github.com/coreos/go-oidc/v3/oidc"
 	"github.com/gin-gonic/gin"
+	authenticationv1 "k8s.io/api/authentication/v1"
 
 	"github.com/Jibbscript/kube-policies/internal/auth"
 	"github.com/Jibbscript/kube-policies/internal/config"
@@ -100,6 +101,28 @@ func OIDCAuthMiddleware(v oidcVerifier, cfg config.AuthConfig) gin.HandlerFunc {
 		}
 		c.Set(principalContextKey, p)
 		c.Next()
+	}
+}
+
+// userInfoFromContext maps the authenticated caller in the gin context to the
+// authenticationv1.UserInfo recorded on audit events (IAM-WU-14). When a
+// verified Principal is present it carries the OIDC username (UserInfo.Username),
+// subject (UserInfo.UID), and groups; this is always the case in production,
+// where all seven persisting mutation routes sit behind OIDC+RBAC. When no
+// Principal is present — which only happens when authentication is disabled
+// (a dev/test posture, see NewAPIRouter) — it returns an honest
+// "system:unauthenticated" label rather than fabricating an identity.
+func userInfoFromContext(c *gin.Context) authenticationv1.UserInfo {
+	if p, ok := PrincipalFrom(c); ok && p != nil {
+		return authenticationv1.UserInfo{
+			Username: p.Username,
+			UID:      p.Subject,
+			Groups:   p.Groups,
+		}
+	}
+	return authenticationv1.UserInfo{
+		Username: "system:unauthenticated",
+		Groups:   []string{"system:unauthenticated"},
 	}
 }
 

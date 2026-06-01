@@ -219,6 +219,34 @@ func TestRoleForPrincipal(t *testing.T) {
 	})
 }
 
+// TestRoleBindingDrivesEditorGate is the IAM-WU-13 honesty proof for
+// security.rbac.role_bindings: a config that maps a group to "editor" must
+// actually let that principal pass the editor-gated mutation route
+// (POST /api/v1/policies → RoleEditor), while a viewer-only principal is denied
+// the same gate. It exercises the real resolver (roleForPrincipal) against the
+// real route table (requiredRole), so the docs claim that role_bindings control
+// access is anchored in the code, not asserted in prose.
+func TestRoleBindingDrivesEditorGate(t *testing.T) {
+	rbac := config.RBACConfig{
+		RoleBindings: []config.RoleBinding{
+			{Role: "editor", Groups: []string{"platform"}},
+			{Role: "viewer", Groups: []string{"readers"}},
+		},
+	}
+
+	needed, known := requiredRole(http.MethodPost, "/api/v1/policies")
+	require.True(t, known, "POST /api/v1/policies must be in the route table")
+	require.Equal(t, RoleEditor, needed, "creating a policy requires editor")
+
+	editor := &Principal{Username: "alice", Groups: []string{"platform"}}
+	assert.GreaterOrEqual(t, int(roleForPrincipal(editor, rbac)), int(needed),
+		"an editor-bound principal must satisfy the editor gate")
+
+	viewer := &Principal{Username: "bob", Groups: []string{"readers"}}
+	assert.Less(t, int(roleForPrincipal(viewer, rbac)), int(needed),
+		"a viewer-only principal must be denied the editor gate")
+}
+
 func TestParseRole(t *testing.T) {
 	for name, want := range map[string]Role{
 		"viewer": RoleViewer,

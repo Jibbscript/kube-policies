@@ -16,6 +16,7 @@ import (
 	"k8s.io/client-go/kubernetes"
 	ctrl "sigs.k8s.io/controller-runtime"
 
+	"github.com/Jibbscript/kube-policies/internal/audit"
 	"github.com/Jibbscript/kube-policies/internal/auth"
 	"github.com/Jibbscript/kube-policies/internal/config"
 	"github.com/Jibbscript/kube-policies/internal/cryptofips"
@@ -104,6 +105,22 @@ func main() {
 	if err != nil {
 		log.Fatal("Failed to initialize policy manager", zap.Error(err))
 	}
+
+	// Audit logger for management-plane configuration changes (IAM-WU-14,
+	// AU-2/AU-3). Constructed AFTER NewManager and attached via SetAuditLogger so
+	// every persisting policy/bundle/exception mutation records a
+	// ConfigurationChange event attributed to the authenticated OIDC principal.
+	// Mirrors cmd/admission-webhook/main.go's construction (same WithLogger /
+	// WithMetrics options against the same audit config). Closed on shutdown
+	// below so buffered events are flushed.
+	auditLogger, err := audit.NewLogger(&cfg.Audit,
+		audit.WithLogger(log),
+		audit.WithMetrics(metricsCollector),
+	)
+	if err != nil {
+		log.Fatal("Failed to initialize audit logger", zap.Error(err))
+	}
+	policyManager.SetAuditLogger(auditLogger)
 	// Accept both the current and (during a rotation window) the previous
 	// internal token so secret rotation causes no downtime (CRY-WU-14). This is
 	// kept unconditionally so the static fallback is always available; in
@@ -389,6 +406,12 @@ func main() {
 
 	if err := metricsServer.Shutdown(shutdownCtx); err != nil {
 		log.Error("Failed to shutdown metrics server", zap.Error(err))
+	}
+
+	// Flush and close the audit logger last so any ConfigurationChange events
+	// buffered by in-flight mutations are persisted before exit (IAM-WU-14).
+	if err := auditLogger.Close(); err != nil {
+		log.Error("Failed to close audit logger", zap.Error(err))
 	}
 
 	log.Info("Servers stopped")

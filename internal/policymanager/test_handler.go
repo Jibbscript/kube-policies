@@ -166,6 +166,10 @@ func parseAdmissionBody(bodyBytes []byte) (*admissionv1.AdmissionRequest, error)
 		Operation: admissionv1.Create,
 		Kind:      metav1.GroupVersionKind{Group: group, Version: version, Kind: kind},
 		Namespace: namespace,
+		// IAM-WU-14: this UserInfo is the EVALUATED-object actor that OPA sees as
+		// request.userInfo for the synthesized admission request — NOT the API
+		// caller. /policies/:id/test persists nothing, so it emits no
+		// ConfigurationChange audit event.
 		UserInfo: authenticationv1.UserInfo{
 			Username: "playground",
 			Groups:   []string{"system:unauthenticated"},

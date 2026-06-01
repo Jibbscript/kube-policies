@@ -297,6 +297,7 @@ scripts/               Test, certificate, logger, and manifest validation tools
 
 ## Documentation
 
+- [Configuration reference](docs/configuration.md)
 - [Deployment guide](DEPLOYMENT.md)
 - [Testing guide](TESTING.md)
 - [Contributing guide](CONTRIBUTING.md)

@@ -1,6 +1,8 @@
 package config
 
 import (
+	"crypto/tls"
+	"crypto/x509"
 	"os"
 	"path/filepath"
 	"strings"
@@ -222,6 +224,93 @@ func TestLoadConfig_AuthDisabledLeavesZeroValue(t *testing.T) {
 	require.Empty(t, cfg.Security.Authentication.SupportedAlgs)
 	require.Empty(t, cfg.Security.Authentication.UsernameClaim)
 	require.Empty(t, cfg.Security.Authentication.GroupsClaim)
+}
+
+// TestLoadConfig_ClientAuthDrivesClientAuthType is the IAM-WU-13 honesty proof
+// for security.tls.client_auth: the configured string, after a full LoadConfig
+// round-trip, resolves to the correct crypto/tls.ClientAuthType both via
+// ClientAuthType() AND via BuildServerTLSConfig — the function the server
+// listeners actually call. We supply a non-nil CA pool so BuildServerTLSConfig
+// does not downgrade require/verify_if_given to NoClientCert (the downgrade
+// only fires when clientCAs==nil, which is the no-bundle startup path).
+func TestLoadConfig_ClientAuthDrivesClientAuthType(t *testing.T) {
+	// A minimal self-signed CA pool so BuildServerTLSConfig sees a non-nil pool
+	// and honours the configured ClientAuth without downgrading.
+	caPool := x509.NewCertPool()
+
+	cases := []struct {
+		clientAuth string
+		want       tls.ClientAuthType
+	}{
+		{"require", tls.RequireAndVerifyClientCert},
+		{"verify_if_given", tls.VerifyClientCertIfGiven},
+		{"none", tls.NoClientCert},
+	}
+	for _, tc := range cases {
+		t.Run(tc.clientAuth, func(t *testing.T) {
+			clearConfigEnv(t)
+			path := filepath.Join(t.TempDir(), "config.yaml")
+			writeConfig(t, path, `
+security:
+  tls:
+    min_version: "1.3"
+    client_auth: `+tc.clientAuth+`
+`)
+			cfg, err := LoadConfig(path)
+			require.NoError(t, err)
+
+			// Layer 1: ClientAuthType() resolver maps the string correctly.
+			require.Equal(t, tc.want, cfg.Security.TLS.ClientAuthType(),
+				"client_auth %q must resolve via ClientAuthType()", tc.clientAuth)
+
+			// Layer 2: BuildServerTLSConfig (what the listeners call) propagates
+			// the same value into tls.Config.ClientAuth when a CA pool is supplied.
+			tlsCfg, err := BuildServerTLSConfig(cfg.Security.TLS, caPool)
+			require.NoError(t, err)
+			require.Equal(t, tc.want, tlsCfg.ClientAuth,
+				"client_auth %q must reach tls.Config.ClientAuth via BuildServerTLSConfig", tc.clientAuth)
+		})
+	}
+}
+
+// TestLoadConfig_AuthEnabledMissingFieldsFailValidation pairs with
+// TestLoadConfig_AuthEnabledDefaultsSupportedAlgsToFIPSAsymmetricSet (which
+// proves enabled=true applies the FIPS supported-algs + claim defaults) and
+// TestLoadConfig_AuthDisabledLeavesZeroValue (which proves disabled leaves the
+// zero value). Here we assert the third leg of the IAM-WU-13 authentication
+// honesty contract: enabled=true with a missing issuer/jwks_url/audience fails
+// LoadConfig outright, so an "authenticated" API can never boot unable to
+// verify a token. (The individual missing-field messages are covered by
+// TestLoadConfig_AuthEnabledRequiresIssuerJWKSAudience; this asserts the
+// fail-closed outcome explicitly alongside the defaults/zero-value tests.)
+func TestLoadConfig_AuthEnabledMissingFieldsFailValidation(t *testing.T) {
+	clearConfigEnv(t)
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	writeConfig(t, path, `
+security:
+  authentication:
+    enabled: true
+`)
+	_, err := LoadConfig(path)
+	require.Error(t, err, "enabled auth without issuer/jwks_url/audience must fail closed")
+}
+
+// TestLoadConfig_RejectsNonMemoryStorageType is the IAM-WU-13 honesty proof for
+// storage.type: only "memory" is implemented; any other value (redis, etcd,
+// or a typo) must fail LoadConfig so the operator is never misled into
+// believing a durable backend is active while the in-memory maps are used.
+func TestLoadConfig_RejectsNonMemoryStorageType(t *testing.T) {
+	cases := []string{"redis", "etcd", "postgres"}
+	for _, backend := range cases {
+		t.Run(backend, func(t *testing.T) {
+			clearConfigEnv(t)
+			path := filepath.Join(t.TempDir(), "config.yaml")
+			writeConfig(t, path, "storage:\n  type: "+backend)
+			_, err := LoadConfig(path)
+			require.Error(t, err)
+			require.Contains(t, err.Error(), "storage.type")
+		})
+	}
 }
 
 func writeConfig(t *testing.T, path string, body string) {
