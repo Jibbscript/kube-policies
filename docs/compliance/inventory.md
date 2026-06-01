@@ -1,12 +1,12 @@
 ---
 title: "Component Inventory"
 control_family: "CM — Configuration Management"
-version: "0.1.0"
+version: "0.2.0"
 status: "Draft"
 owner: "System Owner (TBD — assign)"
 approver: "Authorizing Official (TBD — assign)"
-last_reviewed: "2026-05-29"
-next_review: "2027-05-29"
+last_reviewed: "2026-06-01"
+next_review: "2027-06-01"
 ---
 
 # Component Inventory — Kube-Policies (KP)
@@ -37,21 +37,32 @@ authoritative [system facts sheet](system-facts.md). The categorization target i
 
 ## In-boundary container images
 
-| Asset ID | Name | Image | Version | Boundary | Notes |
-|---|---|---|---|---|---|
-| `AST-IMG-WH` | admission-webhook image | `admission-webhook` | operator-supplied | In-Boundary | Distroless base; `make docker-build-admission-webhook`. |
-| `AST-IMG-PM` | policy-manager image | `policy-manager` | operator-supplied | In-Boundary | Distroless base; `make docker-build-policy-manager`. |
-| `AST-IMG-DB` | dashboard image | `dashboard` | operator-supplied | In-Boundary | Distroless base; `make docker-dashboard` (requires `ui-build`); embeds `AST-SPA`. |
+The **Digest support** column records the digest-pinning capability (CM-2 / CM-8).
+The `kube-policies.image` Helm helper (`charts/kube-policies/templates/_helpers.tpl`)
+accepts a digest-bearing reference, so an operator can deploy a digest-pinned image
+today by setting `*.image.tag` to a `tag@sha256:<digest>` value (rendering
+`registry/repository:tag@sha256:<digest>`). The **shipped `values.yaml` still uses
+floating tags** (`tag: "1.0.0"`, `pullPolicy: IfNotPresent`), so images are **not
+digest-pinned by default** (residual **POAM-023**; digest-by-default is P6).
 
-> Image registry/tag/digest are operator-supplied (the chart is registry-agnostic). Version
-> pinning and provenance are addressed in remediation phase **P6**.
+| Asset ID | Name | Image | Version | Digest support | Boundary | Notes |
+|---|---|---|---|---|---|---|
+| `AST-IMG-WH` | admission-webhook image | `admission-webhook` | operator-supplied (default tag `1.0.0`) | Supported (helper accepts `tag@sha256:…`); **not pinned by default** | In-Boundary | Distroless base; `make docker-build-admission-webhook`. |
+| `AST-IMG-PM` | policy-manager image | `policy-manager` | operator-supplied (default tag `1.0.0`) | Supported (helper accepts `tag@sha256:…`); **not pinned by default** | In-Boundary | Distroless base; `make docker-build-policy-manager`. |
+| `AST-IMG-DB` | dashboard image | `dashboard` | operator-supplied | Supported (helper accepts `tag@sha256:…`); **not pinned by default** | In-Boundary | Distroless base; `make docker-dashboard` (requires `ui-build`); embeds `AST-SPA`. |
+
+> Image registry/tag/digest are operator-supplied (the chart is registry-agnostic).
+> Per-release inventory currency (CM-8) is reviewed at each release; SBOM-driven
+> auto-update and unauthorized-component detection (CM-8(1)/CM-8(3)) and
+> digest-pinning by default + base-image pinning (`scripts/pin-base-images.sh`) are
+> addressed in remediation phase **P6**.
 
 ## In-boundary services and components
 
 | Asset ID | Name | Type | Image | Ports | Protocols | Boundary |
 |---|---|---|---|---|---|---|
 | `AST-WH` | admission-webhook | Service (Go) | `admission-webhook` | `8443/tcp`, `9090/tcp` | HTTPS TLS 1.3 (server-auth only) `8443`; HTTP metrics (unauth.) `9090` | In-Boundary |
-| `AST-PM` | policy-manager | Service (Go) | `policy-manager` | `8080/tcp`, `9091/tcp` | HTTP REST `/api/v1` (unauth.) `8080`; HTTP metrics (unauth.) `9091` | In-Boundary |
+| `AST-PM` | policy-manager | Service (Go) | `policy-manager` | `8080/tcp`, `9091/tcp` | HTTPS TLS 1.3 REST `/api/v1` `8080` (server-auth; OIDC authN config-gated, default off); HTTP metrics (unauth.) `9091` | In-Boundary |
 | `AST-DB` | dashboard BFF | Service (Go) | `dashboard` | `8090/tcp`, `9092/tcp` | HTTP (no user authn; write-gated by `ALLOW_WRITES`) `8090`; HTTP metrics (unauth.) `9092` | In-Boundary |
 | `AST-SPA` | Svelte dashboard SPA | Web app (static assets) | embedded in `AST-DB` | served by `AST-DB:8090` | HTTP via `AST-DB` | In-Boundary |
 | `AST-OPA` | OPA/Rego policy evaluator | Embedded library (Go) | n/a | n/a | n/a | In-Boundary |

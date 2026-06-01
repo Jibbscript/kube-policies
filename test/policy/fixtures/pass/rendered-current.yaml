@@ -1,14 +1,388 @@
 ---
-# Source: kube-policies/templates/dashboard-rbac.yaml
+# Source: kube-policies/templates/namespace.yaml
 apiVersion: v1
-kind: ServiceAccount
+kind: Namespace
 metadata:
-  name: kp-kube-policies-dashboard
+  name: default
+  labels:
+    helm.sh/chart: kube-policies-1.2.0
+    app.kubernetes.io/name: kube-policies
+    app.kubernetes.io/instance: kube-policies
+    app.kubernetes.io/version: "1.0.0"
+    app.kubernetes.io/managed-by: Helm
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/warn: restricted
+---
+# Source: kube-policies/templates/networkpolicy-default-deny.yaml
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: kube-policies-default-deny
   namespace: default
   labels:
     helm.sh/chart: kube-policies-1.2.0
     app.kubernetes.io/name: kube-policies
-    app.kubernetes.io/instance: kp
+    app.kubernetes.io/instance: kube-policies
+    app.kubernetes.io/version: "1.0.0"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/component: network-policy
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+    - Egress
+---
+# Source: kube-policies/templates/networkpolicy-egress-apiserver.yaml
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: kube-policies-egress-apiserver
+  namespace: default
+  labels:
+    helm.sh/chart: kube-policies-1.2.0
+    app.kubernetes.io/name: kube-policies
+    app.kubernetes.io/instance: kube-policies
+    app.kubernetes.io/version: "1.0.0"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/component: network-policy
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: kube-policies
+      app.kubernetes.io/instance: kube-policies
+    matchExpressions:
+      - key: app.kubernetes.io/component
+        operator: In
+        values:
+          - admission-webhook
+          - policy-manager
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - ipBlock:
+            cidr: "10.0.0.0/24"
+      ports:
+        - protocol: TCP
+          port: 443
+        - protocol: TCP
+          port: 6443
+---
+# Source: kube-policies/templates/networkpolicy-egress-dashboard.yaml
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: kube-policies-egress-dashboard
+  namespace: default
+  labels:
+    helm.sh/chart: kube-policies-1.2.0
+    app.kubernetes.io/name: kube-policies
+    app.kubernetes.io/instance: kube-policies
+    app.kubernetes.io/version: "1.0.0"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/component: dashboard
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: kube-policies
+      app.kubernetes.io/instance: kube-policies
+      app.kubernetes.io/component: dashboard
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: kube-policies
+              app.kubernetes.io/instance: kube-policies
+              app.kubernetes.io/component: policy-manager
+      ports:
+        - protocol: TCP
+          port: 8080
+        - protocol: TCP
+          port: 9091
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: kube-policies
+              app.kubernetes.io/instance: kube-policies
+              app.kubernetes.io/component: admission-webhook
+      ports:
+        - protocol: TCP
+          port: 9090
+---
+# Source: kube-policies/templates/networkpolicy-egress-dns.yaml
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: kube-policies-egress-dns
+  namespace: default
+  labels:
+    helm.sh/chart: kube-policies-1.2.0
+    app.kubernetes.io/name: kube-policies
+    app.kubernetes.io/instance: kube-policies
+    app.kubernetes.io/version: "1.0.0"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/component: network-policy
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: kube-policies
+      app.kubernetes.io/instance: kube-policies
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+---
+# Source: kube-policies/templates/networkpolicy-egress-internal.yaml
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: kube-policies-egress-internal
+  namespace: default
+  labels:
+    helm.sh/chart: kube-policies-1.2.0
+    app.kubernetes.io/name: kube-policies
+    app.kubernetes.io/instance: kube-policies
+    app.kubernetes.io/version: "1.0.0"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/component: admission-webhook
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: kube-policies
+      app.kubernetes.io/instance: kube-policies
+      app.kubernetes.io/component: admission-webhook
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: kube-policies
+              app.kubernetes.io/instance: kube-policies
+              app.kubernetes.io/component: policy-manager
+      ports:
+        - protocol: TCP
+          port: 8080
+---
+# Source: kube-policies/templates/networkpolicy-ingress-dashboard.yaml
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: kube-policies-ingress-dashboard
+  namespace: default
+  labels:
+    helm.sh/chart: kube-policies-1.2.0
+    app.kubernetes.io/name: kube-policies
+    app.kubernetes.io/instance: kube-policies
+    app.kubernetes.io/version: "1.0.0"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/component: dashboard
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: kube-policies
+      app.kubernetes.io/instance: kube-policies
+      app.kubernetes.io/component: dashboard
+  policyTypes:
+    - Ingress
+  ingress:
+    - ports:
+        - protocol: TCP
+          port: 8090
+      from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ingress-nginx
+---
+# Source: kube-policies/templates/networkpolicy-ingress-metrics.yaml
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: kube-policies-ingress-metrics-webhook
+  namespace: default
+  labels:
+    helm.sh/chart: kube-policies-1.2.0
+    app.kubernetes.io/name: kube-policies
+    app.kubernetes.io/instance: kube-policies
+    app.kubernetes.io/version: "1.0.0"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/component: admission-webhook
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: kube-policies
+      app.kubernetes.io/instance: kube-policies
+      app.kubernetes.io/component: admission-webhook
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: prometheus
+      ports:
+        - protocol: TCP
+          port: 9090
+---
+# Source: kube-policies/templates/networkpolicy-ingress-metrics.yaml
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: kube-policies-ingress-metrics-policy-manager
+  namespace: default
+  labels:
+    helm.sh/chart: kube-policies-1.2.0
+    app.kubernetes.io/name: kube-policies
+    app.kubernetes.io/instance: kube-policies
+    app.kubernetes.io/version: "1.0.0"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/component: policy-manager
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: kube-policies
+      app.kubernetes.io/instance: kube-policies
+      app.kubernetes.io/component: policy-manager
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: prometheus
+      ports:
+        - protocol: TCP
+          port: 9091
+---
+# Source: kube-policies/templates/networkpolicy-ingress-metrics.yaml
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: kube-policies-ingress-metrics-dashboard
+  namespace: default
+  labels:
+    helm.sh/chart: kube-policies-1.2.0
+    app.kubernetes.io/name: kube-policies
+    app.kubernetes.io/instance: kube-policies
+    app.kubernetes.io/version: "1.0.0"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/component: dashboard
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: kube-policies
+      app.kubernetes.io/instance: kube-policies
+      app.kubernetes.io/component: dashboard
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: prometheus
+      ports:
+        - protocol: TCP
+          port: 9092
+---
+# Source: kube-policies/templates/networkpolicy-ingress-policy-manager.yaml
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: kube-policies-ingress-policy-manager
+  namespace: default
+  labels:
+    helm.sh/chart: kube-policies-1.2.0
+    app.kubernetes.io/name: kube-policies
+    app.kubernetes.io/instance: kube-policies
+    app.kubernetes.io/version: "1.0.0"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/component: policy-manager
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: kube-policies
+      app.kubernetes.io/instance: kube-policies
+      app.kubernetes.io/component: policy-manager
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: kube-policies
+              app.kubernetes.io/instance: kube-policies
+              app.kubernetes.io/component: admission-webhook
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: kube-policies
+              app.kubernetes.io/instance: kube-policies
+              app.kubernetes.io/component: dashboard
+      ports:
+        - protocol: TCP
+          port: 8080
+---
+# Source: kube-policies/templates/networkpolicy-ingress-webhook.yaml
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: kube-policies-ingress-webhook
+  namespace: default
+  labels:
+    helm.sh/chart: kube-policies-1.2.0
+    app.kubernetes.io/name: kube-policies
+    app.kubernetes.io/instance: kube-policies
+    app.kubernetes.io/version: "1.0.0"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/component: admission-webhook
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: kube-policies
+      app.kubernetes.io/instance: kube-policies
+      app.kubernetes.io/component: admission-webhook
+  policyTypes:
+    - Ingress
+  ingress:
+    - ports:
+        - protocol: TCP
+          port: 8443
+      from:
+        - ipBlock:
+            cidr: "10.0.0.0/24"
+---
+# Source: kube-policies/templates/dashboard-rbac.yaml
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: kube-policies-dashboard
+  namespace: default
+  labels:
+    helm.sh/chart: kube-policies-1.2.0
+    app.kubernetes.io/name: kube-policies
+    app.kubernetes.io/instance: kube-policies
     app.kubernetes.io/version: "1.0.0"
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/component: dashboard
@@ -24,12 +398,12 @@ automountServiceAccountToken: false
 apiVersion: v1
 kind: ServiceAccount
 metadata:
-  name: kp-kube-policies-admission-webhook
+  name: kube-policies-admission-webhook
   namespace: default
   labels:
     helm.sh/chart: kube-policies-1.2.0
     app.kubernetes.io/name: kube-policies
-    app.kubernetes.io/instance: kp
+    app.kubernetes.io/instance: kube-policies
     app.kubernetes.io/version: "1.0.0"
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/component: admission-webhook
@@ -41,12 +415,12 @@ automountServiceAccountToken: false
 apiVersion: v1
 kind: ServiceAccount
 metadata:
-  name: kp-kube-policies-policy-manager
+  name: kube-policies-policy-manager
   namespace: default
   labels:
     helm.sh/chart: kube-policies-1.2.0
     app.kubernetes.io/name: kube-policies
-    app.kubernetes.io/instance: kp
+    app.kubernetes.io/instance: kube-policies
     app.kubernetes.io/version: "1.0.0"
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/component: policy-manager
@@ -56,48 +430,48 @@ automountServiceAccountToken: false
 apiVersion: v1
 kind: Secret
 metadata:
-  name: kp-kube-policies-admission-webhook-certs
+  name: kube-policies-admission-webhook-certs
   namespace: default
   labels:
     helm.sh/chart: kube-policies-1.2.0
     app.kubernetes.io/name: kube-policies
-    app.kubernetes.io/instance: kp
+    app.kubernetes.io/instance: kube-policies
     app.kubernetes.io/version: "1.0.0"
     app.kubernetes.io/managed-by: Helm
 type: kubernetes.io/tls
 data:
-  tls.crt: "LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0tCk1JSUVIRENDQXdTZ0F3SUJBZ0lSQU1SR0taVEJUUG9zK25LSkJhaEtodjB3RFFZSktvWklodmNOQVFFTEJRQXcKSXpFaE1COEdBMVVFQXhNWWEzVmlaUzF3YjJ4cFkybGxjeTEzWldKb2IyOXJMV05oTUI0WERUSTJNRFl3TVRFMApNRFExTVZvWERUSTNNRFl3TVRFME1EUTFNVm93TFRFck1Da0dBMVVFQXhNaWEzQXRhM1ZpWlMxd2IyeHBZMmxsCmN5MWhaRzFwYzNOcGIyNHRkMlZpYUc5dmF6Q0NBU0l3RFFZSktvWklodmNOQVFFQkJRQURnZ0VQQURDQ0FRb0MKZ2dFQkFMeUM5alR5WHREL0RiWHJRY1A4a2lmRDNVWC9zYlZGcTQ5QmZ5U1pKQnI2MWJvYVJ3Rm16VjhrTDJxRwpkN1RoRDJZZmhQb3daQmxnaW1zbUprMTloQkI5TW82cThHYmVDNDdyR01OU1RWYU91UzN6MHJsVlI5bjV0S1dqClpoUEtTY2F5ejljZlhkYS9XekNONys1Mm9VeFVMSTREajZmMHlZNHZEL2FVZUE1WlBsQ2VwdUpHdVRrSnpGNG8KVkVFdDI3RkRGT283M3N0bVRNTGFpbkNyTXo0MEI4S0V5K21YdlVmdzNsZm1lNUtCbFcvdlhGcU1yYTB1eVBXQQoyZHFDYzAvdnplaWlFeGV3ZU0vZkFOaVlZY2hZTVdKMG1DUVRWSkdydmVmOFB0U0FOUTBPVXZqS2hYdElaNFptCldybCsrY3FuMUNQWkgxOHZkNWxsd1lsTWNMY0NBd0VBQWFPQ0FUOHdnZ0U3TUE0R0ExVWREd0VCL3dRRUF3SUYKb0RBZEJnTlZIU1VFRmpBVUJnZ3JCZ0VGQlFjREFRWUlLd1lCQlFVSEF3SXdEQVlEVlIwVEFRSC9CQUl3QURBZgpCZ05WSFNNRUdEQVdnQlNmOE1WeWRkS3NGWTUxZFdrSDBHRXNKVE8yb0RDQjJnWURWUjBSQklIU01JSFBnaUpyCmNDMXJkV0psTFhCdmJHbGphV1Z6TFdGa2JXbHpjMmx2YmkxM1pXSm9iMjlyZ2lwcmNDMXJkV0psTFhCdmJHbGoKYVdWekxXRmtiV2x6YzJsdmJpMTNaV0pvYjI5ckxtUmxabUYxYkhTQ0xtdHdMV3QxWW1VdGNHOXNhV05wWlhNdApZV1J0YVhOemFXOXVMWGRsWW1odmIyc3VaR1ZtWVhWc2RDNXpkbU9DUEd0d0xXdDFZbVV0Y0c5c2FXTnBaWE10CllXUnRhWE56YVc5dUxYZGxZbWh2YjJzdVpHVm1ZWFZzZEM1emRtTXVZMngxYzNSbGNpNXNiMk5oYklJSmJHOWoKWVd4b2IzTjBod1IvQUFBQk1BMEdDU3FHU0liM0RRRUJDd1VBQTRJQkFRQllMQ0ZYaXJLS1MvL2IxYVhJY3NoUQpmeXNXdzNzWVltZjBwSGh6Q25wS2ROclhCMTAwVXlydElUOUZqMHJoeFZieUdITVpOMUVGdENzWU00TUpBTXFECk1icnJkbTYvT1RvYmhHcy9sTDdheitYN3AybnFhZUg2bTJXTE5RUWZOZzZUdTc4b1dzTXR4ckVnRjAzenE2eksKS2JUeXdkYi8rM0UycVBRMHl1MEVlc1VwdmVkbGdEMXpoV2ZveGE4a0RWYmoxcVpoT0d3QkZFWXY4Y0tzb1M4ZQpjdGVYZHpTN3JuM2FsUDhobUJyemxnQy9iRjFzRnZJVXVNd3JrSlRZTlVGZWo2bGI1Ri9yZDNVcGtKVXd1WWxiCjB2aGNhKzFaMGF5WXFyRFdIcWlRY2VsSmE4WGhUV3VWcEpRcjkxa2NJNmdsa2VJYXcwSzZ1RkhZL01nUjg0cVEKLS0tLS1FTkQgQ0VSVElGSUNBVEUtLS0tLQo="
-  tls.key: "LS0tLS1CRUdJTiBSU0EgUFJJVkFURSBLRVktLS0tLQpNSUlFb3dJQkFBS0NBUUVBdklMMk5QSmUwUDhOdGV0QncveVNKOFBkUmYreHRVV3JqMEYvSkpra0d2clZ1aHBICkFXYk5YeVF2YW9aM3RPRVBaaCtFK2pCa0dXQ0theVltVFgyRUVIMHlqcXJ3WnQ0TGp1c1l3MUpOVm82NUxmUFMKdVZWSDJmbTBwYU5tRThwSnhyTFAxeDlkMXI5Yk1JM3Y3bmFoVEZRc2pnT1BwL1RKamk4UDlwUjREbGsrVUo2bQo0a2E1T1FuTVhpaFVRUzNic1VNVTZqdmV5MlpNd3RxS2NLc3pQalFId29UTDZaZTlSL0RlVitaN2tvR1ZiKzljCldveXRyUzdJOVlEWjJvSnpUKy9ONktJVEY3QjR6OThBMkpoaHlGZ3hZblNZSkJOVWthdTk1L3crMUlBMURRNVMKK01xRmUwaG5obVphdVg3NXlxZlVJOWtmWHk5M21XWEJpVXh3dHdJREFRQUJBb0lCQVFDQ3ZTRWNIMnY2N3FrSApuaDJDVzB6U0gxajdEeGFrYmFsS05WYUVmMkUzQlBmdGxnUGd5UGR1SUo1eDlzaFd2aS83MTZoV0MvR2dXQUFuCng5R1F0SmcvQjFWazlOQzl4d21sR1ErWGh5RDBBeEFTK3FNT3ZrS1N2a2UzQ05mbXFjajQ4VktNRThqMUFzbXYKcHdEY0ZaSlFhYUJzN2JOWC9NRTh4dzcvS0lFTEVVOW1CM1IxcUlhZ29qbE1xcHpQRWZRVXF0eTVSVlc3enRwdgpGSk9HbEZFNjlWaEpSbENVeFphZmVpbDRqeFNkaUQ5alYvOUkyeDVHWi9KRDN0TndoRm1LM21LSFZWbjZmY1YyClVxNjZreXFrdFNsZDhiNW5SNVJzMm5TcWhXTC9RVUZ2QzdrL29oME00MWpNNHd4QVlNZmRSM05ETUo2eFhxaEQKRTRqMnhGTGhBb0dCQVBRM3hmblJ0QVg0cnIxNFF0VVIvMlZQRCtvRUJHZm5xZTV1UFltbWdsQ0V3dDRaMzkxcwpqWkY4cCs1MHg3SWRQQkIyZ2Q3ck5SVndEYm5Da1h6Unh6OUNNTVNrZ2xkbFZuODRRSWpPRWJkZFYyNjVUOWFpCjBpNmVmMEFLM3hWM2Y3SXRPNmZVZDZrOGxFSWRzVzhYWGlIZnhCUmZJaUw5SnNEblRSdkR6c2VyQW9HQkFNV2IKTDBPMkxocjkrczFqb2YybmN4MG5LQmtPTEFad2lsZEVtYjZEYXpDNWlrbUFHWGNMSHB2SDhqZHloQkpuaGhzTApSanF0Q1VteGRTNEs1UFZ5d1ZIWGZ3WFBPR1UxTGlmanJVOU5GdDVmQkx5RDZHQWdydEtGaDdvQzZBMHl0cEQ1CjFuT242N0hyQnh5azBNNGxUM1NCdjl0ZjJoa3Z5VU1XbWJlclU3OGxBb0dBUHhPMHQ2eVpJYjIwYkUyR2ZYL3oKaGhnZ2xTSEtmWWZSVlRyMSsvcWN4KzB5WTZrdE1BU2NvQW9oV2E2aDhYZ3BqbHI5ZWpVbjljeUdUd2RaQ25NbwpVa2RuVHpMcVUyWmlLK084ajFraUxFa1lqd21mL0dEN2huejdndkFMNUlDRDQrSlkrU1VnYnY2dGtGSVpCUWQxCkVheTQrVVlGRENKMGd2aDY2d1B0QVpjQ2dZQVRDejJtM092Y2xoV1JyY1J5MmF4eVpzK3FlbjhycjdUbGJDc1UKL1QxYldNWkhCeDF0SjVrdmtqbDV0b09iOG5ZdUxRdjdvNmw5ZktpNll6cGxuVVdjU1pSb1R1dzBkTWVaK0lzLwpWVUthODdWVkpiRkRjbUxtencraGtaNGpoM3VveFNzeHdrRW95R25MRE9kQ3RyM05rS09ZMU1nRUhXTGNJRlY0CktmN01NUUtCZ0Z0MUNna2ZYeDRqVzZGdE52RjY2T05sSmQ0N2hQTms4NjhFMllHbTI4RWhjeWxTL0RvRGFNcksKaG9iWVp2YW9rZDZpYWkzRGMxbHVxUUVITlN2eVJnRVFpbVVNU3F5N3lZYUh0ZXEyYjQxblhsT0U0U25iS1NUKwpQMjRxL3lxcTZrWXpRVjJXNFdvbm5zTjg4akRvRUJIVFJ4ejVBaVVjYjZvcTlvNkpHOSs1Ci0tLS0tRU5EIFJTQSBQUklWQVRFIEtFWS0tLS0tCg=="
-  ca.crt: "LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0tCk1JSURNakNDQWhxZ0F3SUJBZ0lSQUplYms5TU5Za0FzcGZaNXRDcUU5VkF3RFFZSktvWklodmNOQVFFTEJRQXcKSXpFaE1COEdBMVVFQXhNWWEzVmlaUzF3YjJ4cFkybGxjeTEzWldKb2IyOXJMV05oTUI0WERUSTJNRFl3TVRFMApNRFExTVZvWERUSTNNRFl3TVRFME1EUTFNVm93SXpFaE1COEdBMVVFQXhNWWEzVmlaUzF3YjJ4cFkybGxjeTEzClpXSm9iMjlyTFdOaE1JSUJJakFOQmdrcWhraUc5dzBCQVFFRkFBT0NBUThBTUlJQkNnS0NBUUVBbjM0aWVHOXcKakFCUkdsR2RnRVJhVDRiWXphaS9uRW85Qm9maFhwYm1xTVhhSXZlemJuUTdxcG5SSnREeGlua2QyeTVmRDRyWAo5RWVsZFI4T3JjWVdGTVNEb2FGellMbkVaUVBpSHhjcExlbkVLMzFJOHczdTZjdVZLZVpFSzdNN1hKTlB5UHA1CmpOdFliVGt0WTRzT1FIdmlRSUR6REJHUFFHWjJLb2pCd0szQzAvNEFYOFIzV2FGZnlHdENSQ2JEeXBTcEYrTVIKck50YmRWeXFVeklxY0pnRFJDSGF4TWlBUWIyS3U4SnczWmYybGdVODlYZStCbnBKcXhZaGd5cG90ZCtTMTZzQwpXWFh6T0toM21TaHRaMlhjSnZGcWZKdjM1TEVGRXpYdkRXUGFCNERncTFDMm9VMTVVa2IvSUNCZ3lGRkJ3K0pkCmZDcEFUV2VXWGJFZmlRSURBUUFCbzJFd1h6QU9CZ05WSFE4QkFmOEVCQU1DQXFRd0hRWURWUjBsQkJZd0ZBWUkKS3dZQkJRVUhBd0VHQ0NzR0FRVUZCd01DTUE4R0ExVWRFd0VCL3dRRk1BTUJBZjh3SFFZRFZSME9CQllFRkovdwp4WEoxMHF3VmpuVjFhUWZRWVN3bE03YWdNQTBHQ1NxR1NJYjNEUUVCQ3dVQUE0SUJBUUFua0pWNnd6a1g2WmtrCjc2REtZaEd4MnFTVmpuQ05JbG9Fdk4waHM1dEdhK3NZMDZZUWdKenFzUGt0MzlyOUE4blI1aVI1aSs3aWVOVEEKSXN3cVI5bTc3cXV3VTRLcnluZXZXRVFTOUxqTlFmZzI1cjlDazF3bjN0c3oydnVGNUkwMnNrbFFjZ1UzTEVPagpZeXN1UDlITnhsOUliYUF3UElQbDNhczljem85WWhNazB0ajVicUNGVDVPaEdZc0l6anJ5dVh3OGtWOWhzR3BSCkJyQ1V3blFFUU93bVdJUjJMcFI5VEZRT3ZNbFM0Skxsdk1BSHU3aUxKYUVzaXNDVG5ENXo2dWRiRnBiMSt4Y1AKUnJhUitoaXVuMjVva0pWcGJkSWdoWnNZYW1uaWl3cGpjbFJxMWlYWThoeDVBNDBNQ05lVFdaS1B1MjVSOUFiTgptaC9rWHVLdgotLS0tLUVORCBDRVJUSUZJQ0FURS0tLS0tCg=="
+  tls.crt: "LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0tCk1JSUVEVENDQXZXZ0F3SUJBZ0lSQU1NUFpHeDk2UlY1V2FQMm9ZYnVHeXN3RFFZSktvWklodmNOQVFFTEJRQXcKSXpFaE1COEdBMVVFQXhNWWEzVmlaUzF3YjJ4cFkybGxjeTEzWldKb2IyOXJMV05oTUI0WERUSTJNRFl3TVRJdwpNelF5T1ZvWERUSTNNRFl3TVRJd016UXlPVm93S2pFb01DWUdBMVVFQXhNZmEzVmlaUzF3YjJ4cFkybGxjeTFoClpHMXBjM05wYjI0dGQyVmlhRzl2YXpDQ0FTSXdEUVlKS29aSWh2Y05BUUVCQlFBRGdnRVBBRENDQVFvQ2dnRUIKQU1KZWdxNzI3d0wrYVpKcmdreXczWlpaY21DZGpMVlBEZmVWbHd1Y09jM01JVFV5U2QzSU4ranRubXJnSkhaZQo1S2dTYnBYamoxODFIZjU2dkVpbmZzZjJIblk4MHZ3SUZ2Q3Vlb2tDT2FYN2RBb3RWclRDSHQ2ak5DVUZWREZnClpRUSsxSytpa1hyc29NYXlvamQvL29DVmFJODNjUkxiUkgrdk50aHh1ZkJBUS9MZW5OUWFhWWI0VUtRTDAxUk4KK3VRc0h6N2hwWHAwOHcvTkJJd1poZlliak1tMGswYm1iaXRDTHFzQnE2Zi9KVUkxTC9rOWhlWVpBOVI4MW8xNwpjdDJERk5ZNG9xR3k5RzJ4Zy9KRlRQZnFkMFVJbGRrQVF5SHJZYVo1ZG14NTZNVFlFZWRMcTRTd0VmR3Nyc3hIClZJYnk5TGFGanhPQVZsbzkxZmFES3gwQ0F3RUFBYU9DQVRNd2dnRXZNQTRHQTFVZER3RUIvd1FFQXdJRm9EQWQKQmdOVkhTVUVGakFVQmdnckJnRUZCUWNEQVFZSUt3WUJCUVVIQXdJd0RBWURWUjBUQVFIL0JBSXdBREFmQmdOVgpIU01FR0RBV2dCUTJWeld5cW16c3JYbHlycnY3UHVkd3JDa0plekNCemdZRFZSMFJCSUhHTUlIRGdoOXJkV0psCkxYQnZiR2xqYVdWekxXRmtiV2x6YzJsdmJpMTNaV0pvYjI5cmdpZHJkV0psTFhCdmJHbGphV1Z6TFdGa2JXbHoKYzJsdmJpMTNaV0pvYjI5ckxtUmxabUYxYkhTQ0sydDFZbVV0Y0c5c2FXTnBaWE10WVdSdGFYTnphVzl1TFhkbApZbWh2YjJzdVpHVm1ZWFZzZEM1emRtT0NPV3QxWW1VdGNHOXNhV05wWlhNdFlXUnRhWE56YVc5dUxYZGxZbWh2CmIyc3VaR1ZtWVhWc2RDNXpkbU11WTJ4MWMzUmxjaTVzYjJOaGJJSUpiRzlqWVd4b2IzTjBod1IvQUFBQk1BMEcKQ1NxR1NJYjNEUUVCQ3dVQUE0SUJBUUJpdENOK1ZtazZ6RGRlV1lMbU5sSEhNUXBGUDZrZWxPbHJIU0FqL0s5dgplWVlrakR5a2psaldJVXFJVDZad0t3dk1zUnptUU1TS01EakVLb3E0TEUzb0swRUIzWnV6R1VFbWVaZ09XK3cyCjJiZnN4VlNxNTRGSjllTEVHQkFNRVNNajBCUGVWekNQdVFoeEorbFZVZFcwQ3EyZVBncng4TXN1cW9DTUd2ZFYKaGs5c3pCVkU2MnROK0RzTUZGZHllK0hrUFh5YVo5L0tObmVTSDVSUUlvZWJCK3RVRW53c2pZMmg0L2U5eDNyTgpiVE0vZ0h6VnViZ0s4K3VLc0VyNEl5em9iSTE5VHFMSVhvWmlBRFhpRTVLOVROVHJySGJmMUNta3NsY1AxbGNsClQ5cHJsTlBXZHVoYUY1Vnh4UEw5WWk3SzhsUkFaSWpqS3JTTC90NS9lWE1qCi0tLS0tRU5EIENFUlRJRklDQVRFLS0tLS0K"
+  tls.key: "LS0tLS1CRUdJTiBSU0EgUFJJVkFURSBLRVktLS0tLQpNSUlFb3dJQkFBS0NBUUVBd2w2Q3J2YnZBdjVwa211Q1RMRGRsbGx5WUoyTXRVOE45NVdYQzV3NXpjd2hOVEpKCjNjZzM2TzJlYXVBa2RsN2txQkp1bGVPUFh6VWQvbnE4U0tkK3gvWWVkanpTL0FnVzhLNTZpUUk1cGZ0MENpMVcKdE1JZTNxTTBKUVZVTVdCbEJEN1VyNktSZXV5Z3hyS2lOMy8rZ0pWb2p6ZHhFdHRFZjY4MjJIRzU4RUJEOHQ2YwoxQnBwaHZoUXBBdlRWRTM2NUN3ZlB1R2xlblR6RDgwRWpCbUY5aHVNeWJTVFJ1WnVLMEl1cXdHcnAvOGxRalV2CitUMkY1aGtEMUh6V2pYdHkzWU1VMWppaW9iTDBiYkdEOGtWTTkrcDNSUWlWMlFCRElldGhwbmwyYkhub3hOZ1IKNTB1cmhMQVI4YXl1ekVkVWh2TDB0b1dQRTRCV1dqM1Y5b01ySFFJREFRQUJBb0lCQUJGYjJYWUF6YlhKdk9uNwp1Z1paWVdEVkdqYnd1eWxTSnlBdWR1L3RndWdUUy8veFB0R1UyUkZ2YjArQ054OXZPQ0tlaXN2T0ovYkx5cUw0Cm1Tb3Y4MDJ1ZUdmODVLYm5uZ3pldUVqV0x3blkzRE13ZTJiblUxUjA1T3BOZ0loc1lIa3hsMU1jUkx2aXVEVW0KclFBaDZUdlluQjcyUjUzMGdUaWFFRjdpUVVYb2YzVU9tT25rTXMxSDhXVStpVno1Y2hwWWFWZ28rNVFzc3ZWagpuY1FTWmpWaVdWU2NCMCtJWFAxTThtUkVHTFhXSloyUmtHRHZrYWExTWlHM3dYa0dzRFkvYnNxNlBuMXNXREhrCit3b3ZoTXBPVmlFeFRBbmYwa2pJclRKSUNZcnhwalNEWFZ2M3ovWkpMTGdmVlRtcjVkb2o1MUFzVy93RkR6MVcKckpBcUh1MENnWUVBOERIaWErY1pmTnFzZGZORGdkZElHdklGcFRoTVJ5WUFoNHlLYWJyUUJ1b2t0ZGd4NE5TagpraGE3T09ydDdCMUdBTzdKMTRNN3lWQTRmdU9tb1QzRVd4cnhPSFRTNnpVRFhtRzRITGlTU1c5b3J5UUt5SEZvCmgveDE0UUIxUTZwYVlrY1lPNEFPejlWWWxWWnVuMjZIN2tBczdCVmptdW0xeENWWS9RcDh5eWNDZ1lFQXp5aXYKcG9RKzN3eXByOXpVYzNOZGVxaEEvdUNsNmJlQ2YzUWFBa1dxMkduWWlwODVJZitCbWVzOXRqdW8rL0tGTkc4WgpDRStFK0RCSG5nemd2YWN2Um01NkJaTXJmY3JHSy9pWEs0UHhRUi9WOVhaWmpodWdIekZtdUVrUCtMZnNlZTVrCjZVaWRDcWZRRXFqTWkwYkhtWExVSkM1Z3RoVURnY21RWktFSEVoc0NnWUJRM0lwY1J4VzJpYXVMbmRTNUxtK1EKMnE5NTJzVWJJcmtFNlJSajJjZFV2SmlWTzI0M1FYNjduTGwweE9wS0ZlVE9SWlZmMzBkT1U1cGhaV1JnWGZudgpyZGROYVU3a2JobHZPYmlRdXJaTTBKdk9jblRLM0JzVHhMTXVoMGZ5K3JPbzZFUkpLNmhRNFlNTDYyZ2Nka3ArCnM4NHJ3RnVpK0ZELzhvN055UzBQK3dLQmdRQ3hobXBRUnBBaVVSV3hVWXIyak95VXlrODRuSWRSN0NMMjJpWFgKd0tBUjZWTGFLR3lyaCt3bVhRTjdnVkRrNkFYaTB6b2VkeGE2SVpXZUNlY21YM2tSNEdiTkZEdDNCeWdnVWw0cAp1bDRxc3YrRjVMQUdLZ0pqK00vUUtUeDRwaFVPd0k3Vm81YUFwU0tZZXZNZWY3OVk3cUNCaVFUenhMcEdwTmNLCmhUd3I5UUtCZ0hjd2RDa2lmdW9ueVZSbHA5bVFnbkhvSks0cy9sb0JNNnh0bHB6ZkhCUzNmUC92T1FrRkw1Z2UKN0VNWnAxcnpxMzA1aHFvTXhLZy8rTFhFWHVqL2RtUm5Ld0haR0pzQzdodXQweWpmQnRpOVFvblhraUsrYmtCaQppUUxmcldUTHh0bDl5cTVGRXdMaStKN2g1cEkrU1JnUGJ2S3I0a2R6M0lTM25qcDYxNG1PCi0tLS0tRU5EIFJTQSBQUklWQVRFIEtFWS0tLS0tCg=="
+  ca.crt: "LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0tCk1JSURNVENDQWhtZ0F3SUJBZ0lRSEZFYmFjL1BMd3NTUk1vNExrbTBtakFOQmdrcWhraUc5dzBCQVFzRkFEQWoKTVNFd0h3WURWUVFERXhocmRXSmxMWEJ2YkdsamFXVnpMWGRsWW1odmIyc3RZMkV3SGhjTk1qWXdOakF4TWpBegpOREk1V2hjTk1qY3dOakF4TWpBek5ESTVXakFqTVNFd0h3WURWUVFERXhocmRXSmxMWEJ2YkdsamFXVnpMWGRsClltaHZiMnN0WTJFd2dnRWlNQTBHQ1NxR1NJYjNEUUVCQVFVQUE0SUJEd0F3Z2dFS0FvSUJBUUN3cC9zZTJKTFUKeGhmRHN3R2dSSFJLV21SV3BaT1F1ODhycGZ5bXZaVG9yWUUwc3VCdG04aW5qNUlUVUpuNnRubzA3SnZPNTVVUwpaNFo3S3dkSVhKd29uWktIOFpkemxOQlpPVEVRNWRCaTZ1WTJVQW5wRS9DYzJ1RWdFTzd3WFBFMUYramkrK3RpCmEyRjlKdWR0VkhHT0U0ZDFZSzJ5Ly90VldEbE1rcWlXN0IxTVBzbnZiWmpTeC8vRzduYjB3QVd1ZzFpaUNMblIKQlZCdWsyNVV2ME9KVkVjTnhWRVFsejllTUtCL09sY2dOR29ldGdDd2hSaGNxL1NDejJ2Nmx0QU5WT05iQXdHbAozV1M4ekd3QlNOSFlvcEp5bzFwWS9TUElJbEVwdlNjZ0NHZHJsaXFpMHVKeHIrdU5ObUg5NU5IUXFkRndXQXRCCjUxYUtVbU9ZK2NJUkFnTUJBQUdqWVRCZk1BNEdBMVVkRHdFQi93UUVBd0lDcERBZEJnTlZIU1VFRmpBVUJnZ3IKQmdFRkJRY0RBUVlJS3dZQkJRVUhBd0l3RHdZRFZSMFRBUUgvQkFVd0F3RUIvekFkQmdOVkhRNEVGZ1FVTmxjMQpzcXBzN0sxNWNxNjcrejduY0t3cENYc3dEUVlKS29aSWh2Y05BUUVMQlFBRGdnRUJBQmhwQmlnaU5zNlhCS0wzClBXMTBUVGkwcHdRZGY1b2xBbGpuK2RObytRR012bStkMUUzdkt5MkVUc3JQZmN4UmZEbmJLVTZROFMrMnVKc0IKUzJiZWpiNEtidkNydmxmQmpPNnUrR2pyVDFCaDdkcEZsVWVKbVY1WlZERTZIbnI1NzJDYVU5ZGdvalRGcFJSbQpySGdUMktxb2ZPNGFVWU5OWmF5LzlZZDFuM3pCRkJmK0EvZHJ4T0gvNWJmUjV1b3Q2KzNraTdZRy9UZEtGVGR6CnV4RTFBSWtDL0VvSk9Qb1RSY2FUT1A2Qml2a05WaDJOb1hsTmhzVFFyTDFEWkVLbGxDMEwrVWpzRWhReEwrY1IKWkt2YnZQNm8xbS9VaG50bXhoQVNKZzZFVGd5UVFkb2Foa2NKcGhoVWVoaXlkYkZPMDFnaUFuMDVaVlg2RFJKSgp3RHprSzU4PQotLS0tLUVORCBDRVJUSUZJQ0FURS0tLS0tCg=="
 ---
 # Source: kube-policies/templates/policy-manager-tls.yaml
 apiVersion: v1
 kind: Secret
 metadata:
-  name: kp-kube-policies-policy-manager-certs
+  name: kube-policies-policy-manager-certs
   namespace: default
   labels:
     helm.sh/chart: kube-policies-1.2.0
     app.kubernetes.io/name: kube-policies
-    app.kubernetes.io/instance: kp
+    app.kubernetes.io/instance: kube-policies
     app.kubernetes.io/version: "1.0.0"
     app.kubernetes.io/managed-by: Helm
 type: kubernetes.io/tls
 data:
-  tls.crt: "LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0tCk1JSUVGRENDQXZ5Z0F3SUJBZ0lSQU1EV2d2Z3JTS2RMRy9xYjNMb09Zd013RFFZSktvWklodmNOQVFFTEJRQXcKS2pFb01DWUdBMVVFQXhNZmEzVmlaUzF3YjJ4cFkybGxjeTF3YjJ4cFkza3RiV0Z1WVdkbGNpMWpZVEFlRncweQpOakEyTURFeE5EQTBOVEZhRncweU56QTJNREV4TkRBME5URmFNQ294S0RBbUJnTlZCQU1USDJ0d0xXdDFZbVV0CmNHOXNhV05wWlhNdGNHOXNhV041TFcxaGJtRm5aWEl3Z2dFaU1BMEdDU3FHU0liM0RRRUJBUVVBQTRJQkR3QXcKZ2dFS0FvSUJBUUNwQzJ2RkVpT1JycDJoU3VRcGNYYkg1d05kOEYxL2kxU1VoNmY1U21pTFpzTTdTMEhnVThKeApYVjVjdVp5UE1WVDlsaXp4cXZDMGhlcmk4SFFzQTRwcUlHTnVVWmY4SDZHeEFhQmthSk5oSGNHeEFidWtqMFluCm10OGx3bVY0N0tmN2xLbFZ4anY2blR6S0xsdTRBMjMrNFZ2aE5QZ2x5dnp6amx6eHBiZGJOYWtKamNDcjk2dDkKdFlHRlYybUdSeVo1SlVNZDZESTdOY2xNcExiR1JaWEVGQyt3OFlpM3YwLy9QZmZGdUJYQ3ljVUZpMU9QRlk0WAowV0RSSlJodjhSc1JJWmtlVExGVUpWRjNGSEpuRlhzcDVLQmdReDFqVmEzYnVGT1RHZ1F5R3N4aFV3eHJOS0U3CmNoTnM4UGhVZWZCdUM1L1lhdGhteWxhSFgrMlZOR0xoQWdNQkFBR2pnZ0V6TUlJQkx6QU9CZ05WSFE4QkFmOEUKQkFNQ0JhQXdIUVlEVlIwbEJCWXdGQVlJS3dZQkJRVUhBd0VHQ0NzR0FRVUZCd01DTUF3R0ExVWRFd0VCL3dRQwpNQUF3SHdZRFZSMGpCQmd3Rm9BVXNwb1A4L1BOamd3ZmtjRUNsMnd1NEhUQzF4SXdnYzRHQTFVZEVRU0J4akNCCnc0SWZhM0F0YTNWaVpTMXdiMnhwWTJsbGN5MXdiMnhwWTNrdGJXRnVZV2RsY29JbmEzQXRhM1ZpWlMxd2IyeHAKWTJsbGN5MXdiMnhwWTNrdGJXRnVZV2RsY2k1a1pXWmhkV3gwZ2l0cmNDMXJkV0psTFhCdmJHbGphV1Z6TFhCdgpiR2xqZVMxdFlXNWhaMlZ5TG1SbFptRjFiSFF1YzNaamdqbHJjQzFyZFdKbExYQnZiR2xqYVdWekxYQnZiR2xqCmVTMXRZVzVoWjJWeUxtUmxabUYxYkhRdWMzWmpMbU5zZFhOMFpYSXViRzlqWVd5Q0NXeHZZMkZzYUc5emRJY0UKZndBQUFUQU5CZ2txaGtpRzl3MEJBUXNGQUFPQ0FRRUFGbXB1KzBvVUd4T2xvS05wdzhuYWxiRVJsalZTQzZvTApyVXV1cmdRYXpHZUlNdzZ5VHFsOFY4bTlVWXBvUjRIZUh1d2IwMWpvdERiQWtwY1IwaGxSN1dDa2NtQVdyZTk5CjdYR2tFRTkxRDViWFAxZ0lIMENoZUo1Z3lUUVFqbkcwbTJTR1VlNU5nc1FlRThNalJja0JXRE9XV0pvdUNJNVQKL0czS1kxM2pwVHNtT1ZqZEpUaWNrdUJOczlSTFlBQzhYSmZnSGF4eG5lTFRRMWt3TFVycWlhOFJtRm8va3RvMQoyQUN5dm1qWWN5ZE85L0FTSGNva1JsaHVCL3lkem9pczdQN1NINUNvOU1vMTNoVFl5V0tDWitjNlJIQVpxUjBWCjlMNlo1c3poRjVOS0ZseTQyejVuSWI3N0dSNVlBQTB5QkJsTUJkVStBY21hZzZuNWpENHM5Zz09Ci0tLS0tRU5EIENFUlRJRklDQVRFLS0tLS0K"
-  tls.key: "LS0tLS1CRUdJTiBSU0EgUFJJVkFURSBLRVktLS0tLQpNSUlFcEFJQkFBS0NBUUVBcVF0cnhSSWprYTZkb1Vya0tYRjJ4K2NEWGZCZGY0dFVsSWVuK1Vwb2kyYkRPMHRCCjRGUENjVjFlWExtY2p6RlUvWllzOGFyd3RJWHE0dkIwTEFPS2FpQmpibEdYL0IraHNRR2daR2lUWVIzQnNRRzcKcEk5R0o1cmZKY0psZU95bis1U3BWY1k3K3AwOHlpNWJ1QU50L3VGYjRUVDRKY3I4ODQ1YzhhVzNXeldwQ1kzQQpxL2VyZmJXQmhWZHBoa2NtZVNWREhlZ3lPelhKVEtTMnhrV1Z4QlF2c1BHSXQ3OVAvejMzeGJnVndzbkZCWXRUCmp4V09GOUZnMFNVWWIvRWJFU0daSGt5eFZDVlJkeFJ5WnhWN0tlU2dZRU1kWTFXdDI3aFRreG9FTWhyTVlWTU0KYXpTaE8zSVRiUEQ0Vkhud2JndWYyR3JZWnNwV2gxL3RsVFJpNFFJREFRQUJBb0lCQUhOS1Y4a0RVd0R6djR3Vwp3TC9ISThTNHVLSWo0aEN2M1JLajVwcnQ5WmxGajlkcnYxVVlxeCtZRjFoVU93T3FHSllQQ3o0VFlMRXVPSUZvCmowTEpjMmhvQ0loZjI3RlhmWFowYm9pc2pmK0pST1hORWNYczlXTGpqRmQ3V3F0N2RDSHdSUUU3L3dJd3BSb2IKUGZDbFhpcWNWb2FsRXF6cjRWTFhBR3JLbzkvdkFDbzZrZ21LK090UW9ELzIzcVpjQlNGM1pTSzAyay9zVjdjVApSalVnMUxDVUY1NzNIY1YzV2x1Q1p4U2NiQjgzWStYdkJ2TVgwaVJVMW5waFRQcE9RZ0tnTHdGUFg0ejJRNU1hCnRZUTF0dFg3QWR2Z3pUSXA3RUVYZ2dYazZBWnVnUzd3UTRzU2ZOVUllNVBGK3FnNEF5MmpmUGtpL1FDa2xQV2EKS1UxM0tpVUNnWUVBeW15aDdqZ3R1eStMUllMVHZPNHNheWtWbEx6eTQ5cmdIcmZ6NExFNWZTNk05eTZZTDhpegpGMUw5NUZ0bTllUVBKZnBOeEZOY2tvMG15cUtSLzF6dEZEOFFDMGJ6U1BJc2NSbEFPR1A4d0c3c2hCK0V2NkVKCkJoZ29SOTdETVpVVmFhTHdOSjBpWkNUOTdpcHh0VmZFRm16Vk9JcUFKb3I5bHdsRkFWV2hDZjhDZ1lFQTFja2cKanhkUU5Hb2hCdlA2TmpmRHlyZUFkUDZyWWIzN0FMZ21SVFd1bTV2VVpDekp3QXdxVjlORVg3QU9wY0JYaDZtZgpScmtaRGJWUm5oSzNzRWdFS0JTZ1RxY3lSZG1YVXNnaEFWdEpYMWJRYUpoRVMrMzdaejBEd3pXeko4dThvYy9YClFDK1dNYWlRb1dJMzRqaCswMTVkb0pxZEF6TzJmbEFvcWQ2SjB4OENnWUVBeWlzQTkxam9ZNkV5YWJRbUlQV0gKSzJlWEJEeEtJY1BDUHl2ZHlMVjRBMHh3d1phcHJGKzRiajBYRWZFdnZibU9YNUhFQmFaME9ISDlJamlIdEJGdApQdUZVOXM1ZndLVU9PYzdNVXdXWnM5K1ZITWdWM3dYSWEydkpIeTZlcUhDTE9Edmh4OHFBUktDbGRDNno3amUvCndkM2tmbG5sYjVrMWVKbHJiOC9EektVQ2dZQlpWTjdIREEzV3FSWTk2b3IrUnRVSWl4OGhSQjFuRFZTcUcwamEKbUxEcWt2WHdHZ3IvdGRXbnR6OFY0T0p0L201VTROc09XV0FQcTFsOGZRUEdwSUVnSW1aT0YyMVpaSy9ueG5xTQpMNUg4UmJGMlUxSU9qRllGOEtmMjFTU1VsM3l0L01STUxOWk16OHdIczV2NGFuVU1hNTBoOUJseDhoVHF1U0lVCndVbkVMd0tCZ1FDOC9wdjJtZ21seDc1Z0k2TGltc3J4VmNnU0NnOVU5Rm9DUHVQc29sMVNKRUhHT2E5cm0yTloKNnNVOG9PV2tLZlhUVGFER3ZpTjQvNC9Sc2I5dk5kR0MzVFQwRnE3eWZQZVVmRC9YRkRNTlNUUWhqVFhPYmF6SQpCZW5zamJJK1pPK0kyL1lndjZPdDdYZ3BKbDhPNkpBc1c2ajlORmNnZCthT2N2b2RkTjgrNEE9PQotLS0tLUVORCBSU0EgUFJJVkFURSBLRVktLS0tLQo="
-  ca.crt: "LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0tCk1JSURQekNDQWllZ0F3SUJBZ0lRYW9QRWpSWWpiNEU5WmJkK1Z0VEk5akFOQmdrcWhraUc5dzBCQVFzRkFEQXEKTVNnd0pnWURWUVFERXg5cmRXSmxMWEJ2YkdsamFXVnpMWEJ2YkdsamVTMXRZVzVoWjJWeUxXTmhNQjRYRFRJMgpNRFl3TVRFME1EUTFNVm9YRFRJM01EWXdNVEUwTURRMU1Wb3dLakVvTUNZR0ExVUVBeE1mYTNWaVpTMXdiMnhwClkybGxjeTF3YjJ4cFkza3RiV0Z1WVdkbGNpMWpZVENDQVNJd0RRWUpLb1pJaHZjTkFRRUJCUUFEZ2dFUEFEQ0MKQVFvQ2dnRUJBS0YxaWhKSGlidUlocmRrS25aL3BiZ3NpL3BIU3ZxQldDSXp2SW4rQ2MxK2EzRGVDM1pYVEc2Vwo0SW01RnlBNUsyc1ZlT3dCd2Fyeks3L29JSit4cXV6Sm5RSWlzKzNVcFZkcWsrSW56cUUyc2dLRFhXbUdzSnZvCkdmNEFmWnp3VE8rMGVzU3FkK3hEcXAwWUVweWtlR241WkR3V2xYK2VmRXFDSkUxd3M1SDZ1UkJkcG1Ha3pHaFYKVlNPYVM5OURoNmE2VjlSeFJtdHQ3d1J4UXRlNGk1REIvNWZlQzBSa3d1U21hVGNiblhSZTlPMUdzN2FNa2VxRgpHWG1YbENrRXJUSXlGVWpNTGwyTW5nOUc4N3B3U2RmS1VCZzRodWZpcGozQmFPdGRjU0VUc0tUUFc1WStpZUJCCnhqQUR2UDQ4dGxqWXgrNHpTa0hTYUNZZTdUS2VIdjBDQXdFQUFhTmhNRjh3RGdZRFZSMFBBUUgvQkFRREFnS2sKTUIwR0ExVWRKUVFXTUJRR0NDc0dBUVVGQndNQkJnZ3JCZ0VGQlFjREFqQVBCZ05WSFJNQkFmOEVCVEFEQVFILwpNQjBHQTFVZERnUVdCQlN5bWcvejg4Mk9EQitSd1FLWGJDN2dkTUxYRWpBTkJna3Foa2lHOXcwQkFRc0ZBQU9DCkFRRUFoOG84SHlVNTdISzJTN3Q1dkJLWlR5bmhJb0JOeFVPOWZXZ2N2bXc3S21kUEMxNGsrUUFha2d6US9zaFkKUUJETmY5a3c5RWJZc3drSGI0ZnpOT0R2MTFvNkd2dHUwbTRERXNMTm1zWGVYa1hVV1Z2ODVqbVpNQVFwcVlEUApLZFRtM3JxdCtMWDVaMHgvWGt5Ry8zUXBZQnlMZGpmNTcwa3Exd1RHN0V5MERLYkNKMERJRkNZUVh6ZGV6NURRCjBQdUU3RkN5em5JaHVCUHczbE16d2ZLWEpWcjM5SHE4OVNGQm03cHFyODZCbkZLRHZyS1VFTUhiL0JLbUcyT1IKUUFJY3dvdjUzaXR0eVlaemlNZXRwSWN6RWtUcUd0ZUhwc21MQWJDaUx2eGRURFFRZ2xiRWlucHFLZzlKK3l4ZQo1WUlUOW9KMUx0RXQrNEdRN3F3NkVNZEpUUT09Ci0tLS0tRU5EIENFUlRJRklDQVRFLS0tLS0K"
+  tls.crt: "LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0tCk1JSUVCRENDQXV5Z0F3SUJBZ0lRSjFvSDYydkNRbUdsM0phV3JmYTVFekFOQmdrcWhraUc5dzBCQVFzRkFEQXEKTVNnd0pnWURWUVFERXg5cmRXSmxMWEJ2YkdsamFXVnpMWEJ2YkdsamVTMXRZVzVoWjJWeUxXTmhNQjRYRFRJMgpNRFl3TVRJd016UXlPVm9YRFRJM01EWXdNVEl3TXpReU9Wb3dKekVsTUNNR0ExVUVBeE1jYTNWaVpTMXdiMnhwClkybGxjeTF3YjJ4cFkza3RiV0Z1WVdkbGNqQ0NBU0l3RFFZSktvWklodmNOQVFFQkJRQURnZ0VQQURDQ0FRb0MKZ2dFQkFKcDhjYjFWZ3FRK3RBMi9kbGwyNjJ1VVFMV2ZKR1REWEprbkdEV1NQZHBMU0RmbmJDM1F4Rkh6UXpOUwpTZVUrcEkwYVArbjdNWXJhMGtxQnJFai9ERVhCWGtoY25NSjRUT1BpSzVSMEtySjhmcmRaVnBuS3ROZU85UHZBClZmY0R3cEg3eitkRXNPazk1ZDc2dGl2MFl3Z3g0cWdlZnRBTVB6L2NGQkJoWTNxdWNGUGY1WW5XYTBVQXlqdm0KR2FYNkZUM0dEYzZnZlR2TGNJN3Jnby9DNFRtN3d1aGUwZ05FTjVVRGRIdllIZVd1WUxROGZOT3RiWE1iRzU0cQp5QVRabURQWTFnMm04ckJTbHNMaXB0eFhBNjVicUVBVHB5dWRtTGd0c1lyN0xTRW5CNmx6aVJwWlpudENTS1BSCkFqNVltWnZlQkE4S2ZDZmtaaHZMSEE5MXowY0NBd0VBQWFPQ0FTY3dnZ0VqTUE0R0ExVWREd0VCL3dRRUF3SUYKb0RBZEJnTlZIU1VFRmpBVUJnZ3JCZ0VGQlFjREFRWUlLd1lCQlFVSEF3SXdEQVlEVlIwVEFRSC9CQUl3QURBZgpCZ05WSFNNRUdEQVdnQlJwM0FhUGhPOUhuNzdVaUJjbVI2T3RUV1hUZERDQndnWURWUjBSQklHNk1JRzNnaHhyCmRXSmxMWEJ2YkdsamFXVnpMWEJ2YkdsamVTMXRZVzVoWjJWeWdpUnJkV0psTFhCdmJHbGphV1Z6TFhCdmJHbGoKZVMxdFlXNWhaMlZ5TG1SbFptRjFiSFNDS0d0MVltVXRjRzlzYVdOcFpYTXRjRzlzYVdONUxXMWhibUZuWlhJdQpaR1ZtWVhWc2RDNXpkbU9DTm10MVltVXRjRzlzYVdOcFpYTXRjRzlzYVdONUxXMWhibUZuWlhJdVpHVm1ZWFZzCmRDNXpkbU11WTJ4MWMzUmxjaTVzYjJOaGJJSUpiRzlqWVd4b2IzTjBod1IvQUFBQk1BMEdDU3FHU0liM0RRRUIKQ3dVQUE0SUJBUUFpSHdFUjB3U2lNdzh4dGR0Z1JyM05lYmlheWJLSkxCcm9xMjdUV25GRTdJOFlheXlrbFRMbQpYVVlXWHpaUmo1dkl5bytJbzczUFJTVllneTNDOW1kR0tWbm1wa0kzZ3hidE01SnFadUlHTlpWaUpTZGdNeW0xClA2b3hyRk1zMEtWKy85ZkJ2RFBXMzRmRG9yYzZEUlJUN25qNXdjQjlwYTR5cS9ySGhtcGVtWkV2ei9tVVdxajAKK3IrNFFaVHF6Wk5hdFNhZUQ0ejFFN3pRY3FKbFpKL1FaV1BoL0gyUGFXSEkwZmdwM1BLWGUzckszUWhQenN2YQpzR0pMd1Jha1JLd1pFZFdLaUdFd1YxOVZnYUI3VDVWSTkzOTRLQ3hQRzljbkdydTJyRk5Hdk1DZFp0NFU3eDZSCmZvU0tGQWRkNU9ISG5HSnhXRVNIcFFkTlE1NGR0VC9tCi0tLS0tRU5EIENFUlRJRklDQVRFLS0tLS0K"
+  tls.key: "LS0tLS1CRUdJTiBSU0EgUFJJVkFURSBLRVktLS0tLQpNSUlFcFFJQkFBS0NBUUVBbW54eHZWV0NwRDYwRGI5MldYYnJhNVJBdFo4a1pNTmNtU2NZTlpJOTJrdElOK2RzCkxkREVVZk5ETTFKSjVUNmtqUm8vNmZzeGl0clNTb0dzU1A4TVJjRmVTRnljd25oTTQrSXJsSFFxc254K3QxbFcKbWNxMDE0NzArOEJWOXdQQ2tmdlA1MFN3NlQzbDN2cTJLL1JqQ0RIaXFCNSswQXcvUDl3VUVHRmplcTV3VTkvbAppZFpyUlFES08rWVpwZm9WUGNZTnpxQjlPOHR3anV1Q2o4TGhPYnZDNkY3U0EwUTNsUU4wZTlnZDVhNWd0RHg4CjA2MXRjeHNibmlySUJObVlNOWpXRGFieXNGS1d3dUttM0ZjRHJsdW9RQk9uSzUyWXVDMnhpdnN0SVNjSHFYT0oKR2xsbWUwSklvOUVDUGxpWm05NEVEd3A4SitSbUc4c2NEM1hQUndJREFRQUJBb0lCQUFjNnlhdmRvNWFDSkxUNwovOUxpQU5SeEJMSTdOMTNMMHJxTUhOTHMvQjRLSmVBUDRYMG5admlhMU10REQ1ZzkzVCtKT2ZKK1FleEluMHpEClVzZTd2OXhIMTF5MWtOUjlBc1FyWW5TNUZ3SnhWeERIaW9qNTlvcWI4eFVSQkRUaUpTbmx5ZTM5eGZXMFl0eVQKaVJEM2grYnJScnN0YWl2Y1Z0MXJORGtzQlpiSkhuVW9US2lpbWhpY1Arck53VUxIcFJnTjFHaEJkazBGbkh3dwpCVEJQZVZqZkE2TGpQUjlsM2lUTXF5R203OGRGclpxZFdJbzB0cG1ST0MzaUJ2a0VaNVpoQm9qM0FHYkhuZU1wCnNlL3dIYng2cjgwWEtEeGV1YlplSFUyWXBMVFMxNWpBQkRUS09QY0laM3M4TWxpdmlPT2xqTjFUdlUwaXBWSXgKRnI5SXhORUNnWUVBeEU3cXJQeFJWYnR1YzlhaUFNckdDOEpsZ2RNUm1iWDVaVUQzaVdEKzc1WkhtbkpCb1drUgpveFBtRDFyWlJFNTJCdjdhMmJVKzNjQzhYdlZYOXBKU0MvOUMzZ0ZjdFNYTHZNWTV2UFBmMHExc2pwcHl0UjF6CllEaklpY3h1YklpTzZZSTdncDZaQ28vbnBLVGQvRnZMS3V5RE9ndTZrUTgydHhnK0UrNmhxMDhDZ1lFQXlYWCsKMWRCd3ZYV3RWbVFmOHhWam9BQ0VVUXZZZGszOHA1TmJjWm5pY0ZEZlg2U0loOFpGSmdUWVNjN0Z6ZmlYTG9mUAp1RnVDbkRHWG1jTEQ0NlBVQ2RnM3ZVbFlPNDVkWlNZRERWUmpCT0haSDllaFZleUhzd1hMaEJYYzhPTEFwaE0zCjhneXptOVhmSlpIM0pkME5yVEF4dzFoNzJxblY5ZzlKTFNoTVBva0NnWUVBcTEyZ3F1V1FNdUR0cUoyQ3ltSTQKeEdjc3FVb1JvVGNqd09vWHJJdEp3T2hWRlZRTVN0VW5tazV5bEpEZi9TcnBDVzVNcWFQNGZ5Z1N5R293SVlUVgpycmRrTGR6T2l5dTFVTk5SNzhxTVpxTVJrdUxzbzRKVUIzbEtSbEI1VExGZzRDTFp4RXFpbW4vSTNRYzI2V2RRClVlWXBIL0RCS29RM1pWbjZSdmdYbFMwQ2dZRUF1T25mUUc0VUxUSm9LZFc1SmF2S1I4QnhzdHBHazBBOTJhcDkKMHFYR25BVC9JcENvNk1icURWMkJFUzREald6Umgxb05KVkNKYjhodE9DcjNGbWozWlJuYS81amtyYldjc0F6VgozRlJLbHQ2ZUpvWUxoZ3lXK1pFbUhsVGErUmVJY0dkUGdKSjhBVnVyZUphajNWTXJESDRpRHdXV21Ud3VNYTRTCklxck1ZTkVDZ1lFQW95UHpERTVXTmtNTkpuY1pTUEdVQW5SMGMyUGY4K0laUE91OHA1cFk4aFcvdERiQ3pxSnAKVytQaU9heGxaQTR5RDJIcVhYdzdPTktGc3lOd0dwU3F0MzZqL3AwWXVBN2dYUXRGVlVxdmEvWWMxSUNWV09LMgpQL1JJeVU2UU9vWGpLbmZTaXF4RG1UakpvbjFkZWlTOVJ5TFRBMUoxbkpHS2FBLzdwVWlKSWtzPQotLS0tLUVORCBSU0EgUFJJVkFURSBLRVktLS0tLQo="
+  ca.crt: "LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0tCk1JSURQekNDQWllZ0F3SUJBZ0lRQ283anJCL3VEMHFUNTcxZzhOVGRrekFOQmdrcWhraUc5dzBCQVFzRkFEQXEKTVNnd0pnWURWUVFERXg5cmRXSmxMWEJ2YkdsamFXVnpMWEJ2YkdsamVTMXRZVzVoWjJWeUxXTmhNQjRYRFRJMgpNRFl3TVRJd016UXlPRm9YRFRJM01EWXdNVEl3TXpReU9Gb3dLakVvTUNZR0ExVUVBeE1mYTNWaVpTMXdiMnhwClkybGxjeTF3YjJ4cFkza3RiV0Z1WVdkbGNpMWpZVENDQVNJd0RRWUpLb1pJaHZjTkFRRUJCUUFEZ2dFUEFEQ0MKQVFvQ2dnRUJBTjlEN043UHIxT1pUNjNJKy9DbUcrKzRCb3ptVEdDMmVIKzJVejFaQ3RkV3hxUEdaQk1aM1piTwpORmpJZmhjSCtrdDZGdVdpZHpRLzdKNHNScU45YkI4czZnWWx6Wm4rTW43MjFwaUtUV3BoTkpucnUydWZELy81CjZTOWI2ZVlMSmdmZTBxNnlueGhNWFNqT3MwTEU0UzJqQXhzVEx3ZXhnR2NlbUVKZkcrYkR2YVdQVXFiaU16YWQKamZGRlBibUlXSkU5R2Q1ZnBMTHNMS0RzVkFGOWNNVnAyQm5rS0ZpbHI2U1kxd0hFbE1xWGQyYU0xRGJFZk00NQplMFF1bkJnM1ZPMkVTZlZBVndwMlpEdFpyRWd4TlZJUXZqMU5BeU5OT1d2SWNjOXhpWGVvWDI5TjhyRHhsdVhKCnU3TUgrQlo1SW1kdy9uREdRVDR1YXBCa2FabGU5R3NDQXdFQUFhTmhNRjh3RGdZRFZSMFBBUUgvQkFRREFnS2sKTUIwR0ExVWRKUVFXTUJRR0NDc0dBUVVGQndNQkJnZ3JCZ0VGQlFjREFqQVBCZ05WSFJNQkFmOEVCVEFEQVFILwpNQjBHQTFVZERnUVdCQlJwM0FhUGhPOUhuNzdVaUJjbVI2T3RUV1hUZERBTkJna3Foa2lHOXcwQkFRc0ZBQU9DCkFRRUF6bTlrbWZvQy9kL0thQlFEbEpOTXlDd3lTZEtLMThzVHZ3ZmZoUWxIVGdreENLdS9UYldMcXVvajd1ZnYKWE5HNEZOK3dJeWQwUEFDYlVJTW8xS0g2d3BicndRTWprYXJmMVg2dkZtYUxWVmVsbmFSRGh0KzlCL1VSdEdRMQpwNG1TVTZBTHFtcnNnR2t5bm1TQVEvYm9nMk0ySE81d0R6K0l4TWNHVFBiMUlHZnFRMWJUM3VYTE5KK1p4RUEyCjJ1OGZGSUhNMFlTYjViY1VKSnZmYXMyL1dwZ3ZBa2JZR2dObE1HdU5sVG93Zk1EeGhtaWRyY29DNEVqMWdsbmkKYW9Ca2tjSkhNbGwyb2c1cWpQa2FvZTJnMm0xS244VlR2bGNXbG53ODJXVWxYMXdQOXhsRUZYRHhrWE5WOVg4NQpNYWdzSzBXTGlaSENOV0RsTmJoYlJFQlZGUT09Ci0tLS0tRU5EIENFUlRJRklDQVRFLS0tLS0K"
 ---
 # Source: kube-policies/templates/configmap.yaml
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: kp-kube-policies-config
+  name: kube-policies-config
   namespace: default
   labels:
     helm.sh/chart: kube-policies-1.2.0
     app.kubernetes.io/name: kube-policies
-    app.kubernetes.io/instance: kp
+    app.kubernetes.io/instance: kube-policies
     app.kubernetes.io/version: "1.0.0"
     app.kubernetes.io/managed-by: Helm
 data:
@@ -127,17 +501,29 @@ data:
         # binding; "" denies mutations to such users.
         default_role: ""
         role_bindings: []
+      # Rate-limiting / DoS-protection (NET-WU-14/15, RES-WU-17). Flows through
+      # the shared config.yaml ConfigMap so the webhook and policy-manager pick
+      # the same limits up via security.ratelimit.*. Limits are PER-REPLICA;
+      # defaults are tuned to protect the fail-closed webhook from a flood
+      # without throttling legitimate apiserver admission traffic.
+      ratelimit:
+        enabled: true
+        requests_per_second: 50
+        burst: 100
+        max_concurrent: 100
+        max_body_bytes: 3145728
+        max_stream_connections: 100
 ---
 # Source: kube-policies/templates/policy-manager-pvc.yaml
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
-  name: kp-kube-policies-data
+  name: kube-policies-data
   namespace: default
   labels:
     helm.sh/chart: kube-policies-1.2.0
     app.kubernetes.io/name: kube-policies
-    app.kubernetes.io/instance: kp
+    app.kubernetes.io/instance: kube-policies
     app.kubernetes.io/version: "1.0.0"
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/component: policy-manager
@@ -158,11 +544,11 @@ spec:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: kp-kube-policies-admission-webhook
+  name: kube-policies-admission-webhook
   labels:
     helm.sh/chart: kube-policies-1.2.0
     app.kubernetes.io/name: kube-policies
-    app.kubernetes.io/instance: kp
+    app.kubernetes.io/instance: kube-policies
     app.kubernetes.io/version: "1.0.0"
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/component: admission-webhook
@@ -194,11 +580,11 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: kp-kube-policies-policy-manager
+  name: kube-policies-policy-manager
   labels:
     helm.sh/chart: kube-policies-1.2.0
     app.kubernetes.io/name: kube-policies
-    app.kubernetes.io/instance: kp
+    app.kubernetes.io/instance: kube-policies
     app.kubernetes.io/version: "1.0.0"
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/component: policy-manager
@@ -232,42 +618,42 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  name: kp-kube-policies-admission-webhook
+  name: kube-policies-admission-webhook
   labels:
     helm.sh/chart: kube-policies-1.2.0
     app.kubernetes.io/name: kube-policies
-    app.kubernetes.io/instance: kp
+    app.kubernetes.io/instance: kube-policies
     app.kubernetes.io/version: "1.0.0"
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/component: admission-webhook
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
-  name: kp-kube-policies-admission-webhook
+  name: kube-policies-admission-webhook
 subjects:
 - kind: ServiceAccount
-  name: kp-kube-policies-admission-webhook
+  name: kube-policies-admission-webhook
   namespace: default
 ---
 # Source: kube-policies/templates/rbac.yaml
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  name: kp-kube-policies-policy-manager
+  name: kube-policies-policy-manager
   labels:
     helm.sh/chart: kube-policies-1.2.0
     app.kubernetes.io/name: kube-policies
-    app.kubernetes.io/instance: kp
+    app.kubernetes.io/instance: kube-policies
     app.kubernetes.io/version: "1.0.0"
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/component: policy-manager
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
-  name: kp-kube-policies-policy-manager
+  name: kube-policies-policy-manager
 subjects:
 - kind: ServiceAccount
-  name: kp-kube-policies-policy-manager
+  name: kube-policies-policy-manager
   namespace: default
 ---
 # Source: kube-policies/templates/dashboard-rbac.yaml
@@ -276,12 +662,12 @@ subjects:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
-  name: kp-kube-policies-dashboard
+  name: kube-policies-dashboard
   namespace: default
   labels:
     helm.sh/chart: kube-policies-1.2.0
     app.kubernetes.io/name: kube-policies
-    app.kubernetes.io/instance: kp
+    app.kubernetes.io/instance: kube-policies
     app.kubernetes.io/version: "1.0.0"
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/component: dashboard
@@ -289,8 +675,8 @@ rules:
 - apiGroups: [""]
   resources: ["services"]
   resourceNames:
-    - kp-kube-policies-policy-manager
-    - kp-kube-policies-admission-webhook
+    - kube-policies-policy-manager
+    - kube-policies-admission-webhook
   verbs: ["get"]
 ---
 # Source: kube-policies/templates/rbac.yaml
@@ -301,12 +687,12 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
-  name: kp-kube-policies-admission-webhook-leader-election
+  name: kube-policies-admission-webhook-leader-election
   namespace: default
   labels:
     helm.sh/chart: kube-policies-1.2.0
     app.kubernetes.io/name: kube-policies
-    app.kubernetes.io/instance: kp
+    app.kubernetes.io/instance: kube-policies
     app.kubernetes.io/version: "1.0.0"
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/component: admission-webhook
@@ -329,12 +715,12 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
-  name: kp-kube-policies-policy-manager-leader-election
+  name: kube-policies-policy-manager-leader-election
   namespace: default
   labels:
     helm.sh/chart: kube-policies-1.2.0
     app.kubernetes.io/name: kube-policies
-    app.kubernetes.io/instance: kp
+    app.kubernetes.io/instance: kube-policies
     app.kubernetes.io/version: "1.0.0"
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/component: policy-manager
@@ -357,66 +743,66 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
-  name: kp-kube-policies-dashboard
+  name: kube-policies-dashboard
   namespace: default
   labels:
     helm.sh/chart: kube-policies-1.2.0
     app.kubernetes.io/name: kube-policies
-    app.kubernetes.io/instance: kp
+    app.kubernetes.io/instance: kube-policies
     app.kubernetes.io/version: "1.0.0"
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/component: dashboard
 subjects:
 - kind: ServiceAccount
-  name: kp-kube-policies-dashboard
+  name: kube-policies-dashboard
   namespace: default
 roleRef:
   kind: Role
-  name: kp-kube-policies-dashboard
+  name: kube-policies-dashboard
   apiGroup: rbac.authorization.k8s.io
 ---
 # Source: kube-policies/templates/rbac.yaml
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
-  name: kp-kube-policies-admission-webhook-leader-election
+  name: kube-policies-admission-webhook-leader-election
   namespace: default
   labels:
     helm.sh/chart: kube-policies-1.2.0
     app.kubernetes.io/name: kube-policies
-    app.kubernetes.io/instance: kp
+    app.kubernetes.io/instance: kube-policies
     app.kubernetes.io/version: "1.0.0"
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/component: admission-webhook
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
-  name: kp-kube-policies-admission-webhook-leader-election
+  name: kube-policies-admission-webhook-leader-election
 subjects:
 - kind: ServiceAccount
-  name: kp-kube-policies-admission-webhook
+  name: kube-policies-admission-webhook
   namespace: default
 ---
 # Source: kube-policies/templates/rbac.yaml
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
-  name: kp-kube-policies-policy-manager-leader-election
+  name: kube-policies-policy-manager-leader-election
   namespace: default
   labels:
     helm.sh/chart: kube-policies-1.2.0
     app.kubernetes.io/name: kube-policies
-    app.kubernetes.io/instance: kp
+    app.kubernetes.io/instance: kube-policies
     app.kubernetes.io/version: "1.0.0"
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/component: policy-manager
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
-  name: kp-kube-policies-policy-manager-leader-election
+  name: kube-policies-policy-manager-leader-election
 subjects:
 - kind: ServiceAccount
-  name: kp-kube-policies-policy-manager
+  name: kube-policies-policy-manager
   namespace: default
 # NOTE: no monitoring ClusterRole here. The previous {{ monitoring.enabled }}
 # block granted cluster-wide read on nodes/pods/services/endpoints bound to the app
@@ -428,12 +814,12 @@ subjects:
 apiVersion: v1
 kind: Service
 metadata:
-  name: kp-kube-policies-dashboard
+  name: kube-policies-dashboard
   namespace: default
   labels:
     helm.sh/chart: kube-policies-1.2.0
     app.kubernetes.io/name: kube-policies
-    app.kubernetes.io/instance: kp
+    app.kubernetes.io/instance: kube-policies
     app.kubernetes.io/version: "1.0.0"
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/component: dashboard
@@ -450,19 +836,19 @@ spec:
       protocol: TCP
   selector:
     app.kubernetes.io/name: kube-policies
-    app.kubernetes.io/instance: kp
+    app.kubernetes.io/instance: kube-policies
     app.kubernetes.io/component: dashboard
 ---
 # Source: kube-policies/templates/services.yaml
 apiVersion: v1
 kind: Service
 metadata:
-  name: kp-kube-policies-admission-webhook
+  name: kube-policies-admission-webhook
   namespace: default
   labels:
     helm.sh/chart: kube-policies-1.2.0
     app.kubernetes.io/name: kube-policies
-    app.kubernetes.io/instance: kp
+    app.kubernetes.io/instance: kube-policies
     app.kubernetes.io/version: "1.0.0"
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/component: admission-webhook
@@ -483,19 +869,19 @@ spec:
       name: metrics
   selector:
     app.kubernetes.io/name: kube-policies
-    app.kubernetes.io/instance: kp
+    app.kubernetes.io/instance: kube-policies
     app.kubernetes.io/component: admission-webhook
 ---
 # Source: kube-policies/templates/services.yaml
 apiVersion: v1
 kind: Service
 metadata:
-  name: kp-kube-policies-policy-manager
+  name: kube-policies-policy-manager
   namespace: default
   labels:
     helm.sh/chart: kube-policies-1.2.0
     app.kubernetes.io/name: kube-policies
-    app.kubernetes.io/instance: kp
+    app.kubernetes.io/instance: kube-policies
     app.kubernetes.io/version: "1.0.0"
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/component: policy-manager
@@ -515,19 +901,19 @@ spec:
       name: metrics
   selector:
     app.kubernetes.io/name: kube-policies
-    app.kubernetes.io/instance: kp
+    app.kubernetes.io/instance: kube-policies
     app.kubernetes.io/component: policy-manager
 ---
 # Source: kube-policies/templates/admission-webhook-deployment.yaml
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: kp-kube-policies-admission-webhook
+  name: kube-policies-admission-webhook
   namespace: default
   labels:
     helm.sh/chart: kube-policies-1.2.0
     app.kubernetes.io/name: kube-policies
-    app.kubernetes.io/instance: kp
+    app.kubernetes.io/instance: kube-policies
     app.kubernetes.io/version: "1.0.0"
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/component: admission-webhook
@@ -536,12 +922,12 @@ spec:
   selector:
     matchLabels:
       app.kubernetes.io/name: kube-policies
-      app.kubernetes.io/instance: kp
+      app.kubernetes.io/instance: kube-policies
       app.kubernetes.io/component: admission-webhook
   template:
     metadata:
       annotations:
-        checksum/config: 632676ff410b15b5f67ee7b3e868e3161d23b9b52b464bb7b29e5dd28599ab1c
+        checksum/config: a5068f0a1f921f5bd9d0a0df4a42fb1925a2ef35103ad2edf7ffde2b6a190540
         # Lookup-based annotation per A-NEW-1 fix. Queries the live API for the cert
         # Secret bytes; deterministic per render. On first install the Secret doesn't
         # exist yet, so default to the literal "initial-install". On subsequent
@@ -557,18 +943,21 @@ spec:
         prometheus.io/scrape: "true"
       labels:
         app.kubernetes.io/name: kube-policies
-        app.kubernetes.io/instance: kp
+        app.kubernetes.io/instance: kube-policies
         app.kubernetes.io/component: admission-webhook
     spec:
-      serviceAccountName: kp-kube-policies-admission-webhook
+      serviceAccountName: kube-policies-admission-webhook
       # IAM-WU-10 (CIS 5.1.5/5.1.6): the SA defaults automount off; the webhook opts
       # the token back in here because the controller-runtime client + leader election
       # authenticate to the apiserver with it.
       automountServiceAccountToken: true
       securityContext:
         fsGroup: 65534
+        runAsGroup: 65534
         runAsNonRoot: true
         runAsUser: 65534
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: admission-webhook
           securityContext:
@@ -577,8 +966,11 @@ spec:
               drop:
               - ALL
             readOnlyRootFilesystem: true
+            runAsGroup: 65534
             runAsNonRoot: true
             runAsUser: 65534
+            seccompProfile:
+              type: RuntimeDefault
           image: "docker.io/kube-policies/admission-webhook:1.0.0"
           imagePullPolicy: IfNotPresent
           # Probes target the metrics server (port 9090) where /healthz and
@@ -623,7 +1015,7 @@ spec:
                 fieldRef:
                   fieldPath: metadata.namespace
             - name: POLICY_MANAGER_INTERNAL_URL
-              value: "https://kp-kube-policies-policy-manager:8080/api/v1/decisions/internal"
+              value: "https://kube-policies-policy-manager:8080/api/v1/decisions/internal"
           livenessProbe:
             httpGet:
               path: /healthz
@@ -678,14 +1070,14 @@ spec:
       volumes:
         - name: certs
           secret:
-            secretName: kp-kube-policies-admission-webhook-certs
+            secretName: kube-policies-admission-webhook-certs
         # Project ONLY ca.crt (public) from the policy-manager serving Secret —
         # never its tls.key. optional: the cert-manager-managed Secret may not
         # exist yet on first install; the webhook degrades to system roots until
         # it appears (CRY-WU-06).
         - name: policy-manager-ca
           secret:
-            secretName: kp-kube-policies-policy-manager-certs
+            secretName: kube-policies-policy-manager-certs
             items:
               - key: ca.crt
                 path: ca.crt
@@ -705,7 +1097,7 @@ spec:
                   expirationSeconds: 3600
         - name: config
           configMap:
-            name: kp-kube-policies-config
+            name: kube-policies-config
         - name: tmp
           emptyDir: {}
         # Writable mount for the audit file backend. readOnlyRootFilesystem
@@ -720,12 +1112,12 @@ spec:
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: kp-kube-policies-dashboard
+  name: kube-policies-dashboard
   namespace: default
   labels:
     helm.sh/chart: kube-policies-1.2.0
     app.kubernetes.io/name: kube-policies
-    app.kubernetes.io/instance: kp
+    app.kubernetes.io/instance: kube-policies
     app.kubernetes.io/version: "1.0.0"
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/component: dashboard
@@ -734,23 +1126,26 @@ spec:
   selector:
     matchLabels:
       app.kubernetes.io/name: kube-policies
-      app.kubernetes.io/instance: kp
+      app.kubernetes.io/instance: kube-policies
       app.kubernetes.io/component: dashboard
   template:
     metadata:
       labels:
         app.kubernetes.io/name: kube-policies
-        app.kubernetes.io/instance: kp
+        app.kubernetes.io/instance: kube-policies
         app.kubernetes.io/component: dashboard
     spec:
-      serviceAccountName: kp-kube-policies-dashboard
+      serviceAccountName: kube-policies-dashboard
       # IAM-WU-10 (CIS 5.1.5/5.1.6): the dashboard never calls the apiserver at runtime,
       # so it does not mount an SA token. Defaults false; an operator can override.
       automountServiceAccountToken: false
       securityContext:
+        fsGroup: 65532
+        runAsGroup: 65532
         runAsNonRoot: true
         runAsUser: 65532
-        fsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: dashboard
           image: "ghcr.io/Jibbscript/dashboard:1.0.0"
@@ -770,15 +1165,32 @@ spec:
             # metrics URLs follow metrics.tls.enabled (CRY-WU-08): http by
             # default, https + bearer token when metrics TLS is on.
             - name: POLICY_MANAGER_URL
-              value: "https://kp-kube-policies-policy-manager:8080"
+              value: "https://kube-policies-policy-manager:8080"
             - name: POLICY_MANAGER_METRICS_URL
-              value: "http://kp-kube-policies-policy-manager:9091/metrics"
+              value: "http://kube-policies-policy-manager:9091/metrics"
             - name: ADMISSION_WEBHOOK_METRICS_URL
-              value: "http://kp-kube-policies-admission-webhook:9090/metrics"
+              value: "http://kube-policies-admission-webhook:9090/metrics"
             - name: ALLOW_WRITES
               value: "false"
+            # Rate-limiting / DoS-protection (NET-WU-15, RES-WU-17). The dashboard
+            # is env-configured (no shared config.yaml), so these mirror the
+            # shared security.ratelimit.* keys the webhook/PM read.
+            - name: DASHBOARD_RATELIMIT_ENABLED
+              value: "true"
+            - name: DASHBOARD_RATELIMIT_REQUESTS_PER_SECOND
+              value: "50"
+            - name: DASHBOARD_RATELIMIT_BURST
+              value: "100"
+            - name: DASHBOARD_RATELIMIT_MAX_CONCURRENT
+              value: "100"
+            - name: DASHBOARD_RATELIMIT_MAX_BODY_BYTES
+              # `| int64` before `| quote` so large byte counts are not rendered
+              # in scientific notation (Helm parses YAML numbers as float64).
+              value: "3145728"
+            - name: DASHBOARD_MAX_SSE_CONNECTIONS
+              value: "100"
             - name: POLICY_MANAGER_STREAM_URL
-              value: "https://kp-kube-policies-policy-manager:8080/api/v1/decisions/stream"
+              value: "https://kube-policies-policy-manager:8080/api/v1/decisions/stream"
             # Present an audience-bound, short-TTL projected ServiceAccount token
             # on the upstream SSE subscription so the policy-manager's TokenReview
             # gate on /api/v1/decisions/stream + /recent accepts it (IAM-WU-11,
@@ -838,8 +1250,11 @@ spec:
               drop:
               - ALL
             readOnlyRootFilesystem: true
+            runAsGroup: 65532
             runAsNonRoot: true
             runAsUser: 65532
+            seccompProfile:
+              type: RuntimeDefault
           resources:
             limits:
               cpu: 200m
@@ -884,7 +1299,7 @@ spec:
         # optional so a not-yet-issued cert-manager Secret does not block startup.
         - name: policy-manager-ca
           secret:
-            secretName: kp-kube-policies-policy-manager-certs
+            secretName: kube-policies-policy-manager-certs
             items:
               - key: ca.crt
                 path: ca.crt
@@ -894,12 +1309,12 @@ spec:
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: kp-kube-policies-policy-manager
+  name: kube-policies-policy-manager
   namespace: default
   labels:
     helm.sh/chart: kube-policies-1.2.0
     app.kubernetes.io/name: kube-policies
-    app.kubernetes.io/instance: kp
+    app.kubernetes.io/instance: kube-policies
     app.kubernetes.io/version: "1.0.0"
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/component: policy-manager
@@ -908,30 +1323,33 @@ spec:
   selector:
     matchLabels:
       app.kubernetes.io/name: kube-policies
-      app.kubernetes.io/instance: kp
+      app.kubernetes.io/instance: kube-policies
       app.kubernetes.io/component: policy-manager
   template:
     metadata:
       annotations:
-        checksum/config: 632676ff410b15b5f67ee7b3e868e3161d23b9b52b464bb7b29e5dd28599ab1c
-        checksum/pm-certs: 5e8a0c48117948be4a892a8787c0779599cd016dea3803504ad91ac0bc9b2cf2
+        checksum/config: a5068f0a1f921f5bd9d0a0df4a42fb1925a2ef35103ad2edf7ffde2b6a190540
+        checksum/pm-certs: a986d2bc719e8c994a55a249442ed3b4f20b8a4a54c2cea5eed6760f3e020438
         prometheus.io/path: /metrics
         prometheus.io/port: "9091"
         prometheus.io/scrape: "true"
       labels:
         app.kubernetes.io/name: kube-policies
-        app.kubernetes.io/instance: kp
+        app.kubernetes.io/instance: kube-policies
         app.kubernetes.io/component: policy-manager
     spec:
-      serviceAccountName: kp-kube-policies-policy-manager
+      serviceAccountName: kube-policies-policy-manager
       # IAM-WU-10 (CIS 5.1.5/5.1.6): the SA defaults automount off; the policy-manager
       # opts the token back in here because the controller-runtime client + leader
       # election authenticate to the apiserver with it.
       automountServiceAccountToken: true
       securityContext:
         fsGroup: 65534
+        runAsGroup: 65534
         runAsNonRoot: true
         runAsUser: 65534
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: policy-manager
           securityContext:
@@ -940,8 +1358,11 @@ spec:
               drop:
               - ALL
             readOnlyRootFilesystem: true
+            runAsGroup: 65534
             runAsNonRoot: true
             runAsUser: 65534
+            seccompProfile:
+              type: RuntimeDefault
           image: "docker.io/kube-policies/policy-manager:1.0.0"
           imagePullPolicy: IfNotPresent
           # cmd/policy-manager/main.go reads only flags (not env vars). The
@@ -980,14 +1401,14 @@ spec:
             - name: POLICY_MANAGER_INTERNAL_AUDIENCE
               value: "policy-manager"
             - name: POLICY_MANAGER_INTERNAL_SUBJECT
-              value: "system:serviceaccount:default:kp-kube-policies-admission-webhook"
+              value: "system:serviceaccount:default:kube-policies-admission-webhook"
             # Read side of the decisions plane (GET /stream + /recent): pin the
             # TokenReview to the DASHBOARD SA so the dashboard's upstream
             # subscriber authenticates to the read feeds without weakening the
             # webhook-SA pin on /internal (IAM-WU-11, Inc7 Stream A). Same audience
             # as POLICY_MANAGER_INTERNAL_AUDIENCE above.
             - name: POLICY_MANAGER_DECISIONS_READER_SUBJECT
-              value: "system:serviceaccount:default:kp-kube-policies-dashboard"
+              value: "system:serviceaccount:default:kube-policies-dashboard"
           # Probes target the plain-HTTP metrics port (9091) where /healthz and
           # /readyz are mounted (NewMetricsRouter). The :8080 API now serves
           # TLS (CRY-WU-05), so an HTTP probe against it would fail the
@@ -1033,25 +1454,25 @@ spec:
       volumes:
         - name: certs
           secret:
-            secretName: kp-kube-policies-policy-manager-certs
+            secretName: kube-policies-policy-manager-certs
         - name: config
           configMap:
-            name: kp-kube-policies-config
+            name: kube-policies-config
         - name: tmp
           emptyDir: {}
         - name: data
           persistentVolumeClaim:
-            claimName: kp-kube-policies-data
+            claimName: kube-policies-data
 ---
 # Source: kube-policies/templates/admission-webhook-tls.yaml
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingWebhookConfiguration
 metadata:
-  name: kp-kube-policies-validating-webhook
+  name: kube-policies-validating-webhook
   labels:
     helm.sh/chart: kube-policies-1.2.0
     app.kubernetes.io/name: kube-policies
-    app.kubernetes.io/instance: kp
+    app.kubernetes.io/instance: kube-policies
     app.kubernetes.io/version: "1.0.0"
     app.kubernetes.io/managed-by: Helm
 webhooks:
@@ -1062,11 +1483,11 @@ webhooks:
     timeoutSeconds: 10
     clientConfig:
       service:
-        name: kp-kube-policies-admission-webhook
+        name: kube-policies-admission-webhook
         namespace: default
         path: /validate
         port: 8443
-      caBundle: "LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0tCk1JSURNakNDQWhxZ0F3SUJBZ0lSQUplYms5TU5Za0FzcGZaNXRDcUU5VkF3RFFZSktvWklodmNOQVFFTEJRQXcKSXpFaE1COEdBMVVFQXhNWWEzVmlaUzF3YjJ4cFkybGxjeTEzWldKb2IyOXJMV05oTUI0WERUSTJNRFl3TVRFMApNRFExTVZvWERUSTNNRFl3TVRFME1EUTFNVm93SXpFaE1COEdBMVVFQXhNWWEzVmlaUzF3YjJ4cFkybGxjeTEzClpXSm9iMjlyTFdOaE1JSUJJakFOQmdrcWhraUc5dzBCQVFFRkFBT0NBUThBTUlJQkNnS0NBUUVBbjM0aWVHOXcKakFCUkdsR2RnRVJhVDRiWXphaS9uRW85Qm9maFhwYm1xTVhhSXZlemJuUTdxcG5SSnREeGlua2QyeTVmRDRyWAo5RWVsZFI4T3JjWVdGTVNEb2FGellMbkVaUVBpSHhjcExlbkVLMzFJOHczdTZjdVZLZVpFSzdNN1hKTlB5UHA1CmpOdFliVGt0WTRzT1FIdmlRSUR6REJHUFFHWjJLb2pCd0szQzAvNEFYOFIzV2FGZnlHdENSQ2JEeXBTcEYrTVIKck50YmRWeXFVeklxY0pnRFJDSGF4TWlBUWIyS3U4SnczWmYybGdVODlYZStCbnBKcXhZaGd5cG90ZCtTMTZzQwpXWFh6T0toM21TaHRaMlhjSnZGcWZKdjM1TEVGRXpYdkRXUGFCNERncTFDMm9VMTVVa2IvSUNCZ3lGRkJ3K0pkCmZDcEFUV2VXWGJFZmlRSURBUUFCbzJFd1h6QU9CZ05WSFE4QkFmOEVCQU1DQXFRd0hRWURWUjBsQkJZd0ZBWUkKS3dZQkJRVUhBd0VHQ0NzR0FRVUZCd01DTUE4R0ExVWRFd0VCL3dRRk1BTUJBZjh3SFFZRFZSME9CQllFRkovdwp4WEoxMHF3VmpuVjFhUWZRWVN3bE03YWdNQTBHQ1NxR1NJYjNEUUVCQ3dVQUE0SUJBUUFua0pWNnd6a1g2WmtrCjc2REtZaEd4MnFTVmpuQ05JbG9Fdk4waHM1dEdhK3NZMDZZUWdKenFzUGt0MzlyOUE4blI1aVI1aSs3aWVOVEEKSXN3cVI5bTc3cXV3VTRLcnluZXZXRVFTOUxqTlFmZzI1cjlDazF3bjN0c3oydnVGNUkwMnNrbFFjZ1UzTEVPagpZeXN1UDlITnhsOUliYUF3UElQbDNhczljem85WWhNazB0ajVicUNGVDVPaEdZc0l6anJ5dVh3OGtWOWhzR3BSCkJyQ1V3blFFUU93bVdJUjJMcFI5VEZRT3ZNbFM0Skxsdk1BSHU3aUxKYUVzaXNDVG5ENXo2dWRiRnBiMSt4Y1AKUnJhUitoaXVuMjVva0pWcGJkSWdoWnNZYW1uaWl3cGpjbFJxMWlYWThoeDVBNDBNQ05lVFdaS1B1MjVSOUFiTgptaC9rWHVLdgotLS0tLUVORCBDRVJUSUZJQ0FURS0tLS0tCg=="
+      caBundle: "LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0tCk1JSURNVENDQWhtZ0F3SUJBZ0lRSEZFYmFjL1BMd3NTUk1vNExrbTBtakFOQmdrcWhraUc5dzBCQVFzRkFEQWoKTVNFd0h3WURWUVFERXhocmRXSmxMWEJ2YkdsamFXVnpMWGRsWW1odmIyc3RZMkV3SGhjTk1qWXdOakF4TWpBegpOREk1V2hjTk1qY3dOakF4TWpBek5ESTVXakFqTVNFd0h3WURWUVFERXhocmRXSmxMWEJ2YkdsamFXVnpMWGRsClltaHZiMnN0WTJFd2dnRWlNQTBHQ1NxR1NJYjNEUUVCQVFVQUE0SUJEd0F3Z2dFS0FvSUJBUUN3cC9zZTJKTFUKeGhmRHN3R2dSSFJLV21SV3BaT1F1ODhycGZ5bXZaVG9yWUUwc3VCdG04aW5qNUlUVUpuNnRubzA3SnZPNTVVUwpaNFo3S3dkSVhKd29uWktIOFpkemxOQlpPVEVRNWRCaTZ1WTJVQW5wRS9DYzJ1RWdFTzd3WFBFMUYramkrK3RpCmEyRjlKdWR0VkhHT0U0ZDFZSzJ5Ly90VldEbE1rcWlXN0IxTVBzbnZiWmpTeC8vRzduYjB3QVd1ZzFpaUNMblIKQlZCdWsyNVV2ME9KVkVjTnhWRVFsejllTUtCL09sY2dOR29ldGdDd2hSaGNxL1NDejJ2Nmx0QU5WT05iQXdHbAozV1M4ekd3QlNOSFlvcEp5bzFwWS9TUElJbEVwdlNjZ0NHZHJsaXFpMHVKeHIrdU5ObUg5NU5IUXFkRndXQXRCCjUxYUtVbU9ZK2NJUkFnTUJBQUdqWVRCZk1BNEdBMVVkRHdFQi93UUVBd0lDcERBZEJnTlZIU1VFRmpBVUJnZ3IKQmdFRkJRY0RBUVlJS3dZQkJRVUhBd0l3RHdZRFZSMFRBUUgvQkFVd0F3RUIvekFkQmdOVkhRNEVGZ1FVTmxjMQpzcXBzN0sxNWNxNjcrejduY0t3cENYc3dEUVlKS29aSWh2Y05BUUVMQlFBRGdnRUJBQmhwQmlnaU5zNlhCS0wzClBXMTBUVGkwcHdRZGY1b2xBbGpuK2RObytRR012bStkMUUzdkt5MkVUc3JQZmN4UmZEbmJLVTZROFMrMnVKc0IKUzJiZWpiNEtidkNydmxmQmpPNnUrR2pyVDFCaDdkcEZsVWVKbVY1WlZERTZIbnI1NzJDYVU5ZGdvalRGcFJSbQpySGdUMktxb2ZPNGFVWU5OWmF5LzlZZDFuM3pCRkJmK0EvZHJ4T0gvNWJmUjV1b3Q2KzNraTdZRy9UZEtGVGR6CnV4RTFBSWtDL0VvSk9Qb1RSY2FUT1A2Qml2a05WaDJOb1hsTmhzVFFyTDFEWkVLbGxDMEwrVWpzRWhReEwrY1IKWkt2YnZQNm8xbS9VaG50bXhoQVNKZzZFVGd5UVFkb2Foa2NKcGhoVWVoaXlkYkZPMDFnaUFuMDVaVlg2RFJKSgp3RHprSzU4PQotLS0tLUVORCBDRVJUSUZJQ0FURS0tLS0tCg=="
     rules:
       - apiGroups: [""]
         apiVersions: ["v1"]

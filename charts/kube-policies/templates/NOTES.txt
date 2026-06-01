@@ -134,3 +134,27 @@ but block nothing there.
       --set 'networkPolicy.webhook.ingressFrom.ipBlocks={10.0.0.0/24}'
 {{- end }}
 {{- end }}
+
+Workload hardening (CFG-WU-01/02/03/05/10/21 — restricted Pod Security Standard):
+  All three workloads render seccompProfile=RuntimeDefault, runAsGroup (non-root),
+  drop ALL capabilities, readOnlyRootFilesystem, runAsNonRoot, and CPU/memory
+  requests+limits by default. Two operator knobs:
+
+  • Higher-assurance seccomp (CFG-WU-21): override the RuntimeDefault profile with
+    a Localhost profile, e.g. for the webhook:
+      --set 'admissionWebhook.podSecurityContext.seccompProfile.type=Localhost' \
+      --set 'admissionWebhook.podSecurityContext.seccompProfile.localhostProfile=profiles/kube-policies.json'
+
+  • Immutable image pinning (CFG-WU-10, recommended for production): set image.digest
+    to pin by sha256 (the mutable tag is then dropped):
+      --set 'admissionWebhook.image.digest=sha256:<digest>'
+
+  Restricted-namespace install (CFG-WU-05): the chart can create + PSA-label its
+  namespace as restricted (namespace.create, default false). Choose EITHER
+  `--set namespace.create=true` (chart creates+labels it) OR
+  `helm install --create-namespace` (you label it) — not both.
+{{- if .Values.dashboard.enabled }}
+
+  The dashboard securityContext is values-driven (dashboard.podSecurityContext /
+  dashboard.securityContext) and overridable like the other components.
+{{- end }}

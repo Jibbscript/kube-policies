@@ -211,18 +211,32 @@ path (e.g., "kube-policies/admission-webhook") and set image.registry to the
 mirror host, OR override the full repository (including the host) and leave
 image.registry empty.
 
-Inputs: a dict with keys {registry, repository, tag, defaultTag}.
+Inputs: a dict with keys {registry, repository, tag, defaultTag, digest}.
+
+CFG-WU-10 (CM-2/CM-5/SI-7): when a non-empty "digest" is supplied the image is
+pinned by immutable digest (repository@sha256:...) and the mutable tag is
+intentionally dropped — this is the recommended production posture. A digest may
+be given bare (hash only) or sha256:-prefixed; both render as @sha256:<hash>.
+With no digest, the behavior is unchanged (repository:tag).
 */}}
 {{- define "kube-policies.image" -}}
 {{- $registry := .registry | default "" -}}
 {{- $repository := required "kube-policies.image: repository is required" .repository -}}
-{{- $tag := .tag | default .defaultTag -}}
+{{- $digest := .digest | default "" -}}
 {{- $first := (split "/" $repository)._0 -}}
 {{- $qualified := or (contains "." $first) (or (contains ":" $first) (eq $first "localhost")) -}}
-{{- if or (eq $registry "") $qualified -}}
-{{ $repository }}:{{ $tag }}
+{{- $name := $repository -}}
+{{- if not (or (eq $registry "") $qualified) -}}
+{{- $name = printf "%s/%s" $registry $repository -}}
+{{- end -}}
+{{- if $digest -}}
+{{- $ref := $digest -}}
+{{- if not (contains ":" $digest) -}}
+{{- $ref = printf "sha256:%s" $digest -}}
+{{- end -}}
+{{ $name }}@{{ $ref }}
 {{- else -}}
-{{ $registry }}/{{ $repository }}:{{ $tag }}
+{{ $name }}:{{ .tag | default .defaultTag }}
 {{- end -}}
 {{- end -}}
 

@@ -42,12 +42,10 @@ spec:
       # so it does not mount an SA token. Defaults false; an operator can override.
       automountServiceAccountToken: {{ dig "automountServiceAccountToken" false .Values.dashboard }}
       securityContext:
-        runAsNonRoot: true
-        runAsUser: 65532
-        fsGroup: 65532
+        {{- toYaml .Values.dashboard.podSecurityContext | nindent 8 }}
       containers:
         - name: dashboard
-          image: "{{ include "kube-policies.image" (dict "registry" (.Values.global.imageRegistry | default .Values.dashboard.image.registry) "repository" .Values.dashboard.image.repository "tag" .Values.dashboard.image.tag "defaultTag" .Chart.AppVersion) }}"
+          image: "{{ include "kube-policies.image" (dict "registry" (.Values.global.imageRegistry | default .Values.dashboard.image.registry) "repository" .Values.dashboard.image.repository "tag" .Values.dashboard.image.tag "digest" .Values.dashboard.image.digest "defaultTag" .Chart.AppVersion) }}"
           imagePullPolicy: {{ .Values.dashboard.image.pullPolicy | default "IfNotPresent" }}
           ports:
             - name: http
@@ -237,13 +235,7 @@ spec:
             timeoutSeconds: 3
             failureThreshold: 3
           securityContext:
-            allowPrivilegeEscalation: false
-            capabilities:
-              drop:
-              - ALL
-            readOnlyRootFilesystem: true
-            runAsNonRoot: true
-            runAsUser: 65532
+            {{- toYaml .Values.dashboard.securityContext | nindent 12 }}
           resources:
             {{- toYaml .Values.dashboard.resources | nindent 12 }}
           volumeMounts:

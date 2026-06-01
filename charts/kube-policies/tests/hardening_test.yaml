@@ -1,0 +1,220 @@
+suite: workload hardening (restricted PSS)
+# CFG-WU-22 — helm-unittest assertions that every chart pod + container carries
+# the restricted Pod Security Standard control set (CIS 5.2.x / PSS-Restricted):
+# runAsNonRoot, a non-root runAsUser, a non-root runAsGroup,
+# allowPrivilegeEscalation=false, capabilities.drop=[ALL],
+# readOnlyRootFilesystem=true, seccompProfile RuntimeDefault, and resources
+# limits+requests.
+#
+# All three workloads (admission-webhook, policy-manager, dashboard) are now
+# hardened natively in the chart (CFG-WU-01/02/03): seccompProfile RuntimeDefault
+# and non-root runAsGroup are rendered from values with NO `set:` injection. This
+# is the same control set the manifest-hardening-gate (CFG-WU-12, restricted.pss)
+# enforces. Deleting any asserted attribute from a template (or its values
+# default) makes the corresponding test below FAIL.
+#
+# NOTE: no top-level `templates:` restriction — the deployment templates
+# `include` a sibling configmap template, so the whole chart must render for
+# those includes to resolve. Each test selects its document with a per-test
+# `template:` key instead.
+
+tests:
+  # -------------------------------------------------------------------------
+  # admission-webhook
+  # -------------------------------------------------------------------------
+  - it: admission-webhook pod runs as non-root with a non-root GID and RuntimeDefault seccomp
+    template: templates/admission-webhook-deployment.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.securityContext.runAsNonRoot
+          value: true
+      - notEqual:
+          path: spec.template.spec.securityContext.runAsUser
+          value: 0
+      - notEqual:
+          path: spec.template.spec.securityContext.runAsGroup
+          value: 0
+      - equal:
+          path: spec.template.spec.securityContext.seccompProfile.type
+          value: RuntimeDefault
+      - isNotNull:
+          path: spec.template.spec.securityContext.fsGroup
+      - notEqual:
+          path: spec.template.spec.securityContext.fsGroup
+          value: 0
+
+  - it: admission-webhook container carries the full restricted control set
+    template: templates/admission-webhook-deployment.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].securityContext.runAsNonRoot
+          value: true
+      - notEqual:
+          path: spec.template.spec.containers[0].securityContext.runAsUser
+          value: 0
+      - notEqual:
+          path: spec.template.spec.containers[0].securityContext.runAsGroup
+          value: 0
+      - equal:
+          path: spec.template.spec.containers[0].securityContext.allowPrivilegeEscalation
+          value: false
+      - equal:
+          path: spec.template.spec.containers[0].securityContext.readOnlyRootFilesystem
+          value: true
+      - equal:
+          path: spec.template.spec.containers[0].securityContext.seccompProfile.type
+          value: RuntimeDefault
+      - contains:
+          path: spec.template.spec.containers[0].securityContext.capabilities.drop
+          content: ALL
+      - isNotNull:
+          path: spec.template.spec.containers[0].resources.limits.cpu
+      - isNotNull:
+          path: spec.template.spec.containers[0].resources.limits.memory
+      - isNotNull:
+          path: spec.template.spec.containers[0].resources.requests.cpu
+      - isNotNull:
+          path: spec.template.spec.containers[0].resources.requests.memory
+
+  # -------------------------------------------------------------------------
+  # policy-manager
+  # -------------------------------------------------------------------------
+  - it: policy-manager pod runs as non-root with a non-root GID and RuntimeDefault seccomp
+    template: templates/policy-manager-deployment.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.securityContext.runAsNonRoot
+          value: true
+      - notEqual:
+          path: spec.template.spec.securityContext.runAsUser
+          value: 0
+      - notEqual:
+          path: spec.template.spec.securityContext.runAsGroup
+          value: 0
+      - equal:
+          path: spec.template.spec.securityContext.seccompProfile.type
+          value: RuntimeDefault
+      - isNotNull:
+          path: spec.template.spec.securityContext.fsGroup
+      - notEqual:
+          path: spec.template.spec.securityContext.fsGroup
+          value: 0
+
+  - it: policy-manager container carries the full restricted control set
+    template: templates/policy-manager-deployment.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].securityContext.runAsNonRoot
+          value: true
+      - notEqual:
+          path: spec.template.spec.containers[0].securityContext.runAsUser
+          value: 0
+      - notEqual:
+          path: spec.template.spec.containers[0].securityContext.runAsGroup
+          value: 0
+      - equal:
+          path: spec.template.spec.containers[0].securityContext.allowPrivilegeEscalation
+          value: false
+      - equal:
+          path: spec.template.spec.containers[0].securityContext.readOnlyRootFilesystem
+          value: true
+      - equal:
+          path: spec.template.spec.containers[0].securityContext.seccompProfile.type
+          value: RuntimeDefault
+      - contains:
+          path: spec.template.spec.containers[0].securityContext.capabilities.drop
+          content: ALL
+      - isNotNull:
+          path: spec.template.spec.containers[0].resources.limits.cpu
+      - isNotNull:
+          path: spec.template.spec.containers[0].resources.limits.memory
+      - isNotNull:
+          path: spec.template.spec.containers[0].resources.requests.cpu
+      - isNotNull:
+          path: spec.template.spec.containers[0].resources.requests.memory
+
+  # -------------------------------------------------------------------------
+  # dashboard — now values-driven and hardened (CFG-WU-02/03); asserts the full
+  # restricted control set including seccompProfile + non-root runAsGroup (65532).
+  # -------------------------------------------------------------------------
+  - it: dashboard pod runs as non-root with a non-root GID and RuntimeDefault seccomp
+    template: templates/dashboard-deployment.yaml
+    set:
+      dashboard.enabled: true
+    asserts:
+      - equal:
+          path: spec.template.spec.securityContext.runAsNonRoot
+          value: true
+      - notEqual:
+          path: spec.template.spec.securityContext.runAsUser
+          value: 0
+      - notEqual:
+          path: spec.template.spec.securityContext.runAsGroup
+          value: 0
+      - equal:
+          path: spec.template.spec.securityContext.seccompProfile.type
+          value: RuntimeDefault
+      - isNotNull:
+          path: spec.template.spec.securityContext.fsGroup
+      - notEqual:
+          path: spec.template.spec.securityContext.fsGroup
+          value: 0
+
+  - it: dashboard container carries the full restricted control set
+    template: templates/dashboard-deployment.yaml
+    set:
+      dashboard.enabled: true
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].securityContext.runAsNonRoot
+          value: true
+      - notEqual:
+          path: spec.template.spec.containers[0].securityContext.runAsUser
+          value: 0
+      - notEqual:
+          path: spec.template.spec.containers[0].securityContext.runAsGroup
+          value: 0
+      - equal:
+          path: spec.template.spec.containers[0].securityContext.allowPrivilegeEscalation
+          value: false
+      - equal:
+          path: spec.template.spec.containers[0].securityContext.readOnlyRootFilesystem
+          value: true
+      - equal:
+          path: spec.template.spec.containers[0].securityContext.seccompProfile.type
+          value: RuntimeDefault
+      - contains:
+          path: spec.template.spec.containers[0].securityContext.capabilities.drop
+          content: ALL
+      - isNotNull:
+          path: spec.template.spec.containers[0].resources.limits.cpu
+      - isNotNull:
+          path: spec.template.spec.containers[0].resources.limits.memory
+      - isNotNull:
+          path: spec.template.spec.containers[0].resources.requests.cpu
+      - isNotNull:
+          path: spec.template.spec.containers[0].resources.requests.memory
+
+  # -------------------------------------------------------------------------
+  # CFG-WU-10 — digest pinning: image.digest renders repository@sha256:<digest>
+  # and DROPS the mutable tag. Locks the kube-policies.image helper's digest
+  # branch (sha256: prefixing, tag-drop) against regression.
+  # -------------------------------------------------------------------------
+  - it: admission-webhook image pins by digest when image.digest is set (tag dropped)
+    template: templates/admission-webhook-deployment.yaml
+    set:
+      admissionWebhook.image.digest: sha256:deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].image
+          pattern: "@sha256:deadbeef.*$"
+      - notMatchRegex:
+          path: spec.template.spec.containers[0].image
+          pattern: ":1\\.0\\.0"
+
+  - it: admission-webhook image uses the tag when no digest is set
+    template: templates/admission-webhook-deployment.yaml
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].image
+          pattern: ":1\\.0\\.0$"

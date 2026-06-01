@@ -77,6 +77,27 @@ audit tamper-evidence on `emptyDir` storage (AU-9), and the untrustworthy CI Go-
 > P8, so it stays Open (Low). The Critical severity labels above are preserved for the original
 > finding; consult the CSV for the current residual-risk text.
 
+> **P5 progress (2026-06-01).** CM-7 hardening (POAM-024) is **Resolved (Closed P5)**:
+> `seccompProfile=RuntimeDefault` and a non-root `runAsGroup` are now shipped as
+> `values.yaml` **defaults** on all three chart workloads (admission-webhook + policy-manager
+> `runAsGroup` 65534, dashboard 65532), the dashboard `securityContext` is now **values-driven**
+> (rendered via `toYaml`, no longer hardcoded), `automountServiceAccountToken=false` on every
+> component SA, and the install namespace ships
+> `pod-security.kubernetes.io/enforce=audit=warn=restricted`. The gating restricted-PSS conftest
+> (`restricted.pss`) now covers **all three** chart workloads **and** the bundled monitoring
+> workloads, and the `helm-unittest` suite asserts `seccompProfile`+`runAsGroup` on the dashboard
+> too (`manifest-hardening-gate` + `helm-unittest`, blocking). The only remaining caveat is an
+> **availability** concern, not a CM-7 hardening gap: the example monitoring manifests are
+> demo-grade (`emptyDir`, no persistence — AU durability is P7), and `namespace.create` defaults
+> `false` so the operator opts in to (or `--create-namespace` for) the PSA-restricted labels.
+> CM-2 baseline (POAM-023): the
+> `kube-policies.image` helper now accepts a digest-pinned reference and the
+> secure-configuration baseline, component/image inventory (with digest support), and the
+> Configuration Management Plan are authored; it stays **Open** because shipped `values.yaml`
+> still uses floating tags (digest-by-default is P6). Separately, the **Trivy** filesystem +
+> image scans are now **gating** (CRITICAL,HIGH fail the build), strengthening RA-5 / SI-2
+> (POAM-008) which remains Open pending an authenticated cadence + remediation SLA.
+
 ## Summary table
 
 | POA&M | Control | Severity | Risk | Phase | Scheduled | Weakness |
@@ -103,8 +124,8 @@ audit tamper-evidence on `emptyDir` storage (AU-9), and the untrustworthy CI Go-
 | POAM-020 | IA-5 | High | Moderate | P3 | 2026-09-15 | Single shared static inter-service token |
 | POAM-021 | SC-28 | High | Moderate | P2 | 2026-08-15 | No encryption of secrets at rest |
 | POAM-022 | SC-12 | Moderate | Moderate | P2 | 2026-08-15 | No PKI/key-management lifecycle |
-| POAM-023 | CM-2 | High | Moderate | P5 | 2026-11-01 | No digest-pinned images / config baseline |
-| POAM-024 | CM-7 | High | Moderate | P5 | 2026-11-01 | Chart less hardened than base manifest |
+| POAM-023 | CM-2 | High | Moderate | P5 | 2026-11-01 | No digest-pinned images / config baseline (P5: digest-deploy option + baseline/inventory/CM-plan authored; images still tag-pinned by default — Open) |
+| POAM-024 | CM-7 | High | Moderate | P5 | 2026-11-01 | Chart less hardened than base manifest (**Resolved — Closed P5, 2026-06-01**: seccomp+non-root runAsGroup are values.yaml defaults on all 3 workloads incl dashboard, dashboard SC values-driven, SA-token automount off, namespace PSA-restricted; gating restricted.pss + helm-unittest cover control-plane + dashboard + monitoring) |
 | POAM-025 | RA-5 | High | Moderate | P11 | 2026-12-31 | Vulnerability scanning does not gate the build |
 | POAM-026 | SI-2 | Moderate | Moderate | P11 | 2026-12-31 | No flaw-remediation program / SLAs |
 | POAM-027 | SC-5 | Moderate | Low | P4 | 2026-10-15 | No DoS / resource-availability protection (P4: app-layer rate-limit/body/concurrency/SSE caps on by default; ResourceQuota/LimitRange ship off; HPA in P8 — Open) |

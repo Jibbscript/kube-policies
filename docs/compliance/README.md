@@ -26,7 +26,9 @@ This index is reviewed at least **annually** (next review **2027-05-29**) and on
 | [system-facts.md](system-facts.md) | Authoritative system facts: component names, asset IDs (`AST-*`), ports, trust zones, and interconnections. Source of truth for all other artifacts. |
 | [categorization/FIPS-199.md](categorization/FIPS-199.md) | FIPS-199 / FIPS-200 security categorization (target: Moderate) and information-type analysis. |
 | [security-architecture.md](security-architecture.md) | Security architecture narrative (PL-8): components, trust zones, and defense-in-depth posture. |
-| [secure-configuration-baseline.md](secure-configuration-baseline.md) | Secure configuration baseline (CM-2 / CM-6): security-relevant defaults and hardening settings. |
+| [secure-configuration-baseline.md](secure-configuration-baseline.md) | Secure configuration baseline (CM-2 / CM-6): security-relevant defaults and hardening settings (seccomp, runAsGroup, PSS-restricted namespace, digest-deploy support, monitoring/demo caveats). |
+| [drift-detection.md](drift-detection.md) | Configuration drift detection (CM-2/CM-3/CM-6): the `scripts/ops/drift-detect.sh` mechanism and remediation runbook (renders the chart, diffs vs live cluster/baseline, exits non-zero on drift). |
+| [plans/configuration-management-plan.md](plans/configuration-management-plan.md) | Configuration Management Plan (CM-1/CM-3/CM-9): baseline, change control via the CI gates + PR checklist, Helm/CRD change process, CCB/approval roles, annual review. |
 | [crypto-module.md](crypto-module.md) | FIPS 140-3 cryptographic module (SC-13): selected module, CMVP reference, and the build/CI/runtime evidence that shipped binaries run validated crypto. |
 | [crypto-standards.md](crypto-standards.md) | Approved cryptographic key strengths and signature algorithms (SC-12/SC-13/SC-17): the algorithm/key-length matrix for TLS server/client keys and certificate signing, tied to the FIPS module. |
 | [secrets-at-rest.md](secrets-at-rest.md) | Secrets-at-rest inventory and protection (SC-28 / CIS 1.2.31-33): every stored secret mapped to its at-rest protection, plus the cluster EncryptionConfiguration + KMS guidance. |
@@ -78,9 +80,11 @@ This index is reviewed at least **annually** (next review **2027-05-29**) and on
 | [policies/AC-policy.md](policies/AC-policy.md) | Access control policy (AC-1/AC-2/AC-3/AC-5/AC-6/AC-17): deny-by-default RBAC, viewer/editor/admin model, ALLOW_WRITES kill-switch, least privilege. |
 | [policies/IA-policy.md](policies/IA-policy.md) | Identification & authentication policy (IA-1/IA-2/IA-5). |
 | [policies/SC-policy.md](policies/SC-policy.md) | System & communications protection policy (SC-1/SC-7/SC-8/SC-12/SC-13). |
+| [policies/CM-policy.md](policies/CM-policy.md) | Configuration management policy (CM-1/CM-2/CM-3/CM-6/CM-7/CM-8/CM-9): baseline, change control, least functionality, inventory. |
 | [procedures/AC-procedures.md](procedures/AC-procedures.md) | AC operational procedures (RBAC management, role-binding lifecycle, authenticator provisioning, periodic access review). |
 | [procedures/IA-procedures.md](procedures/IA-procedures.md) | IA operational procedures (token rotation, mTLS/CA management). |
 | [procedures/SC-procedures.md](procedures/SC-procedures.md) | SC operational procedures (TLS enforcement verification, certificate management). |
+| [procedures/CM-procedures.md](procedures/CM-procedures.md) | CM operational procedures (change procedure + CI gates, baseline render/verify, drift detection, inventory currency, least-functionality periodic review). |
 | [roles-raci.md](roles-raci.md) | ATO roles and RACI matrix (System Owner, ISSO, AO, Independent Assessor — all TBD, assign before assessment). |
 
 ## Repository-root security documents

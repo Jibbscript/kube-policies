@@ -38,9 +38,33 @@ spec:
       labels:
         app: alertmanager
     spec:
+      # restricted-PSS pod securityContext. prom/alertmanager runs as the
+      # "nobody" user (UID/GID 65534) in its upstream image, so we pin to that
+      # non-zero identity and let fsGroup own the writable emptyDir.
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        runAsGroup: 65534
+        fsGroup: 65534
+        seccompProfile:
+          type: RuntimeDefault
       containers:
       - name: alertmanager
         image: prom/alertmanager:v0.25.0
+        # restricted-PSS container securityContext. readOnlyRootFilesystem is
+        # safe because every path Alertmanager writes (storage + /tmp) is
+        # backed by an emptyDir mount below.
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          runAsNonRoot: true
+          runAsUser: 65534
+          runAsGroup: 65534
+          capabilities:
+            drop:
+              - ALL
+          seccompProfile:
+            type: RuntimeDefault
         args:
           - '--config.file=/etc/alertmanager/alertmanager.yml'
           - '--storage.path=/alertmanager'
@@ -58,6 +82,8 @@ spec:
           mountPath: /etc/alertmanager
         - name: storage-volume
           mountPath: /alertmanager
+        - name: tmp-volume
+          mountPath: /tmp
         resources:
           requests:
             cpu: 100m
@@ -81,7 +107,13 @@ spec:
       - name: config-volume
         configMap:
           name: alertmanager-config
+      # DEMO/Kind-grade storage only. Alertmanager's storage path and /tmp use
+      # ephemeral emptyDir volumes — silences/notification state are lost on
+      # pod restart. A production deployment must replace storage-volume with a
+      # PersistentVolumeClaim.
       - name: storage-volume
+        emptyDir: {}
+      - name: tmp-volume
         emptyDir: {}
 ---
 apiVersion: v1

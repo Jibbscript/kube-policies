@@ -44,7 +44,7 @@ spec:
         - name: policy-manager
           securityContext:
             {{- toYaml .Values.policyManager.securityContext | nindent 12 }}
-          image: "{{ include "kube-policies.image" (dict "registry" (.Values.global.imageRegistry | default .Values.policyManager.image.registry) "repository" .Values.policyManager.image.repository "tag" .Values.policyManager.image.tag "defaultTag" .Chart.AppVersion) }}"
+          image: "{{ include "kube-policies.image" (dict "registry" (.Values.global.imageRegistry | default .Values.policyManager.image.registry) "repository" .Values.policyManager.image.repository "tag" .Values.policyManager.image.tag "digest" .Values.policyManager.image.digest "defaultTag" .Chart.AppVersion) }}"
           imagePullPolicy: {{ .Values.policyManager.image.pullPolicy }}
           # cmd/policy-manager/main.go reads only flags (not env vars). The
           # HTTP_PORT/METRICS_PORT env vars previously set here were ignored

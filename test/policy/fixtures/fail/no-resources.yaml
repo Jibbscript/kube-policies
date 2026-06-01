@@ -1,0 +1,36 @@
+# NEGATIVE fixture for restricted.pss (CFG-WU-12), evaluated per-document.
+#
+# An in-scope control-plane Deployment (policy-manager component) whose
+# container is otherwise hardened but declares NO resources block. PSS-Restricted
+# does not mandate resources, but CFG-WU-12 adds a resource-bound / DoS hardening
+# requirement: every in-scope container MUST declare requests + limits for both
+# cpu and memory. With no resources block all four required keys are absent, so
+# the resources rule MUST deny (four denies).
+#
+# conftest test --namespace restricted.pss MUST exit non-zero.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: regression-no-resources
+  labels:
+    app.kubernetes.io/name: kube-policies
+    app.kubernetes.io/component: policy-manager
+spec:
+  template:
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        runAsGroup: 65534
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: manager
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsGroup: 65534
+            capabilities:
+              drop:
+                - ALL

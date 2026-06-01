@@ -55,9 +55,12 @@ Each CSV row is one Moderate control or enhancement. Columns:
 - **Customer** — the consuming agency/operator is responsible (used for `responsible_party`).
 - **Not-Applicable** — no in-boundary component exercises the control (e.g. `AC-18` wireless, `SC-15` collaborative computing, `SI-8` spam).
 
-> **Honesty note.** This is a proof-of-concept on the path to ATO. Of 300 in-scope
-> rows, only **3 are Implemented** (`RA-2` categorization, `PL-10` baseline
-> selection, `AC-1` access-control policy) and **47 are Partial**. The Partial rows
+> **Honesty note.** This is a proof-of-concept on the path to ATO; **there is no
+> ATO**. Of 300 in-scope rows, only **5 are plain Implemented** (`RA-2`
+> categorization, `PL-10` baseline selection, `AC-1` access-control policy, and the
+> P5 additions `CM-1` CM policy/procedures and `CM-9` Configuration Management Plan)
+> and **56 are Partial** (which includes the 5 SC-7 NetworkPolicy rows carried as
+> the caveated *Implemented (Helm) — requires enforcing CNI*). The Partial rows
 > are real, code-backed bright spots — they are not aspirational; several IAM rows
 > (`AC-2/3/5/17`, `IA-2`) are **Partial because their enforcement is config-gated**
 > on `security.authentication.enabled` (chart default off = management plane
@@ -74,8 +77,8 @@ Each CSV row is one Moderate control or enhancement. Columns:
 | AC — Access Control | 38 | 1 | 6 | 24 | 4 | 3 |
 | AT — Awareness and Training | 6 | 0 | 0 | 6 | 0 | 0 |
 | AU — Audit and Accountability | 19 | 0 | 4 | 15 | 0 | 0 |
-| CA — Assessment, Authorization, and Monitoring | 13 | 0 | 1 | 12 | 0 | 0 |
-| CM — Configuration Management | 22 | 0 | 4 | 18 | 0 | 0 |
+| CA — Assessment, Authorization, and Monitoring | 13 | 0 | 2 | 11 | 0 | 0 |
+| CM — Configuration Management | 22 | 2 | 6 | 14 | 0 | 0 |
 | CP — Contingency Planning | 22 | 0 | 2 | 10 | 10 | 0 |
 | IA — Identification and Authentication | 22 | 0 | 3 | 13 | 6 | 0 |
 | IR — Incident Response | 12 | 0 | 0 | 12 | 0 | 0 |
@@ -86,11 +89,18 @@ Each CSV row is one Moderate control or enhancement. Columns:
 | PS — Personnel Security | 9 | 0 | 0 | 8 | 1 | 0 |
 | RA — Risk Assessment | 8 | 1 | 3 | 4 | 0 | 0 |
 | SA — System and Services Acquisition | 19 | 0 | 8 | 11 | 0 | 0 |
-| SC — System and Communications Protection | 27 | 0 | 5 | 18 | 3 | 1 |
+| SC — System and Communications Protection | 27 | 0 | 11 | 12 | 3 | 1 |
 | SI — System and Information Integrity | 17 | 0 | 5 | 11 | 0 | 1 |
 | SR — Supply Chain Risk Management | 14 | 0 | 1 | 13 | 0 | 0 |
 | PM — Program Management | 10 | 0 | 2 | 8 | 0 | 0 |
-| **Total** | **300** | **3** | **47** | **192** | **53** | **5** |
+| **Total** | **300** | **5** | **56** | **181** | **53** | **5** |
+
+> The **Partial** column folds in the 5 SC-7/SC-7(3)(4)(5)(7) rows whose CSV
+> status is the caveated **"Implemented (Helm) — requires enforcing CNI"** (the
+> NetworkPolicy objects ship in the chart but are inert without an enforcing CNI
+> and have no live e2e proof yet, so they are not counted as plain *Implemented*).
+> The 5 plain *Implemented* rows are `AC-1`, `PL-10`, `RA-2`, and the P5
+> CM additions `CM-1` and `CM-9`.
 
 > The per-family **control selection** above is a working approximation of the
 > FedRAMP Moderate baseline and **must be reconciled against the official OSCAL
@@ -137,10 +147,36 @@ deliberately marked **Partial** (or **Implemented**) and cite the exact artifact
   decision with who/what/when via `internal/audit/logger.go`. Missing record fields
   (source IP, user-agent, request-URI), tamper protection, durability, and
   management-plane coverage are added in **P7** (**POAM-002**).
-- **CM-2 / CM-6 / CM-7 — Baseline & least functionality (Partial).** Config
-  validation pins TLS 1.3, validates `failure_mode` and defaults **fail-closed**,
-  and ships **distroless** images (`internal/config/config.go`,
-  `charts/kube-policies/values.yaml`); the full CIS-restricted baseline is **P5**.
+- **CM-7 — Least functionality (Implemented).** Config validation pins TLS 1.3,
+  validates `failure_mode` and defaults **fail-closed**, and the chart ships
+  **distroless** images (`internal/config/config.go`,
+  `charts/kube-policies/values.yaml`). **P5** formalized the secure-configuration
+  baseline ([secure-configuration-baseline.md](secure-configuration-baseline.md)),
+  added the restricted-PSS **CI gates** (`manifest-hardening-gate` + `helm-unittest`,
+  now blocking), shipped the namespace **PSA `enforce/audit/warn=restricted`** labels,
+  and justified each listening port in the PPS register
+  ([ssp/ports-protocols-services.md](ssp/ports-protocols-services.md)). **POAM-024
+  closed (P5, 2026-06-01):** `seccompProfile: RuntimeDefault` + a non-root `runAsGroup`
+  now ship as `values.yaml` **defaults** on all three workloads (admission-webhook/
+  policy-manager `runAsGroup` 65534, dashboard 65532), the dashboard `securityContext`
+  is **values-driven**, and the gating `restricted.pss` + `helm-unittest` cover the
+  control plane, the dashboard, **and** the bundled monitoring workloads.
+- **CM-2 / CM-6 — Baseline & configuration settings (Partial).** Images still use
+  floating tags by default (digest-deploy supported, digest-by-default is P6) —
+  **POAM-023** stays Open; and CM-6 carries a residual because the policy engine does
+  not yet traverse `spec.template.spec` (workload-controller settings unenforced —
+  **POAM-008**, P10).
+- **CM-1 / CM-9 — CM policy/procedures & Configuration Management Plan (Implemented).**
+  **P5** authored the CM policy and procedures
+  ([policies/CM-policy.md](policies/CM-policy.md),
+  [procedures/CM-procedures.md](procedures/CM-procedures.md)) and the Configuration
+  Management Plan ([plans/configuration-management-plan.md](plans/configuration-management-plan.md)),
+  binding change control (CM-3) to the `.github/workflows` CI gates + the CM-3
+  PR-template checklist. Named CCB members remain **TBD — assign before assessment**.
+- **CM-3 — Configuration change control (Partial).** Change control runs through PR
+  review + the CM-3 [pull-request checklist](../../.github/pull_request_template.md)
+  enforced by the now-gating CI jobs; formal CCB membership and signed-commit/branch
+  protection enforcement remain to be staffed/configured.
 - **CP-10 / SC-6 — Recovery & availability (Partial).** Leader election +
   multi-replica webhook (`cmd/admission-webhook/main.go`); PDBs, anti-affinity, HA
   policy-manager, and RTO/RPO land in **P8**.

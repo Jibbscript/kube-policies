@@ -1,12 +1,12 @@
 ---
 title: "Secure Configuration Baseline (CM-2 / CM-6) — Kube-Policies (KP)"
 control_family: "CM — Configuration Management"
-version: "0.1.0"
+version: "0.2.0"
 status: "Draft"
 owner: "System Owner (TBD — assign)"
 approver: "Authorizing Official (TBD — assign)"
-last_reviewed: "2026-05-29"
-next_review: "2027-05-29"
+last_reviewed: "2026-06-01"
+next_review: "2027-06-01"
 ---
 
 # Secure Configuration Baseline — Kube-Policies (KP)
@@ -63,6 +63,15 @@ process in the forthcoming **Configuration Management Plan** (see
 - **Status** —
   - **Enforced (current)** — the chart (or validated binary default) sets the
     required value today.
+  - **Enforced (current) — `values.yaml` default, gated** — the value is
+    populated in the shipped `values.yaml` and renders into the workload by
+    default; the `manifest-hardening-gate` (conftest `restricted.pss`) **fails the
+    build** if a rendered pod is missing it and `helm-unittest` asserts it. An
+    operator may still override the value (e.g. `seccompProfile.type: Localhost`).
+  - **Partial (Pn)** — a real capability ships but the control is not fully met by
+    default; the residual is scoped to a phase / POA&M.
+  - **Open gap (residual Pn)** — the chart does **not** set the value; tracked as a
+    POA&M.
   - **Target (phase Pn)** — the chart does **not** yet enforce the value; the
     cited phase remediates it. POA&M IDs are linked.
 
@@ -87,9 +96,9 @@ Source manifests: `templates/admission-webhook-deployment.yaml`,
 | readOnlyRootFilesystem | `true` | `admissionWebhook.securityContext.readOnlyRootFilesystem: true`. Writable paths confined to `emptyDir` mounts `/tmp` and `/var/log/kube-policies` (`admission-webhook-deployment.yaml:118-121`). | Enforced (current) |
 | allowPrivilegeEscalation | `false` | `admissionWebhook.securityContext.allowPrivilegeEscalation: false`. | Enforced (current) |
 | Drop ALL capabilities | `drop: [ALL]` | `admissionWebhook.securityContext.capabilities.drop: [ALL]`. | Enforced (current) |
-| seccompProfile | `RuntimeDefault` | Not set on pod or container securityContext. | **Target (phase P5)** — POAM-024 (CM-7). Add `seccompProfile.type: RuntimeDefault`. |
-| runAsGroup (non-zero) | `> 0` | Not set; GID 0 is therefore possible despite non-root UID. | **Target (phase P5)** — POAM-024 (CM-7). |
-| automountServiceAccountToken | `false` (or scoped projected token) | Not set on the ServiceAccount or pod spec; the SA token is auto-mounted. `AST-WH` does call the apiserver via the shared SA, so a scoped projected-token mount is the elegant target rather than a blanket `false`. | **Target (phase P5)** — POAM-024 (CM-7). |
+| seccompProfile | `RuntimeDefault` (or `Localhost` + `localhostProfile`) | **`values.yaml` default**: `admissionWebhook.podSecurityContext.seccompProfile` / `admissionWebhook.securityContext.seccompProfile` ship `type: RuntimeDefault` in the shipped `values.yaml` and render straight into the pod/container `securityContext`. An operator may instead supply `type: Localhost` with a `localhostProfile` path. The gate (CFG-WU-12/22) `restricted.pss` + `helm-unittest` lock it on the rendered chart. | **Enforced (current) — `values.yaml` default, gated (P5)** — POAM-024 closed. |
+| runAsGroup (non-zero) | `> 0` | **`values.yaml` default**: `admissionWebhook.podSecurityContext.runAsGroup` / `.securityContext.runAsGroup` ship `65534` in the shipped `values.yaml` and render into the `securityContext`; `helm-unittest` asserts it. | **Enforced (current) — `values.yaml` default, gated (P5)** — POAM-024 closed. |
+| automountServiceAccountToken | `false` (with scoped pod-level opt-in) | `admissionWebhook.serviceAccount` sets `automountServiceAccountToken: false`; the webhook pod opts the token back in at the pod spec because it calls the apiserver (TokenReview / admission). The blanket SA default is **off**. | Enforced (current) — *IAM-WU-09/10; closes the POAM-024 automount milestone.* |
 | TLS material provisioning | server cert + caBundle present | `admissionWebhook.tls.autoGenerate: true` (default) generates a self-signed CA + leaf; the `else` branch fails the render closed if no Secret, no inline PEM, and `autoGenerate=false` (`admission-webhook-tls.yaml:42-46`). | Enforced (current) — *self-signed default; cert-manager / apiserver mTLS is the target in P3.* |
 | Metrics endpoint protection | TLS + authn on `9090` | `9090/tcp` is plain **HTTP, unauthenticated** (facts sheet; `--metrics-port=9090`). | **Target (phase P3)** — metrics TLS+authn. |
 | Replica count (availability) | ≥ 2 | `admissionWebhook.replicaCount: 2` → Deployment `spec.replicas` (`admission-webhook-deployment.yaml:12`). No PodDisruptionBudget or anti-affinity yet. | Enforced (current, count) — *PDB/anti-affinity Target (phase P9).* |
@@ -105,7 +114,7 @@ Source manifests: `templates/policy-manager-deployment.yaml`,
 
 | Setting | Required value | Controlling field | Status |
 |---|---|---|---|
-| TLS minimum version | TLS 1.3 | Runtime validator `internal/config/config.go:218` (same `security.tls.min_version` floor as `AST-WH`). **Note:** `8080` is currently served as plain **HTTP** (facts sheet); TLS 1.3 applies once a TLS listener is enabled in P2/P3. | Target (phase P2/P3) — *floor codified in validator; listener not yet TLS.* |
+| TLS minimum version | TLS 1.3 | Runtime validator `internal/config/config.go` (`security.tls.min_version` floor) + `cmd/policy-manager/main.go` `ListenAndServeTLS` (P2/CRY-WU-05). `8080` serves **TLS 1.3 (server-auth)** by default from the mounted cert (cert-manager / autoGenerate). | Enforced (current) — *TLS 1.3 transport; OIDC authN/authZ is config-gated (auth.enabled, default off).* |
 | Fail-closed enforcement | `fail-closed` | `templates/configmap.yaml` → `policy.failure_mode: "fail-closed"` (shared ConfigMap consumed by `--config=/etc/config/config.yaml`, `policy-manager-deployment.yaml:48`). | Enforced (current) |
 | API authentication / authZ | OIDC + authZ on `8080` | `8080/tcp` REST API is **unauthenticated** today; internal decision POSTs use a static bearer token (`POLICY_MANAGER_INTERNAL_TOKEN`, `policy-manager-deployment.yaml:63`). | **Target (phase P2/P3)** — OIDC/authZ. |
 | CPU/memory limits | limits + requests set | `policyManager.resources` (limits `500m`/`512Mi`, requests `100m`/`128Mi`) → container `resources` (`policy-manager-deployment.yaml:87`). | Enforced (current) |
@@ -113,9 +122,9 @@ Source manifests: `templates/policy-manager-deployment.yaml`,
 | readOnlyRootFilesystem | `true` | `policyManager.securityContext.readOnlyRootFilesystem: true`; writable paths confined to `emptyDir` `/tmp` and (if `persistence.enabled`) the PVC at `/var/lib/kube-policies` (`policy-manager-deployment.yaml:89-98`). | Enforced (current) |
 | allowPrivilegeEscalation | `false` | `policyManager.securityContext.allowPrivilegeEscalation: false`. | Enforced (current) |
 | Drop ALL capabilities | `drop: [ALL]` | `policyManager.securityContext.capabilities.drop: [ALL]`. | Enforced (current) |
-| seccompProfile | `RuntimeDefault` | Not set. | **Target (phase P5)** — POAM-024 (CM-7). |
-| runAsGroup (non-zero) | `> 0` | Not set. | **Target (phase P5)** — POAM-024 (CM-7). |
-| automountServiceAccountToken | scoped projected token / `false` | Not set; SA token auto-mounted. `AST-PM` reconciles CRDs and Leases via the apiserver (ICX-06), so it needs a token — scoped projected mount is the target. | **Target (phase P5)** — POAM-024 (CM-7). |
+| seccompProfile | `RuntimeDefault` (or `Localhost` + `localhostProfile`) | **`values.yaml` default**: `policyManager.podSecurityContext.seccompProfile` / `policyManager.securityContext.seccompProfile` ship `type: RuntimeDefault`; `helm-unittest` + `restricted.pss` lock it. | **Enforced (current) — `values.yaml` default, gated (P5)** — POAM-024 closed. |
+| runAsGroup (non-zero) | `> 0` | **`values.yaml` default**: `policyManager.podSecurityContext.runAsGroup` / `.securityContext.runAsGroup` ship `65534`; `helm-unittest` asserts it. | **Enforced (current) — `values.yaml` default, gated (P5)** — POAM-024 closed. |
+| automountServiceAccountToken | `false` (with scoped pod-level opt-in) | SA `automountServiceAccountToken: false` (`rbac.yaml:35`); the PM pod opts back in (`dig ... true`) because it reconciles CRDs/Leases and calls TokenReview (ICX-06). The `tokenreview` internal-auth mode (chart default) **requires** the token, enforced by a `_helpers.tpl` guard. | Enforced (current) — *IAM-WU-09/10/11; closes the POAM-024 automount milestone.* |
 | Durable audit storage | persistent (not `emptyDir`) | `persistence.enabled: true` renders the PVC (`policy-manager-pvc.yaml`); however the `AST-WH` audit file backend writes to an `emptyDir` (`admission-webhook-deployment.yaml:136`). | Target (phase P7) — *audit durability.* |
 | Replica count / leader election | leader-elected; HA-capable | `policyManager.replicaCount: 1` → `spec.replicas`. Leader election via `coordination.k8s.io/Lease` is RBAC-granted (`rbac.yaml:105-108`) so scaling >1 is safe; default ships single replica. | Enforced (current, single replica + leader election) — *raise replicas + PDB in P9.* |
 | Metrics endpoint protection | TLS + authn on `9091` | `9091/tcp` plain **HTTP, unauthenticated**. | **Target (phase P3)** — metrics TLS+authn. |
@@ -135,13 +144,13 @@ reverse-proxy), `9092/tcp` (HTTP metrics).
 | Read-only by default (write gate) | `ALLOW_WRITES=false` | `dashboard.allowWrites: false` (`values.yaml`) → container env `ALLOW_WRITES` (`dashboard-deployment.yaml:53-54`). Two-flag gate: writes require **both** `dashboard.enabled` and `dashboard.allowWrites` true; the SPA is otherwise read-only (`cmd/dashboard/proxy.go`). | Enforced (current) |
 | Disabled by default (least functionality) | `enabled=false` | `dashboard.enabled: false` (`values.yaml`); all dashboard templates are guarded by `{{- if .Values.dashboard.enabled }}`. | Enforced (current) |
 | CPU/memory limits | limits + requests set | `dashboard.resources` (limits `200m`/`256Mi`, requests `50m`/`64Mi`) → container `resources` (`dashboard-deployment.yaml:83`). | Enforced (current) |
-| runAsNonRoot | `true` | Pod `securityContext.runAsNonRoot: true` and container `securityContext.runAsNonRoot: true` (UID `65532`), hardcoded in `dashboard-deployment.yaml:31-34, 75-82`. | Enforced (current) |
+| runAsNonRoot | `true` | **Values-driven** (UID `65532`): `dashboard.podSecurityContext.runAsNonRoot` / `dashboard.securityContext.runAsNonRoot` ship `true` in `values.yaml` and render via `toYaml` into `dashboard-deployment.yaml`. | Enforced (current) |
 | readOnlyRootFilesystem | `true` | Container `securityContext.readOnlyRootFilesystem: true` (`dashboard-deployment.yaml:80`); writable path confined to `emptyDir` `/tmp`. | Enforced (current) |
 | allowPrivilegeEscalation | `false` | Container `securityContext.allowPrivilegeEscalation: false` (`dashboard-deployment.yaml:76`). | Enforced (current) |
 | Drop ALL capabilities | `drop: [ALL]` | Container `securityContext.capabilities.drop: [ALL]` (`dashboard-deployment.yaml:77-79`). | Enforced (current) |
-| seccompProfile | `RuntimeDefault` | Not set. | **Target (phase P5)** — POAM-024 (CM-7). |
-| runAsGroup (non-zero) | `> 0` | Not set (UID `65532`, fsGroup `65532`, but `runAsGroup` unset). | **Target (phase P5)** — POAM-024 (CM-7). |
-| automountServiceAccountToken | `false` | Not set. The dashboard SA's Role is read-only on two named Services (`dashboard-rbac.yaml:21-27`); blanket `automountServiceAccountToken: false` is the clean target since it does not require an in-pod token. | **Target (phase P5)** — POAM-024 (CM-7). |
+| seccompProfile | `RuntimeDefault` | **`values.yaml` default**: the dashboard pod/container `securityContext` is now **values-driven** (`dashboard.podSecurityContext.seccompProfile` / `dashboard.securityContext.seccompProfile`, rendered via `toYaml`) and ships `type: RuntimeDefault`. The `restricted.pss` gate covers the dashboard and the `helm-unittest` dashboard suite asserts `seccompProfile`. | **Enforced (current) — `values.yaml` default, gated (P5)** — POAM-024 closed. |
+| runAsGroup (non-zero) | `> 0` | **`values.yaml` default**: `dashboard.podSecurityContext.runAsGroup` / `.securityContext.runAsGroup` ship `65532` (distroless-nonroot GID), values-driven and asserted by `helm-unittest`. | **Enforced (current) — `values.yaml` default, gated (P5)** — POAM-024 closed. |
+| automountServiceAccountToken | `false` | SA `automountServiceAccountToken: false` (`dashboard-rbac.yaml:12`) **and** the dashboard pod sets `automountServiceAccountToken: false` (`dashboard-deployment.yaml:43`) — the dashboard never calls the apiserver, so no token is mounted. | Enforced (current) — *IAM-WU-10; closes the POAM-024 automount milestone for the dashboard.* |
 | RBAC least-privilege | namespaced read-only Role | `dashboard-rbac.yaml` grants a **namespaced** `Role` limited to `get` on two named Services (no CRDs, Secrets, or wildcard). This is a hardening bright spot relative to the shared cluster role. | Enforced (current) |
 | User authentication | OIDC login on `8090` | `8090/tcp` served as **HTTP with no user authn** (write-gated only). | **Target (phase P3)** — TLS + OIDC login. |
 | Ingress TLS | TLS configured when exposed | `dashboard.ingress.enabled: false` (default); `dashboard.ingress.tls: []` (`values.yaml`) — no TLS block populated. | Target (phase P3) — *populate ingress TLS when externally exposed.* |
@@ -161,10 +170,30 @@ Source: `charts/kube-policies/values.yaml`, `templates/rbac.yaml`,
 | RBAC least-privilege (core services) | scoped to required verbs/resources | `templates/rbac.yaml`: two **per-component** `ClusterRole`s (`AST-WH`, `AST-PM`) grant only `get,list,watch` on the `policies.kube-policies.io` CRDs plus `get,update,patch` on their `/status`; leader election is a **namespaced** `Role` (`coordination` Leases + namespaced `events`). The prior cluster-wide read on secrets/nodes/pods/serviceaccounts/RBAC and the `admissionregistration` write were removed (dead privilege — neither binary calls them). No wildcard verbs/resources. | Enforced (current) — *least-privilege split landed in P3 (IAM-WU-08); CI regression gate is IAM-WU-17.* |
 | Per-component service accounts | one SA per component | `AST-WH` (`<fullname>-admission-webhook`), `AST-PM` (`<fullname>-policy-manager`), and `AST-DB` (`<fullname>-dashboard`, `dashboard-rbac.yaml`) each have their own SA bound only to its own role. `automountServiceAccountToken: false` on every SA, with explicit pod-level opt-in only on the webhook/manager (they call the apiserver); the dashboard never does. | Enforced (current) — *IAM-WU-09/10; audience-bound projected token replacing the static inter-service secret is IAM-WU-11.* |
 | Internal token secrecy | randomized, not committed | `internalToken: ""` (`values.yaml`) → chart auto-generates a 48-char `randAlphaNum` token and preserves it across upgrades via `lookup` (`internal-token-secret.yaml:2-10`). | Enforced (current) — *static bearer; audience-bound token is the target in P3/P4.* |
-| Image pull policy / pinning | digest-pinned (`@sha256`) | `*.image.tag` floating tags with `pullPolicy: IfNotPresent` (`values.yaml`); no `@sha256` digests. The `kube-policies.image` helper supports a digest-style ref but values ship tags. | **Target (phase P6)** — POAM-023 (CM-2). Digest-pin all base + workload images. |
+| Image pull policy / pinning | digest-pinned (`@sha256`) | The `kube-policies.image` helper (`_helpers.tpl`) **supports** a digest-pinned reference: setting `*.image.tag` to a `tag@sha256:<digest>` value renders a valid pinned ref (`registry/repository:tag@sha256:…`), giving operators a **digest-deploy option** today. **However** the shipped `values.yaml` still uses floating tags (`tag: "1.0.0"`) with `pullPolicy: IfNotPresent`. | **Partial (P5)** — digest-deploy option supported; **not digest-pinned by default** — residual POAM-023 (CM-2). Digest-by-default + base-image pinning land in P6 (`scripts/pin-base-images.sh`). |
 | NetworkPolicy (default-deny) | default-deny ingress+egress + scoped allows | **No NetworkPolicy template exists** in `templates/`. The `kube-policies-system` namespace is a flat open segment. | **Target (phase P4)** — POAM-007 (SC-7, Critical). |
-| PSS namespace enforcement | `pod-security.kubernetes.io/enforce=restricted` | Install namespace is not labeled for Pod Security Standards enforcement. | **Target (phase P5)** — POAM-024 (CM-7). |
+| PSS namespace enforcement | `pod-security.kubernetes.io/enforce=restricted` | When the chart manages the namespace (`namespace.create=true`, or via `--create-namespace`), `templates/namespace.yaml` labels it `pod-security.kubernetes.io/enforce`, `audit`, and `warn` all = `restricted` (`namespace.podSecurity.*`, default `restricted`). **`namespace.create` defaults `false`**, so by default the operator owns the namespace and **must** apply the labels (or use `--create-namespace`); the `network-posture-gate` + `restricted.pss` conftest assert the labels on the rendered namespace. | Enforced (current, when chart-managed) — *POAM-024 PSS milestone; conditional on `namespace.create=true` / operator labeling.* |
 | Workload-controller policy coverage | `spec.template.spec` traversal | Shipped policies do not traverse `spec.template.spec`; Deployments/DaemonSets/etc. and init/ephemeral containers are not evaluated. | **Target (phase P10)** — POAM-008 (CM-6, Critical). |
+
+---
+
+## 5A. Monitoring stack (DEMO/Kind-grade — not a production CI)
+
+The example monitoring manifests under
+`deployments/kubernetes/monitoring/` (prometheus, grafana, alertmanager) are an
+**optional, demo/Kind-grade observability stack**, not an in-boundary control or a
+production deployment. They are honestly bounded as follows:
+
+| Setting | State | Status |
+|---|---|---|
+| Workload securityContext (restricted PSS) | The prometheus/grafana/alertmanager pods + containers set `runAsNonRoot`, a non-root UID, `allowPrivilegeEscalation: false`, `capabilities.drop: [ALL]`, `readOnlyRootFilesystem: true`, and `seccompProfile.type: RuntimeDefault` — they pass the `restricted.pss` conftest profile. | Enforced (current, manifests). |
+| Storage / persistence | **`emptyDir` only — DEMO/Kind-grade, NO persistence.** The Prometheus TSDB, Grafana state, and `/tmp` are ephemeral and **lost on pod restart**. There is no PVC, no retention guarantee, and this is **not** an audit-durable or production store. | **Demo-only — not durable** (do not treat as evidence storage; AU durability is P7). |
+| Namespace PSA labels | The shipped `kube-policies-monitoring` Namespace now carries `pod-security.kubernetes.io/{enforce,audit,warn}: restricted`, and the `restricted.pss` conftest covers the monitoring workloads. | Enforced (current, manifests) — *closed in P5; see [cis-benchmark-results.md](cis-benchmark-results.md).* |
+| Authentication / exposure | Grafana ships a demo admin Secret; the stack is for local/Kind demonstration. | **Demo-only** — not for production exposure. |
+
+These manifests are **out of the authorization boundary** (the Prometheus scraper
+is `AST-EXT-PROMETHEUS` in `ZONE-EXT`, [inventory.md](inventory.md)) and must not
+be read as a shipped, persistent, or authorized monitoring control.
 
 ---
 
@@ -177,12 +206,14 @@ in production, weakening a `securityContext` value, or installing with
 `rbac.create: false` against a pre-existing over-privileged SA — constitutes a
 **configuration deviation** and requires a documented, time-bound exception.
 
-**Process (interim, formalized under the CM Plan in P5):**
+**Process (governed by the [Configuration Management Plan](plans/configuration-management-plan.md), CM-3):**
 
 1. **Request.** The requester records the specific Helm value path / manifest
    field, the required baseline value, the requested deviation value, the
    business/technical justification, the compensating controls, and a proposed
-   expiry date.
+   expiry date. Routine changes additionally complete the
+   [change-control checklist in the pull-request template](../../.github/pull_request_template.md)
+   (baseline + inventory updated, policy/hardening gates green, images digest-pinned).
 2. **Risk review.** The ISSO (TBD — assign before assessment) assesses residual
    risk against the affected control(s) (CM-6, plus any control the setting
    implements — e.g. SC-7 for NetworkPolicy, AC-3 for the dashboard write gate).
@@ -204,25 +235,50 @@ shipped security boundaries.
 
 ---
 
-## 7. CM Plan linkage (DOC-WU-13)
+## 7. CM Plan linkage
 
 This baseline is **validated by the configuration-as-code work in phase P5**:
 the chart templates and `values.yaml` are the machine-readable expression of
-the settings above, and P5 adds (a) digest-pinned image support, (b) the P5
-hardening items called out as **Target (phase P5)** here (seccomp, runAsGroup,
-automountServiceAccountToken, PSS-restricted namespace label), and (c) CI gates
-that render the chart and assert these settings on the rendered manifests, so
-drift from this baseline is caught at build time.
+the settings above, and P5 delivered (a) **digest-pinned image support** (the
+`kube-policies.image` helper accepts a `tag@sha256:…` reference — a digest-deploy
+option, though shipped values still use floating tags; residual POAM-023), (b) the
+P5 hardening items — `seccompProfile: RuntimeDefault` (or `Localhost` +
+`localhostProfile`) and a non-root `runAsGroup` shipped as **`values.yaml`
+defaults** on **all three** workloads (`POAM-024` closed), the dashboard
+`securityContext` made **values-driven**, `automountServiceAccountToken=false` on
+every SA, and the **PSS `restricted`** namespace labels (when chart-managed) — and
+(c) the **CI gates** that render the chart and assert these settings on the rendered
+manifests, so drift from this baseline is caught at build time. The remaining
+residual is images not digest-pinned by default (POAM-023). The example monitoring
+manifests stay demo-grade (`emptyDir`, no persistence) — an availability concern
+(AU durability is P7), not a CM-7 hardening gap.
 
-This baseline is **referenced from the forthcoming Configuration Management
-Plan** — work unit **DOC-WU-13** (CM-1, CM-2, CM-3, CM-4, CM-9), authored in
-phase **P5** per `.omc/plans/PRODUCTION-READINESS-FEDRAMP-CIS.md`. The CM Plan
-will establish the Helm/CRD baseline and the `.github/workflows` CI gates as the
-change-control enforcement mechanism, and will adopt this document as the
-authoritative **CM-2 baseline configuration** and **CM-6 configuration
-settings** record. Until the CM Plan is published, the deviation/exception
-process in [§6](#6-deviation--exception-process) governs.
+The gating CI jobs (in `.github/workflows/ci.yml`) that enforce this baseline are:
 
-**Control matrix rows:** `CM-2` (Baseline Configuration) and `CM-6`
-(Configuration Settings) are both **Partial**, remediating phase **P5**, in
+- `manifest-hardening-gate` — conftest `restricted.pss` over the rendered chart
+  (CFG-WU-12), plus a dead-gate proof that strips `seccompProfile` and asserts the
+  render is then **denied**;
+- `helm-unittest` — `charts/kube-policies/tests/hardening_test.yaml` asserts the
+  restricted control set (incl. `seccompProfile`+`runAsGroup`) per pod/container
+  across the control plane **and** the dashboard (CFG-WU-22);
+- `network-posture-gate` — default-deny + per-component ingress + PSA-restricted
+  namespace labels (NET-WU-20);
+- `rbac-sa-gate` — RBAC least-privilege + SA-token automount (IAM-WU-17);
+- the **gating Trivy** filesystem + image scans (`CRITICAL,HIGH` fail the build),
+  strengthening RA-5 / SI-2.
+
+This baseline is the authoritative **CM-2 baseline configuration** and **CM-6
+configuration settings** record adopted by the now-published
+[Configuration Management Plan](plans/configuration-management-plan.md)
+(CM-1 / CM-3 / CM-9; see also the [CM policy](policies/CM-policy.md) and
+[CM procedures](procedures/CM-procedures.md)). Change control is enforced by the CI
+gates above and the [pull-request change-control checklist](../../.github/pull_request_template.md);
+drift between the running state and this baseline is detected by
+[`scripts/ops/drift-detect.sh`](../../scripts/ops/drift-detect.sh)
+(see [drift-detection.md](drift-detection.md)).
+
+**Control matrix rows:** `CM-7` (Least Functionality) is now **Implemented** (P5;
+POAM-024 closed); `CM-2` (Baseline Configuration) and `CM-6` (Configuration
+Settings) remain **Partial** (P5; honest residuals above — POAM-023 / POAM-008);
+`CM-1` and `CM-9` are **Implemented** and `CM-3` is **Partial**, per
 [control-matrix.csv](control-matrix.csv).

@@ -373,32 +373,73 @@ jobs:
     - name: Checkout code
       uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
 
-    - name: Run Trivy vulnerability scanner
+    # --- SARIF-upload pass (CFG-WU-11): non-gating (exit-code 0) so the GitHub
+    # Security tab always populates with the full finding set, independent of
+    # the .trivyignore suppressions used by the gating pass below. ---
+    - name: Run Trivy vulnerability scanner (fs, SARIF)
       uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # v0.36.0
       with:
         scan-type: 'fs'
         scan-ref: '.'
         format: 'sarif'
         output: 'trivy-results.sarif'
+        exit-code: '0'
 
     - name: Upload Trivy scan results to GitHub Security tab
       uses: github/codeql-action/upload-sarif@03e4368ac7daa2bd82b3e85262f3bf87ee112f57  # v3
       with:
         sarif_file: 'trivy-results.sarif'
 
-    - name: Scan admission webhook image
+    - name: Scan admission webhook image (SARIF)
       uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # v0.36.0
       with:
         image-ref: ${{ needs.build-images.outputs.admission-webhook-image }}
         format: 'sarif'
         output: 'trivy-webhook.sarif'
+        exit-code: '0'
 
-    - name: Scan policy manager image
+    - name: Scan policy manager image (SARIF)
       uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # v0.36.0
       with:
         image-ref: ${{ needs.build-images.outputs.policy-manager-image }}
         format: 'sarif'
         output: 'trivy-manager.sarif'
+        exit-code: '0'
+
+    # --- GATING pass (CFG-WU-11): fail the build on a fixable CRITICAL/HIGH.
+    # ignore-unfixed=true avoids failing on CVEs with no upstream fix; the
+    # .trivyignore file carries dated, justified suppressions (none today), so a
+    # seeded fixable HIGH/CRITICAL CVE fails the build until fixed or justified. ---
+    - name: Trivy GATE — filesystem (CRITICAL,HIGH; fail build)
+      uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # v0.36.0
+      with:
+        scan-type: 'fs'
+        scan-ref: '.'
+        format: 'table'
+        severity: 'CRITICAL,HIGH'
+        ignore-unfixed: true
+        trivyignores: '.trivyignore'
+        exit-code: '1'
+
+    - name: Trivy GATE — admission webhook image (CRITICAL,HIGH; fail build)
+      uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # v0.36.0
+      with:
+        image-ref: ${{ needs.build-images.outputs.admission-webhook-image }}
+        format: 'table'
+        severity: 'CRITICAL,HIGH'
+        ignore-unfixed: true
+        trivyignores: '.trivyignore'
+        exit-code: '1'
+
+    - name: Trivy GATE — policy manager image (CRITICAL,HIGH; fail build)
+      uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # v0.36.0
+      with:
+        image-ref: ${{ needs.build-images.outputs.policy-manager-image }}
+        format: 'table'
+        severity: 'CRITICAL,HIGH'
+        ignore-unfixed: true
+        trivyignores: '.trivyignore'
+        exit-code: '1'
 
   # Performance tests
   performance-tests:
@@ -821,6 +862,231 @@ jobs:
         path: report-network-*.json
         if-no-files-found: ignore
 
+  # Manifest-hardening gate (CFG-WU-12, NIST CM-6/CM-7 / CIS 5.2.x / PSS-
+  # Restricted). Pure static render-then-scan (no cluster, no images) so it runs
+  # in parallel with lint — NO needs:. Renders the chart hardened (dashboard on,
+  # namespace.create=true, configured ingress, control-plane seccompProfile +
+  # non-root runAsGroup injected via --set on the values-driven securityContext)
+  # and fails the build when any in-scope control-plane container is missing a
+  # restricted-PSS control (seccomp, drop ALL, readOnlyRootFs, no priv-esc,
+  # runAsNonRoot, non-root runAsGroup, cpu+memory requests+limits) or a shipped
+  # Namespace is not PSA-restricted. Also runs kubeconform -strict for schema
+  # validation. Mirrors rbac-sa-gate: pinned conftest + kubeconform, render,
+  # scan, fail-fixture self-test, JSON artifact.
+  manifest-hardening-gate:
+    name: Manifest-Hardening Gate (restricted PSS)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      CONFTEST_VERSION: '0.68.2'
+      # sha256 of conftest_${CONFTEST_VERSION}_Linux_x86_64.tar.gz, from the
+      # published checksums.txt of the pinned release. Verified with sha256sum -c.
+      CONFTEST_SHA256: 'e8144c6d6d2ae0260b869caa60c7c262a1f95ac63ec1e5d2fb19be452d606347'
+      KUBECONFORM_VERSION: '0.6.7'
+      # sha256 of kubeconform-linux-amd64.tar.gz from the pinned release's
+      # CHECKSUMS file. Verified with sha256sum -c.
+      KUBECONFORM_SHA256: '95f14e87aa28c09d5941f11bd024c1d02fdc0303ccaa23f61cef67bc92619d73'
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+
+    - name: Install Helm
+      uses: azure/setup-helm@dda3372f752e03dde6b3237bc9431cdc2f7a02a2  # v5.0.0
+
+    - name: Install conftest (pinned, checksum-verified)
+      run: |
+        set -euo pipefail
+        asset="conftest_${CONFTEST_VERSION}_Linux_x86_64.tar.gz"
+        url="https://github.com/open-policy-agent/conftest/releases/download/v${CONFTEST_VERSION}/${asset}"
+        curl -fsSL -o "${asset}" "${url}"
+        echo "${CONFTEST_SHA256}  ${asset}" | sha256sum -c -
+        tar -xzf "${asset}" conftest
+        sudo install -m 0755 conftest /usr/local/bin/conftest
+        conftest --version
+
+    - name: Install kubeconform (pinned, checksum-verified)
+      run: |
+        set -euo pipefail
+        asset="kubeconform-linux-amd64.tar.gz"
+        url="https://github.com/yannh/kubeconform/releases/download/v${KUBECONFORM_VERSION}/${asset}"
+        curl -fsSL -o "${asset}" "${url}"
+        echo "${KUBECONFORM_SHA256}  ${asset}" | sha256sum -c -
+        tar -xzf "${asset}" kubeconform
+        sudo install -m 0755 kubeconform /usr/local/bin/kubeconform
+        kubeconform -v
+
+    - name: Manifest-hardening lint (kubeconform -strict + conftest restricted.pss)
+      run: |
+        set -euo pipefail
+        ./scripts/test/lint-manifests.sh
+
+    # Keystone regression proof: stripping seccompProfile from a rendered,
+    # otherwise-hardened workload MUST fail restricted.pss. A passing
+    # seccomp-removed render == dead gate -> fail the build immediately.
+    - name: Seccomp-removed regression proof (stripped seccomp MUST be denied)
+      run: |
+        set -euo pipefail
+        # The chart is hardened natively (seccompProfile + non-root runAsGroup are
+        # values.yaml defaults on webhook, policy-manager, AND dashboard), so no
+        # --set injection is needed; render all three then strip seccomp.
+        helm template kube-policies charts/kube-policies \
+          --set namespace.create=true \
+          --set dashboard.enabled=true \
+          > rendered-hardened.yaml
+        # Drop every seccompProfile: block (the line and its deeper-indented body).
+        awk '
+          $0 ~ /^[[:space:]]*seccompProfile:[[:space:]]*$/ {
+            match($0, /^[[:space:]]*/); base = RLENGTH; drop = 1; next
+          }
+          drop == 1 {
+            match($0, /^[[:space:]]*/)
+            if (RLENGTH > base && $0 ~ /[^[:space:]]/) { next }
+            drop = 0
+          }
+          { print }
+        ' rendered-hardened.yaml > rendered-no-seccomp.yaml
+        if grep -q 'seccompProfile' rendered-no-seccomp.yaml; then
+          echo "::error::test setup error — seccompProfile blocks were not stripped"
+          exit 1
+        fi
+        if conftest test --policy test/policy \
+            --namespace restricted.pss rendered-no-seccomp.yaml; then
+          echo "::error::HARDENING GATE DEAD: a render with no seccompProfile passed restricted.pss — the seccomp rule is broken"
+          exit 1
+        fi
+        echo "OK — conftest correctly denied the seccomp-removed render"
+
+    # CONF-1: Policy self-test — each negative fixture MUST make conftest exit
+    # non-zero. A passing fail-fixture == dead deny rule -> fail the build.
+    - name: Policy self-test (fail fixtures must be denied)
+      run: |
+        set -euo pipefail
+        broken=0
+        for fx in \
+            test/policy/fixtures/fail/no-seccomp.yaml \
+            test/policy/fixtures/fail/privileged-escalation.yaml \
+            test/policy/fixtures/fail/writable-rootfs.yaml \
+            test/policy/fixtures/fail/no-resources.yaml \
+            test/policy/fixtures/fail/root-gid.yaml \
+            test/policy/fixtures/fail/privileged.yaml \
+            test/policy/fixtures/fail/cap-add.yaml \
+            test/policy/fixtures/fail/host-namespace.yaml \
+            test/policy/fixtures/fail/init-container-unhardened.yaml \
+            test/policy/fixtures/fail/container-override-seccomp.yaml \
+            test/policy/fixtures/fail/namespace-not-restricted.yaml; do
+          echo "==> self-test (restricted.pss): ${fx}"
+          if conftest test --policy test/policy \
+              --namespace restricted.pss "${fx}"; then
+            echo "::error::POLICY SELF-TEST FAILED: ${fx} produced 0 denies — the deny rule is broken"
+            broken=1
+          else
+            echo "    OK — conftest correctly denied ${fx}"
+          fi
+        done
+        if [ "${broken}" -ne 0 ]; then
+          echo "::error::One or more restricted.pss self-tests failed — a deny rule is not firing. Fix the Rego before merging."
+          exit 1
+        fi
+        echo "All restricted.pss self-tests passed — every fail fixture was correctly denied."
+
+    - name: Generate conftest report
+      if: always()
+      run: |
+        set -uo pipefail
+        [ -f rendered-hardened.yaml ] || exit 0
+        conftest test --policy test/policy \
+          --namespace restricted.pss \
+          --output json rendered-hardened.yaml > report-restricted-pss.json || true
+
+    - name: Upload conftest report
+      if: always()
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+      with:
+        name: manifest-hardening-gate-report
+        path: report-restricted-pss.json
+        if-no-files-found: ignore
+
+  # helm-unittest gate (CFG-WU-22, NIST CM-6 / CIS 5.2.x). Installs the
+  # helm-unittest plugin (pinned) and runs charts/kube-policies/tests/*_test.yaml,
+  # asserting every control-plane pod + container carries the restricted PSS
+  # control set. Deleting a hardening attribute from a template fails a test.
+  helm-unittest:
+    name: Helm Unit Tests (hardening)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      HELM_UNITTEST_VERSION: 'v0.3.3'
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+
+    - name: Install Helm
+      uses: azure/setup-helm@dda3372f752e03dde6b3237bc9431cdc2f7a02a2  # v5.0.0
+
+    - name: Install helm-unittest plugin (pinned)
+      run: |
+        set -euo pipefail
+        helm plugin install https://github.com/helm-unittest/helm-unittest --version "${HELM_UNITTEST_VERSION}"
+        helm plugin list
+
+    - name: Run helm unittest
+      run: |
+        set -euo pipefail
+        helm unittest charts/kube-policies
+
+  # CIS Kubernetes Benchmark assessment (CFG-WU-13, NIST CA-2 / CIS 5.x).
+  # Runs kube-bench against the kind e2e cluster and uploads the report as a CI
+  # artifact. NON-GATING by design: node/control-plane controls are operator-
+  # owned and cannot be remediated on a kind node (the chart-owned 5.1/5.2/5.3
+  # controls are gated separately by rbac-sa-gate / manifest-hardening-gate /
+  # network-posture-gate). See docs/compliance/cis-benchmark-results.md.
+  cis-benchmark:
+    name: CIS Benchmark (kube-bench, assessment)
+    runs-on: ubuntu-latest
+    needs: [e2e-kind]
+    if: always() && needs.e2e-kind.result == 'success'
+    permissions:
+      contents: read
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+
+    - name: Install Kind
+      run: |
+        curl -Lo ./kind https://kind.sigs.k8s.io/dl/v0.20.0/kind-linux-amd64
+        chmod +x ./kind
+        sudo mv ./kind /usr/local/bin/kind
+
+    - name: Install kubectl
+      run: |
+        curl -LO "https://dl.k8s.io/release/${{ env.KUBERNETES_VERSION }}/bin/linux/amd64/kubectl"
+        chmod +x kubectl
+        sudo mv kubectl /usr/local/bin/
+
+    - name: Install Helm
+      run: |
+        curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+
+    - name: Stand up kind cluster and run kube-bench assessment
+      run: |
+        set -euo pipefail
+        # Re-create the e2e kind cluster (the e2e-kind job runs on a separate
+        # runner, so its cluster is not reachable here). CLEANUP=false keeps it
+        # up for the assessment.
+        export CLEANUP=false
+        ./scripts/test/test-kind.sh || true
+        KIND_CLUSTER_NAME=kube-policies-test ./scripts/test/cis-benchmark.sh
+
+    - name: Upload CIS benchmark report
+      if: always()
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+      with:
+        name: cis-benchmark-report
+        path: test-results/cis-benchmark/
+        if-no-files-found: ignore
+
   # Monitoring-rules gate (NET-WU-23, NIST SI-4). Validates every standalone
   # Prometheus rule file under monitoring/prometheus/rules/ with promtool, and
   # runs the promtool unit tests (*_test.yml) that drive each alert. Catches a
@@ -940,11 +1206,11 @@ jobs:
     name: CI Gate
     runs-on: ubuntu-latest
     if: always()
-    needs: [lint, unit-tests, fips-verify, build-images, integration-tests, e2e-kind, e2e-k3s, security-scan, helm-tests, docs-tests, rbac-sa-gate, network-posture-gate, monitoring-rules, actionlint, govulncheck]
+    needs: [lint, unit-tests, fips-verify, build-images, integration-tests, e2e-kind, e2e-k3s, security-scan, helm-tests, docs-tests, rbac-sa-gate, network-posture-gate, manifest-hardening-gate, helm-unittest, monitoring-rules, actionlint, govulncheck]
     steps:
     - name: Verify all required jobs succeeded
       run: |
-        results="${{ needs.lint.result }} ${{ needs.unit-tests.result }} ${{ needs.fips-verify.result }} ${{ needs.build-images.result }} ${{ needs.integration-tests.result }} ${{ needs.e2e-kind.result }} ${{ needs.e2e-k3s.result }} ${{ needs.security-scan.result }} ${{ needs.helm-tests.result }} ${{ needs.docs-tests.result }} ${{ needs.rbac-sa-gate.result }} ${{ needs.network-posture-gate.result }} ${{ needs.monitoring-rules.result }} ${{ needs.actionlint.result }} ${{ needs.govulncheck.result }}"
+        results="${{ needs.lint.result }} ${{ needs.unit-tests.result }} ${{ needs.fips-verify.result }} ${{ needs.build-images.result }} ${{ needs.integration-tests.result }} ${{ needs.e2e-kind.result }} ${{ needs.e2e-k3s.result }} ${{ needs.security-scan.result }} ${{ needs.helm-tests.result }} ${{ needs.docs-tests.result }} ${{ needs.rbac-sa-gate.result }} ${{ needs.network-posture-gate.result }} ${{ needs.manifest-hardening-gate.result }} ${{ needs.helm-unittest.result }} ${{ needs.monitoring-rules.result }} ${{ needs.actionlint.result }} ${{ needs.govulncheck.result }}"
         echo "job results: ${results}"
         # shellcheck disable=SC2086
         for r in ${results}; do

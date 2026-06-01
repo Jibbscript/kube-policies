@@ -303,29 +303,58 @@ jobs:
       contents: read
       security-events: write
     steps:
-    - name: Run Trivy vulnerability scanner on admission webhook
+    # --- SARIF-upload pass (CFG-WU-11): non-gating (exit-code 0) so the GitHub
+    # Security tab populates with the full finding set on every release. ---
+    - name: Checkout code (for .trivyignore)
+      uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+
+    - name: Run Trivy vulnerability scanner on admission webhook (SARIF)
       uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # v0.36.0
       with:
         image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/admission-webhook:${{ needs.validate-release.outputs.version }}
         format: 'sarif'
         output: 'trivy-webhook-release.sarif'
+        exit-code: '0'
 
-    - name: Run Trivy vulnerability scanner on policy manager
+    - name: Run Trivy vulnerability scanner on policy manager (SARIF)
       uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # v0.36.0
       with:
         image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/policy-manager:${{ needs.validate-release.outputs.version }}
         format: 'sarif'
         output: 'trivy-manager-release.sarif'
+        exit-code: '0'
 
-    - name: Upload Trivy scan results
+    - name: Upload Trivy scan results (admission webhook)
       uses: github/codeql-action/upload-sarif@03e4368ac7daa2bd82b3e85262f3bf87ee112f57  # v3
       with:
         sarif_file: 'trivy-webhook-release.sarif'
 
-    - name: Upload Trivy scan results
+    - name: Upload Trivy scan results (policy manager)
       uses: github/codeql-action/upload-sarif@03e4368ac7daa2bd82b3e85262f3bf87ee112f57  # v3
       with:
         sarif_file: 'trivy-manager-release.sarif'
+
+    # --- GATING pass (CFG-WU-11): fail the release on a fixable CRITICAL/HIGH.
+    # Mirrors ci.yml. ignore-unfixed=true + dated .trivyignore suppressions. ---
+    - name: Trivy GATE — admission webhook image (CRITICAL,HIGH; fail release)
+      uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # v0.36.0
+      with:
+        image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/admission-webhook:${{ needs.validate-release.outputs.version }}
+        format: 'table'
+        severity: 'CRITICAL,HIGH'
+        ignore-unfixed: true
+        trivyignores: '.trivyignore'
+        exit-code: '1'
+
+    - name: Trivy GATE — policy manager image (CRITICAL,HIGH; fail release)
+      uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # v0.36.0
+      with:
+        image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/policy-manager:${{ needs.validate-release.outputs.version }}
+        format: 'table'
+        severity: 'CRITICAL,HIGH'
+        ignore-unfixed: true
+        trivyignores: '.trivyignore'
+        exit-code: '1'
 
   # Sign release artifacts
   sign-artifacts:

@@ -193,6 +193,11 @@ test-netpol-e2e: ## Prove NetworkPolicy segmentation on a Calico (enforcing CNI)
 	@echo "$(BLUE)Running NetworkPolicy segmentation E2E (Calico-enforced Kind)...$(NC)"
 	$(SCRIPTS_DIR)/test/test-netpol-e2e.sh
 
+.PHONY: test-pss-admission-e2e
+test-pss-admission-e2e: ## Prove restricted PSA admits hardened chart pods + drift-detect exits non-zero (P5 exit gate; vanilla Kind, no CNI)
+	@echo "$(BLUE)Running PSA restricted admission + drift E2E (vanilla Kind)...$(NC)"
+	$(SCRIPTS_DIR)/test/test-pss-admission-e2e.sh
+
 .PHONY: test-k3s
 test-k3s: ## Run tests on k3s cluster (requires sudo)
 	@echo "$(BLUE)Running k3s cluster tests...$(NC)"

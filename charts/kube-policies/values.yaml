@@ -163,6 +163,10 @@ admissionWebhook:
     registry: docker.io
     repository: kube-policies/admission-webhook
     tag: "1.0.0"
+    # CFG-WU-10 (CM-2/SI-7): set digest to pin the image immutably
+    # (repository@sha256:...). When set, the mutable tag above is dropped.
+    # RECOMMENDED for production. Bare hash or sha256:-prefixed both accepted.
+    digest: ""
     pullPolicy: IfNotPresent
   
   service:
@@ -183,7 +187,13 @@ admissionWebhook:
   podSecurityContext:
     runAsNonRoot: true
     runAsUser: 65534
+    runAsGroup: 65534
     fsGroup: 65534
+    # CFG-WU-01/CFG-WU-21 (CIS 5.2.6/5.7.3): RuntimeDefault syscall filter at the
+    # pod level. Operators may override to type: Localhost + localhostProfile:
+    # <path> for higher-assurance deployments; the default is RuntimeDefault.
+    seccompProfile:
+      type: RuntimeDefault
   
   # Container Security Context
   securityContext:
@@ -194,6 +204,10 @@ admissionWebhook:
     readOnlyRootFilesystem: true
     runAsNonRoot: true
     runAsUser: 65534
+    runAsGroup: 65534
+    # CFG-WU-01/CFG-WU-21: RuntimeDefault at the container level (CIS 5.2.6).
+    seccompProfile:
+      type: RuntimeDefault
   
   # Node selector
   nodeSelector: {}
@@ -269,6 +283,8 @@ policyManager:
     registry: docker.io
     repository: kube-policies/policy-manager
     tag: "1.0.0"
+    # CFG-WU-10: set digest to pin immutably (repository@sha256:...); drops tag.
+    digest: ""
     pullPolicy: IfNotPresent
   
   service:
@@ -289,7 +305,13 @@ policyManager:
   podSecurityContext:
     runAsNonRoot: true
     runAsUser: 65534
+    runAsGroup: 65534
     fsGroup: 65534
+    # CFG-WU-01/CFG-WU-21 (CIS 5.2.6/5.7.3): RuntimeDefault syscall filter at the
+    # pod level. Operators may override to type: Localhost + localhostProfile:
+    # <path> for higher-assurance deployments; the default is RuntimeDefault.
+    seccompProfile:
+      type: RuntimeDefault
   
   # Container Security Context
   securityContext:
@@ -300,6 +322,10 @@ policyManager:
     readOnlyRootFilesystem: true
     runAsNonRoot: true
     runAsUser: 65534
+    runAsGroup: 65534
+    # CFG-WU-01/CFG-WU-21: RuntimeDefault at the container level (CIS 5.2.6).
+    seccompProfile:
+      type: RuntimeDefault
   
   # Node selector
   nodeSelector: {}
@@ -673,6 +699,8 @@ dashboard:
     repository: ghcr.io/Jibbscript/dashboard
     # Defaults to .Chart.AppVersion when empty.
     tag: ""
+    # CFG-WU-10: set digest to pin immutably (repository@sha256:...); drops tag.
+    digest: ""
     pullPolicy: IfNotPresent
 
   service:
@@ -731,6 +759,31 @@ dashboard:
     limits:
       cpu: 200m
       memory: 256Mi
+
+  # CFG-WU-02/03/21: dashboard pod + container securityContext are values-driven
+  # (mirroring admissionWebhook/policyManager) so they are operator-overridable
+  # and lockable by the restricted-PSS gate + helm-unittest. The dashboard image
+  # is distroless-nonroot (UID/GID 65532), distinct from webhook/PM (65534).
+  # seccompProfile defaults to RuntimeDefault; override to type: Localhost +
+  # localhostProfile: <path> for higher assurance.
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 65532
+    runAsGroup: 65532
+    fsGroup: 65532
+    seccompProfile:
+      type: RuntimeDefault
+  securityContext:
+    allowPrivilegeEscalation: false
+    capabilities:
+      drop:
+      - ALL
+    readOnlyRootFilesystem: true
+    runAsNonRoot: true
+    runAsUser: 65532
+    runAsGroup: 65532
+    seccompProfile:
+      type: RuntimeDefault
 
   podAnnotations: {}
   nodeSelector: {}

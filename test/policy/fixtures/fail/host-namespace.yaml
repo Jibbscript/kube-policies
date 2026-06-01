@@ -1,0 +1,30 @@
+# CFG-WU-12 fail fixture: hostNetwork pod must be DENIED.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kube-policies-admission-webhook
+  labels:
+    app.kubernetes.io/name: kube-policies
+    app.kubernetes.io/component: admission-webhook
+spec:
+  template:
+    spec:
+      hostNetwork: true
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        runAsGroup: 65534
+        fsGroup: 65534
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: webhook
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsGroup: 65534
+            seccompProfile: {type: RuntimeDefault}
+            capabilities: {drop: [ALL]}
+          resources:
+            requests: {cpu: 100m, memory: 128Mi}
+            limits: {cpu: 500m, memory: 512Mi}

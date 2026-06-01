@@ -181,6 +181,26 @@ data:
       "version": 1
     }
 ---
+# DEMO/Kind-grade Secret. This ships a placeholder admin credential so the
+# stack starts out-of-the-box on Kind. The password ("admin") is NOT a
+# secret and MUST NOT be used in production. For any real deployment, delete
+# this manifest and provide the grafana-admin Secret out-of-band (e.g. sealed
+# secret / external secret store), e.g.:
+#   kubectl -n kube-policies-monitoring create secret generic grafana-admin \
+#     --from-literal=admin-user=admin \
+#     --from-literal=admin-password="$(openssl rand -base64 24)"
+apiVersion: v1
+kind: Secret
+metadata:
+  name: grafana-admin
+  namespace: kube-policies-monitoring
+  labels:
+    app: grafana
+type: Opaque
+stringData:
+  admin-user: admin
+  admin-password: admin
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -198,14 +218,35 @@ spec:
       labels:
         app: grafana
     spec:
+      # restricted-PSS pod securityContext. The grafana/grafana image runs as
+      # the "grafana" user (UID/GID 472); fsGroup 472 lets it own the writable
+      # emptyDir mounts. The root supplementalGroup (0) was removed — it is not
+      # needed and violates restricted PSS.
       securityContext:
+        runAsNonRoot: true
+        runAsUser: 472
+        runAsGroup: 472
         fsGroup: 472
-        supplementalGroups:
-          - 0
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: grafana
           image: grafana/grafana:9.3.0
           imagePullPolicy: IfNotPresent
+          # restricted-PSS container securityContext. readOnlyRootFilesystem is
+          # safe because Grafana's writable paths (/var/lib/grafana and /tmp)
+          # are backed by emptyDir mounts below.
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 472
+            runAsGroup: 472
+            capabilities:
+              drop:
+                - ALL
+            seccompProfile:
+              type: RuntimeDefault
           ports:
             - containerPort: 3000
               name: http-grafana
@@ -247,17 +288,31 @@ spec:
             - mountPath: /var/lib/grafana/dashboards/kube-policies
               name: grafana-dashboard-overview
               readOnly: false
+            - mountPath: /tmp
+              name: grafana-tmp
           env:
             - name: GF_SECURITY_ADMIN_USER
-              value: admin
+              valueFrom:
+                secretKeyRef:
+                  name: grafana-admin
+                  key: admin-user
             - name: GF_SECURITY_ADMIN_PASSWORD
-              value: admin
+              valueFrom:
+                secretKeyRef:
+                  name: grafana-admin
+                  key: admin-password
             - name: GF_USERS_ALLOW_SIGN_UP
               value: "false"
             - name: GF_INSTALL_PLUGINS
               value: "grafana-piechart-panel"
       volumes:
+        # DEMO/Kind-grade storage only. Grafana's data dir and /tmp use
+        # ephemeral emptyDir volumes — dashboards/state are lost on pod
+        # restart. A production deployment must replace grafana-pv with a
+        # PersistentVolumeClaim.
         - name: grafana-pv
+          emptyDir: {}
+        - name: grafana-tmp
           emptyDir: {}
         - name: grafana-datasources
           configMap:

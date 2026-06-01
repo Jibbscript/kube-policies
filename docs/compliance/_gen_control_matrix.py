@@ -212,8 +212,9 @@ add("CA-2(2)", "Control Assessments | Specialized Assessments", "Planned", "CSP"
     "Pen test + specialized assessment in P12.")
 add("CA-2(3)", "Control Assessments | Leveraging Results from External Organizations", "Planned",
     "CSP", "see P12", "P12", "", "Leverage CSP/3PAO results in P12.")
-add("CA-3", "Information Exchange", "Planned", "System", "docs/compliance/system-facts.md (ICX-01..06)", "P4", "",
-    "Interconnections ICX-01..06 documented; agreements + scoped flows in P4.")
+add("CA-3", "Information Exchange", "Partial", "System",
+    "docs/compliance/interconnections.md (ICX-01..06); docs/compliance/network-architecture.md", "P4", "",
+    "P4: scoped allowed-flow record (every flow F1..F11 mapped to its NetworkPolicy template) in network-architecture.md, complementing the ICX-01..06 register. Formal interconnection security agreements remain to be signed (TBD - assign).")
 add("CA-5", "Plan of Action and Milestones", "Partial", "CSP", "docs/compliance/poam.csv", "P0", "",
     "POA&M established (poam.csv); driven to closure across P1-P12.")
 add("CA-6", "Authorization", "Planned", "CSP", "see P12", "P12", "", "AO (TBD - assign) authorization decision in P12.")
@@ -229,39 +230,48 @@ add("CA-9", "Internal System Connections", "Planned", "System", "docs/compliance
 # ---------------------------------------------------------------------------
 # CM - Configuration Management
 # ---------------------------------------------------------------------------
-add("CM-1", "Policy and Procedures", "Planned", "CSP", "see P12", "P12", "POAM-010", "CM -1 policy authored in P12.")
-add("CM-2", "Baseline Configuration", "Partial", "System", "charts/kube-policies/values.yaml", "P5", "",
-    "Secure-config baseline exists (TLS1.3, fail-closed defaults); formalized + versioned in P5.")
+add("CM-1", "Policy and Procedures", "Implemented", "System",
+    "docs/compliance/policies/CM-policy.md; docs/compliance/procedures/CM-procedures.md", "P5", "",
+    "P5: CM policy + procedures authored (annual review, designated ISSO official); CM family -1 satisfied. Program-wide -1 rollup remains in POAM-010.")
+add("CM-2", "Baseline Configuration", "Partial", "System",
+    "docs/compliance/secure-configuration-baseline.md; charts/kube-policies/values.yaml; scripts/ops/drift-detect.sh", "P5", "POAM-023",
+    "P5: secure-configuration baseline (CM-2/CM-6) formalized + versioned; component/image inventory carries digest support; image helper accepts a digest-pinned ref (repo:tag@sha256). RESIDUAL: shipped values still use floating tags (operator must pin); POAM-023 Open until images are digest-pinned by default.")
 add("CM-2(2)", "Baseline Configuration | Automation Support for Accuracy and Currency", "Planned",
     "System", "charts/kube-policies/", "P5", "", "Helm-rendered baseline + CI drift checks in P5.")
 add("CM-2(3)", "Baseline Configuration | Retention of Previous Configurations", "Planned", "System",
     "git history", "P5", "", "Config retained in VCS; formalized in P5.")
-add("CM-3", "Configuration Change Control", "Planned", "System", "see P11", "P11", "",
-    "Change-control via PR review + CI gates in P11.")
+add("CM-3", "Configuration Change Control", "Partial", "System",
+    "docs/compliance/plans/configuration-management-plan.md; .github/pull_request_template.md; .github/workflows/ci.yml", "P5", "",
+    "P5: change control via PR review + CM-3 PR-template checklist (baseline/inventory updated, gates green, digest pinned) enforced by the now-gating CI jobs (rbac-sa-gate, manifest-hardening-gate, network-posture-gate, helm-unittest, trivy gate). Formal CCB membership + signed-commit/branch-protection enforcement remain TBD.")
 add("CM-3(2)", "Configuration Change Control | Testing, Validation, and Documentation of Changes",
     "Planned", "System", "see P11", "P11", "", "Change testing via CI quality gates in P11.")
 add("CM-4", "Impact Analyses", "Planned", "System", "see P11", "P11", "", "Security-impact analysis in PR process (P11).")
 add("CM-5", "Access Restrictions for Change", "Planned", "System", "see P1", "P1", "",
     "Branch protection + CODEOWNERS + signed commits in P1.")
 add("CM-6", "Configuration Settings", "Partial", "System", "internal/config/config.go", "P5", "",
-    "Config validation enforces TLS1.3/failure-mode; full CIS-restricted settings in P5.")
+    "Config validation enforces TLS1.3/failure-mode; P5 (2026-06-01) shipped the CIS-restricted securityContext settings (seccompProfile=RuntimeDefault + non-root runAsGroup) as values.yaml defaults on all three chart workloads, gated by restricted.pss + helm-unittest. RESIDUAL: the policy engine does not yet traverse spec.template.spec (workload-controller settings unenforced) — POAM-008 (P10).")
 add("CM-6(1)", "Configuration Settings | Automated Management, Application, and Verification", "Planned",
     "System", "charts/kube-policies/", "P5", "", "CI renders + verifies settings (helm template gate) in P5.")
-add("CM-7", "Least Functionality", "Partial", "System", "charts/kube-policies/values.yaml", "P5", "",
-    "Distroless images, dropped caps; restricted PSS + disabled services in P5.")
-add("CM-7(1)", "Least Functionality | Periodic Review", "Planned", "System", "see P5", "P5", "",
-    "Periodic review of enabled functions in P5/P11.")
+add("CM-7", "Least Functionality", "Implemented", "System",
+    "charts/kube-policies/values.yaml; docs/compliance/ssp/ports-protocols-services.md", "P5", "POAM-024",
+    "P5 (closed 2026-06-01): distroless images, dropped caps, readOnlyRootFilesystem; PPS register justifies each listening port (least functionality); namespace ships PSA enforce/audit/warn=restricted (operator-conditional: chart labels the namespace when namespace.create=true, default false, else operator labels it / uses --create-namespace); restricted-PSS gated on the rendered chart (manifest-hardening-gate conftest restricted.pss + helm-unittest). seccompProfile=RuntimeDefault + non-root runAsGroup are now values.yaml DEFAULTS on all three workloads (admission-webhook/policy-manager runAsGroup 65534, dashboard 65532); the dashboard securityContext is values-driven via toYaml; the gating restricted.pss + helm-unittest cover the dashboard and the bundled monitoring workloads; automountServiceAccountToken disabled per-SA. POAM-024 Resolved. NOTE: the example monitoring manifests remain demo-grade (emptyDir, no persistence) — an availability concern tracked under AU durability (P7), not a CM-7 least-functionality gap.")
+add("CM-7(1)", "Least Functionality | Periodic Review", "Partial", "System",
+    "docs/compliance/procedures/CM-procedures.md", "P5", "",
+    "P5: periodic least-functionality / enabled-port review procedure defined in CM-procedures.md (annual + per significant change); first independent review executed at assessment (P12).")
 add("CM-7(2)", "Least Functionality | Prevent Program Execution", "Planned", "System",
     "internal/policy/engine.go", "P10", "", "Image/exec policy enforcement extended in P10.")
 add("CM-7(5)", "Least Functionality | Authorized Software - Allow-by-Exception", "Planned", "System",
     "see P6", "P6", "", "Image-signature/allowlist admission in P6/P10.")
-add("CM-8", "System Component Inventory", "Partial", "System", "docs/compliance/inventory.csv", "P0", "",
-    "Inventory established (AST-* assets); kept current per release in P5/P6.")
+add("CM-8", "System Component Inventory", "Partial", "System",
+    "docs/compliance/inventory.csv; docs/compliance/inventory.md", "P5", "",
+    "P5: inventory documents per-component images with a digest column / digest-pinned ref support (repo:tag@sha256) and the CM-8 review cadence. RESIDUAL: SBOM-driven auto-update + unauthorized-component detection are P6 (CM-8(1)/CM-8(3)).")
 add("CM-8(1)", "System Component Inventory | Updates During Installation and Removal", "Planned",
     "System", "docs/compliance/inventory.csv", "P6", "", "Inventory auto-updated from SBOM in P6.")
 add("CM-8(3)", "System Component Inventory | Automated Unauthorized Component Detection", "Planned",
     "System", "see P6", "P6", "", "SBOM/scan-driven detection in P6.")
-add("CM-9", "Configuration Management Plan", "Planned", "CSP", "see P12", "P12", "", "CM plan authored in P12.")
+add("CM-9", "Configuration Management Plan", "Implemented", "System",
+    "docs/compliance/plans/configuration-management-plan.md", "P5", "",
+    "P5: Configuration Management Plan authored (CM-1/CM-3/CM-9): baseline scope, change control via the .github/workflows CI gates + PR-template checklist, Helm/CRD change process, CCB/approval roles, annual review statement. Named CCB members remain TBD - assign before assessment.")
 add("CM-10", "Software Usage Restrictions", "Planned", "CSP", "see P12", "P12", "", "Software-usage policy in P12.")
 add("CM-11", "User-Installed Software", "Planned", "System", "charts/kube-policies/values.yaml", "P5", "",
     "Immutable distroless images + readOnlyRootFilesystem restrict installs; formalized P5.")
@@ -474,7 +484,7 @@ add("RA-3", "Risk Assessment", "Partial", "CSP", ".omc/research/fedramp-cis-gap-
 add("RA-3(1)", "Risk Assessment | Supply Chain Risk Assessment", "Planned", "System", "see P6", "P6", "",
     "Supply-chain risk assessment (SBOM/provenance) in P6.")
 add("RA-5", "Vulnerability Monitoring and Scanning", "Partial", "System", ".github/workflows/ci.yml (trivy)", "P6", "POAM-008",
-    "Trivy fs/image scan exists but non-gating; authenticated monthly gating scans + SLA in P6/P11.")
+    "P5: Trivy fs + image scans are now GATING (fixable CRITICAL,HIGH -> exit 1, fails the build) in addition to the non-gating SARIF upload to the Security tab. NOTE: ignore-unfixed=true, so CVEs with no upstream fix are reported via SARIF but do not block. RESIDUAL: authenticated/credentialed scanning, scanner-DB cadence, and a formal remediation SLA remain P6/P11 (POAM-008).")
 add("RA-5(2)", "Vulnerability Monitoring and Scanning | Update Vulnerabilities to Be Scanned", "Planned",
     "System", "see P6", "P6", "", "Scanner DB auto-update + cadence in P6/P11.")
 add("RA-5(5)", "Vulnerability Monitoring and Scanning | Privileged Access", "Planned", "System", "see P11", "P11", "",
@@ -530,26 +540,31 @@ add("SC-2", "Separation of System and User Functionality", "Partial", "System", 
     "Dashboard BFF separates UI from API; management/enforcement plane split formalized in P3/P4.")
 add("SC-4", "Information in Shared System Resources", "Planned", "System", "charts/kube-policies/values.yaml", "P5", "",
     "readOnlyRootFilesystem + non-root reduce residual data; formalized in P5.")
-add("SC-5", "Denial-of-Service Protection", "Planned", "System", "see P4", "P4", "",
-    "Rate limiting + resource limits + fail-closed posture in P4/P8.")
+add("SC-5", "Denial-of-Service Protection", "Partial", "System", "internal/middleware/ratelimit.go", "P4", "POAM-027",
+    "P4 delivered: per-replica rate limiting (50 rps/burst 100), max-in-flight + SSE caps (429), 3 MiB body cap (413), kube_policies_http_rate_limited_total metric, bounded MaxConcurrentReconciles. ResourceQuota/LimitRange ship OFF by default. See network-architecture.md sec 5.")
 add("SC-6", "Resource Availability", "Partial", "System", "cmd/admission-webhook/main.go (leader election)", "P8", "",
     "Replicas + leader election aid availability; PDB/anti-affinity/limits in P8.")
-add("SC-7", "Boundary Protection", "Planned", "System", "charts/kube-policies/templates/ (NetworkPolicy, P4)", "P4", "POAM-004",
-    "No NetworkPolicy today; default-deny boundary + scoped flows in P4.")
-add("SC-7(3)", "Boundary Protection | Access Points", "Planned", "System", "see P4", "P4", "POAM-004",
-    "Limit/manage access points via ingress + NetworkPolicy in P4.")
-add("SC-7(4)", "Boundary Protection | External Telecommunications Services", "Planned", "System", "see P4", "P4", "",
-    "Scoped egress (DNS/apiserver only) + traffic agreements in P4.")
-add("SC-7(5)", "Boundary Protection | Deny by Default - Allow by Exception", "Planned", "System",
-    "charts/kube-policies/templates/ (NetworkPolicy, P4)", "P4", "POAM-004",
-    "Default-deny ingress+egress NetworkPolicy with scoped allow in P4.")
-add("SC-7(7)", "Boundary Protection | Split Tunneling for Remote Devices", "Planned", "System", "see P4", "P4", "",
-    "Split-tunnel prevention via egress policy in P4.")
-add("SC-8", "Transmission Confidentiality and Integrity", "Partial", "System", "cmd/admission-webhook/main.go:269-280", "P4", "POAM-003",
-    "Bright spot: webhook serves TLS 1.3 with fixed cipher suites; other planes plaintext - TLS/mTLS in P3/P4.")
+add("SC-7", "Boundary Protection", "Implemented (Helm) - requires enforcing CNI", "System",
+    "charts/kube-policies/templates/networkpolicy-*.yaml; deployments/kubernetes/base/networkpolicy.yaml; docs/compliance/network-architecture.md", "P4", "POAM-007",
+    "P4: default-deny + least-privilege allow-list NetworkPolicies ship (chart + static base). REQUIRES a NetworkPolicy-enforcing CNI (Calico/Cilium/Antrea); inert on kindnet. Live e2e enforcement proof designed, not yet run. Every allowed flow mapped to its template in network-architecture.md (CA-3).")
+add("SC-7(3)", "Boundary Protection | Access Points", "Implemented (Helm) - requires enforcing CNI", "System",
+    "charts/kube-policies/templates/networkpolicy-ingress-*.yaml", "P4", "POAM-007",
+    "P4: per-port managed access points (apiserver->:8443, scraper->metrics, ingress->:8090, webhook/dashboard->:8080), scoped via NetworkPolicy. Requires enforcing CNI.")
+add("SC-7(4)", "Boundary Protection | External Telecommunications Services", "Implemented (Helm) - requires enforcing CNI", "System",
+    "charts/kube-policies/templates/networkpolicy-egress-*.yaml", "P4", "",
+    "P4: scoped deny-by-default egress (kube-dns:53 + operator-set apiserver CIDRs + in-namespace hops only; no 0.0.0.0/0). Requires enforcing CNI. CA-3 flows in network-architecture.md.")
+add("SC-7(5)", "Boundary Protection | Deny by Default - Allow by Exception", "Implemented (Helm) - requires enforcing CNI", "System",
+    "charts/kube-policies/templates/networkpolicy-default-deny.yaml", "P4", "POAM-007",
+    "P4: podSelector:{} default-deny ingress+egress baseline + explicit allow-list. Apiserver-egress/webhook-ingress render fail-closed when CIDRs empty. Requires enforcing CNI.")
+add("SC-7(7)", "Boundary Protection | Split Tunneling for Remote Devices", "Implemented (Helm) - requires enforcing CNI", "System",
+    "charts/kube-policies/templates/networkpolicy-egress-*.yaml", "P4", "",
+    "P4: enumerated egress (no 0.0.0.0/0) prevents split-tunnel/exfil to arbitrary destinations. Requires enforcing CNI.")
+add("SC-8", "Transmission Confidentiality and Integrity", "Partial", "System",
+    "cmd/admission-webhook/main.go; internal/config/tls.go; internal/admission/decision_publisher.go", "P4", "POAM-004",
+    "Webhook TLS 1.3 (ICX-01); P2/P3 added TLS 1.3 on policy-manager API and verified HTTPS (RootCAs, no InsecureSkipVerify) for webhook->PM decisions channel. Dashboard in-pod TLS + metrics-plane authn remain config-gated/off by default (POAM-004 residual).")
 add("SC-8(1)", "Transmission Confidentiality and Integrity | Cryptographic Protection", "Partial", "System",
-    "cmd/admission-webhook/main.go:269-280", "P4", "POAM-003",
-    "Webhook TLS1.3 cryptographic protection present (ICX-01); in-cluster mTLS for ICX-02/04 in P4.")
+    "cmd/admission-webhook/main.go; internal/config/tls.go", "P4", "POAM-003",
+    "Webhook TLS 1.3 cryptographic protection (ICX-01) with optional apiserver mTLS (--require-client-cert default true at binary; chart default false for dev). policy-manager optional API mTLS. Config-gated items off by default.")
 add("SC-10", "Network Disconnect", "Planned", "System", "see P3", "P3", "", "Session/idle disconnect on management plane in P3.")
 add("SC-12", "Cryptographic Key Establishment and Management", "Planned", "System", "charts/kube-policies/templates/admission-webhook-tls.yaml", "P2", "POAM-005",
     "Cert/secret material exists but no lifecycle; PKI key mgmt + rotation in P2.")
@@ -585,7 +600,7 @@ add("SC-39", "Process Isolation", "Partial", "System", "charts/kube-policies/val
 # ---------------------------------------------------------------------------
 add("SI-1", "Policy and Procedures", "Planned", "CSP", "see P12", "P12", "POAM-010", "SI -1 policy authored in P12.")
 add("SI-2", "Flaw Remediation", "Partial", "System", ".github/workflows/ci.yml", "P6", "POAM-008",
-    "Scanning produces signal but no SLA/patch process; flaw-remediation cadence + gating in P6/P11.")
+    "P5: the gating Trivy scan (fixable CRITICAL,HIGH -> build fail; ignore-unfixed=true so unfixed CVEs are reported via SARIF but do not block) blocks merge of newly-introduced flaws, giving a build-time remediation forcing function. RESIDUAL: a documented remediation-SLA / patch cadence and automated remediation-status tracking remain P6/P11 (POAM-008).")
 add("SI-2(2)", "Flaw Remediation | Automated Flaw Remediation Status", "Planned", "System", "see P6", "P6", "POAM-008",
     "Automated remediation-status tracking via scan + POA&M in P6/P11.")
 add("SI-3", "Malicious Code Protection", "Planned", "System", "see P6", "P6", "",
@@ -694,7 +709,13 @@ def build():
     for r in rows:
         assert r["control_id"] not in seen, f"duplicate {r['control_id']}"
         seen.add(r["control_id"])
-        assert r["status"] in valid_status, f"bad status {r['control_id']}={r['status']}"
+        # A status may carry a parenthetical qualifier (e.g.
+        # "Implemented (Helm) - requires enforcing CNI" for the SC-7 NetworkPolicy
+        # controls, which are shipped in the chart but inert without an enforcing
+        # CNI). Validate the base verb before any " (" / " -" qualifier so honest,
+        # caveated statuses are permitted while typos are still rejected.
+        status_base = r["status"].split(" (")[0].split(" -")[0].strip()
+        assert status_base in valid_status, f"bad status {r['control_id']}={r['status']}"
         assert r["responsible_party"] in valid_rp, f"bad rp {r['control_id']}={r['responsible_party']}"
         assert r["status"].strip(), f"blank status {r['control_id']}"
         assert r["responsible_party"].strip(), f"blank rp {r['control_id']}"

@@ -4,6 +4,12 @@ metadata:
   name: kube-policies-monitoring
   labels:
     name: kube-policies-monitoring
+    # CFG-WU-05/06 (CIS 5.2.1 / PSS-Restricted): enforce the restricted Pod
+    # Security Standard on the monitoring namespace. The hardened Prometheus/
+    # Grafana/Alertmanager workloads (CFG-WU-06/07/08) are admissible under it.
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/warn: restricted
 ---
 apiVersion: v1
 kind: ServiceAccount
@@ -271,17 +277,44 @@ spec:
         app: prometheus
     spec:
       serviceAccountName: prometheus
+      # restricted-PSS pod securityContext. prom/prometheus runs as the
+      # "nobody" user (UID/GID 65534) in its upstream image, so we pin to
+      # that non-zero identity and let fsGroup own the writable emptyDir.
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        runAsGroup: 65534
+        fsGroup: 65534
+        seccompProfile:
+          type: RuntimeDefault
       containers:
       - name: prometheus
         image: prom/prometheus:v2.40.0
+        # restricted-PSS container securityContext. readOnlyRootFilesystem is
+        # safe because every path Prometheus writes (TSDB + /tmp) is backed by
+        # an emptyDir mount below.
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          runAsNonRoot: true
+          runAsUser: 65534
+          runAsGroup: 65534
+          capabilities:
+            drop:
+              - ALL
+          seccompProfile:
+            type: RuntimeDefault
         args:
           - '--config.file=/etc/prometheus/prometheus.yml'
           - '--storage.tsdb.path=/prometheus/'
           - '--web.console.libraries=/etc/prometheus/console_libraries'
           - '--web.console.templates=/etc/prometheus/consoles'
           - '--storage.tsdb.retention.time=200h'
+          # --web.enable-lifecycle exposes /-/reload and /-/quit. Kept minimal
+          # (no admin API). Disable it too if you do not reload via HTTP.
           - '--web.enable-lifecycle'
-          - '--web.enable-admin-api'
+          # NOTE: --web.enable-admin-api intentionally removed. It exposes
+          # destructive TSDB endpoints (delete/clean tombstones) with no auth.
         ports:
         - containerPort: 9090
           name: web
@@ -292,6 +325,8 @@ spec:
           mountPath: /etc/prometheus/rules/
         - name: prometheus-storage-volume
           mountPath: /prometheus/
+        - name: tmp-volume
+          mountPath: /tmp
         resources:
           requests:
             cpu: 200m
@@ -320,7 +355,12 @@ spec:
         configMap:
           defaultMode: 420
           name: prometheus-rules
+      # DEMO/Kind-grade storage only. The TSDB and /tmp use ephemeral emptyDir
+      # volumes — data is lost on pod restart. A production deployment must
+      # replace prometheus-storage-volume with a PersistentVolumeClaim.
       - name: prometheus-storage-volume
+        emptyDir: {}
+      - name: tmp-volume
         emptyDir: {}
 ---
 apiVersion: v1
