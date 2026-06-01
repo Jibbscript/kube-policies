@@ -671,16 +671,75 @@ jobs:
         path: report-*.json
         if-no-files-found: ignore
 
+  # GAP 2: actionlint workflow linter — gates on actionlint's own native rules.
+  # shellcheck is intentionally disabled (-shellcheck=) because GitHub-hosted
+  # runners ship shellcheck on PATH and actionlint would otherwise surface 20
+  # pre-existing SC-style nits inside run: blocks (e.g. SC2086 quoting, SC2162
+  # read -r). Those are non-security-critical style items tracked separately;
+  # actionlint's native rules (expression/syntax/permissions validation) are the
+  # gate here and they pass on all workflows.
+  actionlint:
+    name: Actionlint (workflow lint)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      ACTIONLINT_VERSION: '1.7.12'
+      # sha256 of actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz, from the
+      # published checksums.txt of the pinned release. Verified with sha256sum -c.
+      ACTIONLINT_SHA256: '8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8'
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+
+    - name: Install actionlint (pinned, checksum-verified)
+      run: |
+        set -euo pipefail
+        asset="actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+        url="https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/${asset}"
+        curl -fsSL -o "${asset}" "${url}"
+        echo "${ACTIONLINT_SHA256}  ${asset}" | sha256sum -c -
+        tar -xzf "${asset}" actionlint
+        sudo install -m 0755 actionlint /usr/local/bin/actionlint
+        actionlint --version
+
+    - name: Run actionlint (shellcheck disabled — see job comment)
+      run: |
+        set -euo pipefail
+        actionlint -shellcheck= -color
+
+  # GAP 3 / CRY-WU-16: govulncheck — fails the build on known vulnerable deps.
+  govulncheck:
+    name: Govulncheck (vulnerable dependency scan)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+
+    - name: Set up Go
+      uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff  # v5
+      with:
+        go-version: ${{ env.GO_VERSION }}
+        cache-dependency-path: go.sum
+
+    - name: Install govulncheck (pinned)
+      run: go install golang.org/x/vuln/cmd/govulncheck@v1.3.0
+
+    - name: Run govulncheck
+      run: govulncheck ./...
+
   # Aggregate gate — single required check for branch protection.
   ci-gate:
     name: CI Gate
     runs-on: ubuntu-latest
     if: always()
-    needs: [lint, unit-tests, fips-verify, build-images, integration-tests, e2e-kind, e2e-k3s, security-scan, helm-tests, docs-tests, rbac-sa-gate]
+    needs: [lint, unit-tests, fips-verify, build-images, integration-tests, e2e-kind, e2e-k3s, security-scan, helm-tests, docs-tests, rbac-sa-gate, actionlint, govulncheck]
     steps:
     - name: Verify all required jobs succeeded
       run: |
-        results="${{ needs.lint.result }} ${{ needs.unit-tests.result }} ${{ needs.fips-verify.result }} ${{ needs.build-images.result }} ${{ needs.integration-tests.result }} ${{ needs.e2e-kind.result }} ${{ needs.e2e-k3s.result }} ${{ needs.security-scan.result }} ${{ needs.helm-tests.result }} ${{ needs.docs-tests.result }} ${{ needs.rbac-sa-gate.result }}"
+        results="${{ needs.lint.result }} ${{ needs.unit-tests.result }} ${{ needs.fips-verify.result }} ${{ needs.build-images.result }} ${{ needs.integration-tests.result }} ${{ needs.e2e-kind.result }} ${{ needs.e2e-k3s.result }} ${{ needs.security-scan.result }} ${{ needs.helm-tests.result }} ${{ needs.docs-tests.result }} ${{ needs.rbac-sa-gate.result }} ${{ needs.actionlint.result }} ${{ needs.govulncheck.result }}"
         echo "job results: ${results}"
         # shellcheck disable=SC2086
         for r in ${results}; do
