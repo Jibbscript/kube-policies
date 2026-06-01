@@ -2,8 +2,8 @@
 #
 # The CI Trivy steps run with --severity CRITICAL,HIGH --exit-code 1
 # --ignore-unfixed=true --ignorefile .trivyignore, so a CRITICAL/HIGH finding
-# that has a fix available and is NOT listed below FAILS the build (ci.yml job
-# `trivy-gate`, mirrored in release.yml `trivy-gate-release`). A separate
+# that has a fix available and is NOT listed below FAILS the build (the
+# `security-scan` job "Trivy GATE" steps in ci.yml, mirrored in release.yml). A separate
 # SARIF-upload step runs with --exit-code 0 so the GitHub Security tab still
 # populates with the full finding set regardless of suppressions here.
 #
@@ -28,4 +28,4 @@
 # --- ACTIVE SUPPRESSIONS (none) ---
 # Intentionally empty: a clean build must pass the gate with zero suppressions.
 # A seeded HIGH/CRITICAL CVE (e.g. an intentionally vulnerable dependency) will
-# therefore fail the trivy-gate job until it is fixed or justified above.
+# therefore fail the security-scan job until it is fixed or justified above.

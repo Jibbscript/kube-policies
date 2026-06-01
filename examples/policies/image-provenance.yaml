@@ -1,0 +1,100 @@
+apiVersion: policies.kube-policies.io/v1
+kind: Policy
+metadata:
+  name: image-provenance
+  namespace: kube-policies-system
+  labels:
+    category: supply-chain
+    severity: high
+    compliance.framework: nist-800-190
+spec:
+  # SUP-WU-07 (NIST CM-14, SR-4, SR-11; NIST SP 800-190 §4.3): admission-time
+  # image-provenance enforcement. This is the OPERATOR-EDITABLE copy of the
+  # bundled (opt-in, disabled-by-default) image-provenance policy. Set the
+  # registry allowlist below to YOUR trusted registries, then enable it.
+  #
+  # SCOPE: these rules enforce two strong, in-process provenance signals —
+  # images come from an allowlisted registry, and images are pinned by immutable
+  # @sha256: digest. Full CRYPTOGRAPHIC cosign signature verification is handled
+  # by the Sigstore policy-controller ClusterImagePolicy shipped with the chart
+  # (imageVerification.enabled, CFG-WU-15). See docs/policies/image-signing.md.
+  description: "Require images from an allowlisted registry and pinned by immutable digest"
+  enabled: true
+  enforcement: true
+
+  match:
+    - apiGroups: [""]
+      apiVersions: ["v1"]
+      resources: ["pods"]
+
+  namespaceSelector:
+    matchExpressions:
+      - key: name
+        operator: NotIn
+        values: ["kube-system", "kube-public", "kube-node-lease"]
+
+  # Rules — authored against the kube-policies engine contract:
+  #   query:  data.kube_policies.evaluate
+  #   input:  the K8s object lives at input.object.* (see internal/policy.prepareInput)
+  #   output: {"allowed": bool} and, when allowed=false, also {"message": str, "path": str}
+  rules:
+    # 1. Allowed registries — EDIT allowed_registries to match your trust set.
+    - name: allowed-registries
+      severity: HIGH
+      description: "Container images must come from an allowlisted registry"
+      frameworks: ["NIST-800-53", "NIST-800-190", "CIS-1.8.0"]
+      rego: |
+        package kube_policies
+
+        import rego.v1
+
+        default evaluate := {"allowed": true}
+
+        # >>> EDIT ME: the registry prefixes you trust. <<<
+        allowed_registries := {"ghcr.io/jibbscript/"}
+
+        evaluate := {
+          "allowed": false,
+          "message": sprintf("Container image '%s' is not from an allowed registry", [input.object.spec.containers[i].image]),
+          "path": sprintf("spec.containers[%d].image", [i]),
+        } if {
+          indexes := [j |
+            some j
+            container := input.object.spec.containers[j]
+            not registry_allowed(container.image)
+          ]
+          count(indexes) > 0
+          i := indexes[0]
+        }
+
+        registry_allowed(image) if {
+          some prefix in allowed_registries
+          # Case-insensitive (GHCR paths are case-insensitive); normalize first.
+          startswith(lower(image), prefix)
+        }
+
+    # 2. Require immutable digest pinning (@sha256:...).
+    - name: require-image-digest
+      severity: HIGH
+      description: "Container images must be pinned by immutable digest (@sha256:...)"
+      frameworks: ["NIST-800-53", "NIST-800-190", "SLSA"]
+      rego: |
+        package kube_policies
+
+        import rego.v1
+
+        default evaluate := {"allowed": true}
+
+        evaluate := {
+          "allowed": false,
+          "message": sprintf("Container image '%s' must be pinned by immutable digest (@sha256:...) for verifiable provenance", [input.object.spec.containers[i].image]),
+          "path": sprintf("spec.containers[%d].image", [i]),
+        } if {
+          indexes := [j |
+            some j
+            container := input.object.spec.containers[j]
+            not contains(container.image, "@sha256:")
+          ]
+          count(indexes) > 0
+          i := indexes[0]
+        }

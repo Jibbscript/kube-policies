@@ -1,0 +1,38 @@
+{{- /*
+CFG-WU-15 / SUP-WU-07 — admission-time image signature verification.
+Controls: NIST SR-4, SR-11, CM-5, CM-14; SLSA L3; NIST SP 800-190 §4.3.
+
+Renders a Sigstore policy-controller ClusterImagePolicy that requires
+kube-policies images to carry a keyless cosign signature issued to this
+project's GitHub Actions release workflow (the identity produced by
+release.yml's sign-attest-provenance job). This closes the loop on the
+signatures generated at release time: an UNSIGNED or untrusted-identity image
+is rejected (mode: enforce) or audited (mode: warn) before it can run.
+
+PREREQUISITE: the Sigstore policy-controller must be installed in the cluster
+(https://docs.sigstore.dev/policy-controller/installation/). This object is
+inert without it. Disabled by default — opt in via imageVerification.enabled.
+*/ -}}
+{{- if .Values.imageVerification.enabled }}
+apiVersion: policy.sigstore.dev/v1beta1
+kind: ClusterImagePolicy
+metadata:
+  name: {{ include "kube-policies.fullname" . }}-image-signatures
+  labels:
+    {{- include "kube-policies.labels" . | nindent 4 }}
+spec:
+  # Govern only this project's published images so unrelated workloads in the
+  # namespace are not blocked by this policy.
+  images:
+  {{- range .Values.imageVerification.imagePatterns }}
+    - glob: {{ . | quote }}
+  {{- end }}
+  authorities:
+    - keyless:
+        # Public Fulcio root + Rekor transparency log (Sigstore public good).
+        identities:
+          - issuer: {{ .Values.imageVerification.oidcIssuer | quote }}
+            subjectRegExp: {{ .Values.imageVerification.identityRegexp | quote }}
+  # enforce = reject unsigned/untrusted images; warn = admit but audit.
+  mode: {{ .Values.imageVerification.mode | quote }}
+{{- end }}

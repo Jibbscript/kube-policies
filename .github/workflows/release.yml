@@ -92,8 +92,15 @@ jobs:
     outputs:
       hashes: ${{ steps.hash.outputs.hashes }}
     steps:
+    - name: Harden runner
+      uses: step-security/harden-runner@ab7a9404c0f3da075243ca237b5fac12c98deaa5  # v2
+      with:
+        egress-policy: audit
+
     - name: Checkout code
       uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+      with:
+        fetch-depth: 0
 
     - name: Set up Go
       uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff  # v5
@@ -118,17 +125,32 @@ jobs:
         VERSION: ${{ needs.validate-release.outputs.version }}
         GOOS: ${{ matrix.os }}
         GOARCH: ${{ matrix.arch }}
+        EXT: ${{ matrix.os == 'windows' && '.exe' || '' }}
       run: |
+        # SUP-WU-11 (SI-7 / SLSA reproducible builds): make the build a pure
+        # function of (commit, GOOS, GOARCH). The embedded build date is derived
+        # from the commit timestamp (SOURCE_DATE_EPOCH), NOT wall-clock `date`,
+        # so two independent builds of the same commit produce byte-identical
+        # binaries. -trimpath strips machine-specific paths; CGO_ENABLED=0 and a
+        # toolchain pinned to go.mod (GOTOOLCHAIN=local, GO_VERSION) complete the
+        # determinism contract. Verified by scripts/verify-reproducible-build.sh.
+        SOURCE_DATE_EPOCH="$(git log -1 --pretty=%ct)"
+        export SOURCE_DATE_EPOCH
+        BUILD_DATE="$(date -u -d "@${SOURCE_DATE_EPOCH}" +%Y-%m-%dT%H:%M:%SZ)"
+        echo "SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH} BUILD_DATE=${BUILD_DATE}"
+
+        LDFLAGS="-s -w -X main.version=${VERSION} -X main.commit=${GITHUB_SHA} -X main.date=${BUILD_DATE}"
+
         # Build admission webhook
-        CGO_ENABLED=0 go build \
-          -ldflags="-s -w -X main.version=${VERSION} -X main.commit=${GITHUB_SHA} -X main.date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-          -o dist/admission-webhook-${GOOS}-${GOARCH}${{ matrix.os == 'windows' && '.exe' || '' }} \
+        CGO_ENABLED=0 go build -trimpath \
+          -ldflags="${LDFLAGS}" \
+          -o "dist/admission-webhook-${GOOS}-${GOARCH}${EXT}" \
           ./cmd/admission-webhook
 
         # Build policy manager
-        CGO_ENABLED=0 go build \
-          -ldflags="-s -w -X main.version=${VERSION} -X main.commit=${GITHUB_SHA} -X main.date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-          -o dist/policy-manager-${GOOS}-${GOARCH}${{ matrix.os == 'windows' && '.exe' || '' }} \
+        CGO_ENABLED=0 go build -trimpath \
+          -ldflags="${LDFLAGS}" \
+          -o "dist/policy-manager-${GOOS}-${GOARCH}${EXT}" \
           ./cmd/policy-manager
 
     - name: Generate checksums
@@ -156,6 +178,14 @@ jobs:
       admission-webhook-digest: ${{ steps.build-webhook.outputs.digest }}
       policy-manager-digest: ${{ steps.build-manager.outputs.digest }}
     steps:
+    # SUP-WU-18 (SC-7 / SLSA L3 isolated build): monitor build-job egress. Start
+    # in audit mode so the documented allowlist (docs/supply-chain/build-hardening.md)
+    # can be observed before flipping to block; never silently exfiltrate.
+    - name: Harden runner
+      uses: step-security/harden-runner@ab7a9404c0f3da075243ca237b5fac12c98deaa5  # v2
+      with:
+        egress-policy: audit
+
     - name: Checkout code
       uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
 
@@ -196,6 +226,12 @@ jobs:
           DATE=${{ github.event.head_commit.timestamp }}
         cache-from: type=gha
         cache-to: type=gha,mode=max
+        # SUP-WU-08 (SI-7/SR-4): emit OCI-native, max-detail buildkit provenance
+        # and an SBOM attestation alongside the image. These complement (do not
+        # replace) the cosign-signed SLSA provenance + SPDX SBOM attestations that
+        # the sign-attest-provenance job records in Rekor by digest.
+        provenance: mode=max
+        sbom: true
 
     - name: Extract metadata for policy manager
       id: meta-manager
@@ -224,6 +260,9 @@ jobs:
           DATE=${{ github.event.head_commit.timestamp }}
         cache-from: type=gha
         cache-to: type=gha,mode=max
+        # SUP-WU-08 (SI-7/SR-4): OCI-native buildkit provenance + SBOM attestation.
+        provenance: mode=max
+        sbom: true
 
   # Package Helm chart
   package-helm:
@@ -264,25 +303,36 @@ jobs:
         path: dist/
 
   # Generate SBOM
+  #
+  # SUP-WU-05 (SR-3/SR-4/CM-14): SBOMs are generated against IMMUTABLE DIGESTS
+  # (not the mutable tag) so they describe exactly the artifact that was built.
+  # The loose SPDX-JSON is uploaded for release-asset convenience; the
+  # AUTHORITATIVE, cryptographically-bound SBOM is the cosign attestation created
+  # by the sign-attest-provenance job (cosign attest --type spdxjson, by digest).
   generate-sbom:
     name: Generate SBOM
     runs-on: ubuntu-latest
     needs: [validate-release, build-images]
     steps:
+    - name: Harden runner
+      uses: step-security/harden-runner@ab7a9404c0f3da075243ca237b5fac12c98deaa5  # v2
+      with:
+        egress-policy: audit
+
     - name: Checkout code
       uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
 
-    - name: Generate SBOM for admission webhook
+    - name: Generate SBOM for admission webhook (by digest)
       uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610  # v0.24.0
       with:
-        image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/admission-webhook:${{ needs.validate-release.outputs.version }}
+        image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/admission-webhook@${{ needs.build-images.outputs.admission-webhook-digest }}
         format: spdx-json
         output-file: admission-webhook-sbom.spdx.json
 
-    - name: Generate SBOM for policy manager
+    - name: Generate SBOM for policy manager (by digest)
       uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610  # v0.24.0
       with:
-        image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/policy-manager:${{ needs.validate-release.outputs.version }}
+        image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/policy-manager@${{ needs.build-images.outputs.policy-manager-digest }}
         format: spdx-json
         output-file: policy-manager-sbom.spdx.json
 
@@ -303,6 +353,15 @@ jobs:
       contents: read
       security-events: write
     steps:
+    # SUP-WU-10 (RA-5/SI-2): scan the EXACT built artifacts by immutable digest,
+    # not the mutable tag. The gating pass below fails the release on a fixable
+    # CRITICAL/HIGH, and sign-attest-provenance `needs` this job, so a vulnerable
+    # image can never be signed or published.
+    - name: Harden runner
+      uses: step-security/harden-runner@ab7a9404c0f3da075243ca237b5fac12c98deaa5  # v2
+      with:
+        egress-policy: audit
+
     # --- SARIF-upload pass (CFG-WU-11): non-gating (exit-code 0) so the GitHub
     # Security tab populates with the full finding set on every release. ---
     - name: Checkout code (for .trivyignore)
@@ -311,7 +370,7 @@ jobs:
     - name: Run Trivy vulnerability scanner on admission webhook (SARIF)
       uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # v0.36.0
       with:
-        image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/admission-webhook:${{ needs.validate-release.outputs.version }}
+        image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/admission-webhook@${{ needs.build-images.outputs.admission-webhook-digest }}
         format: 'sarif'
         output: 'trivy-webhook-release.sarif'
         exit-code: '0'
@@ -319,7 +378,7 @@ jobs:
     - name: Run Trivy vulnerability scanner on policy manager (SARIF)
       uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # v0.36.0
       with:
-        image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/policy-manager:${{ needs.validate-release.outputs.version }}
+        image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/policy-manager@${{ needs.build-images.outputs.policy-manager-digest }}
         format: 'sarif'
         output: 'trivy-manager-release.sarif'
         exit-code: '0'
@@ -339,7 +398,7 @@ jobs:
     - name: Trivy GATE — admission webhook image (CRITICAL,HIGH; fail release)
       uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # v0.36.0
       with:
-        image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/admission-webhook:${{ needs.validate-release.outputs.version }}
+        image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/admission-webhook@${{ needs.build-images.outputs.admission-webhook-digest }}
         format: 'table'
         severity: 'CRITICAL,HIGH'
         ignore-unfixed: true
@@ -349,24 +408,57 @@ jobs:
     - name: Trivy GATE — policy manager image (CRITICAL,HIGH; fail release)
       uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # v0.36.0
       with:
-        image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/policy-manager:${{ needs.validate-release.outputs.version }}
+        image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/policy-manager@${{ needs.build-images.outputs.policy-manager-digest }}
         format: 'table'
         severity: 'CRITICAL,HIGH'
         ignore-unfixed: true
         trivyignores: '.trivyignore'
         exit-code: '1'
 
-  # Sign release artifacts
-  sign-artifacts:
-    name: Sign Release Artifacts
+  # Sign images, attest SBOMs, generate SLSA provenance, sign blobs — all by
+  # IMMUTABLE DIGEST, keyless via workflow OIDC. This job is the supply-chain
+  # trust anchor and is a HARD GATE on the release:
+  #   - SUP-WU-06 (SR-4/SR-11/SI-7): cosign signs the image @sha256: digest (not
+  #     the mutable tag); no COSIGN_EXPERIMENTAL, no static private key.
+  #   - SUP-WU-05 (SR-3/CM-14): cosign attests the SPDX SBOM to each image digest
+  #     so the SBOM is cryptographically bound and recorded in Rekor.
+  #   - SUP-WU-04 / CFG-WU-14 / SDL-WU-28 (SLSA L3): signed in-toto SLSA provenance
+  #     per image digest via actions/attest-build-provenance (Fulcio cert + Rekor).
+  #   - SUP-WU-14 (SR-4/CM-14): keyless sign-blob over the Helm chart, binaries and
+  #     checksum manifests, emitting a .sig + .pem cert bundle for offline verify.
+  #   - SUP-WU-10 gate: `needs: security-scan`, so a vulnerable image is NEVER
+  #     signed/attested/published; and create-release `needs` this job, so a
+  #     signing/attestation FAILURE fails the release (no `if: always()` here).
+  sign-attest-provenance:
+    name: Sign, Attest & Provenance
     runs-on: ubuntu-latest
-    needs: [validate-release, build-release, build-images, package-helm]
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+    needs: [validate-release, build-release, build-images, package-helm, generate-sbom, security-scan]
+    # Only sign on a real version TAG push. Keyless Fulcio mints a certificate
+    # whose SAN is the workflow ref; signing on a branch (e.g. a workflow_dispatch
+    # run from main) would produce a `@refs/heads/...` identity that FAILS the
+    # documented verification regexp (`...release.yml@refs/tags/v.*`). Tag-gating
+    # keeps every published signature verifiable. create-release is likewise
+    # tag-gated, so a dispatch run builds+scans but never publishes an unsigned
+    # release.
+    if: startsWith(github.ref, 'refs/tags/v')
     permissions:
       contents: read
       packages: write
-      id-token: write
+      id-token: write        # keyless OIDC signing + provenance
+      attestations: write     # actions/attest-build-provenance
+    env:
+      # Built from non-untrusted contexts (github.repository, build digests) and
+      # passed to run: blocks via env to avoid ${{ }} interpolation in shell.
+      WEBHOOK_IMG: ghcr.io/${{ github.repository }}/admission-webhook
+      MANAGER_IMG: ghcr.io/${{ github.repository }}/policy-manager
+      WEBHOOK_DIGEST: ${{ needs.build-images.outputs.admission-webhook-digest }}
+      MANAGER_DIGEST: ${{ needs.build-images.outputs.policy-manager-digest }}
     steps:
+    - name: Harden runner
+      uses: step-security/harden-runner@ab7a9404c0f3da075243ca237b5fac12c98deaa5  # v2
+      with:
+        egress-policy: audit
+
     - name: Install Cosign
       uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac  # v3
 
@@ -377,43 +469,89 @@ jobs:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
 
-    - name: Sign container images
-      env:
-        COSIGN_EXPERIMENTAL: 1
+    - name: Sign container images by digest (keyless OIDC)
       run: |
-        cosign sign --yes ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/admission-webhook:${{ needs.validate-release.outputs.version }}
-        cosign sign --yes ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/policy-manager:${{ needs.validate-release.outputs.version }}
+        set -euo pipefail
+        cosign sign --yes "${WEBHOOK_IMG}@${WEBHOOK_DIGEST}"
+        cosign sign --yes "${MANAGER_IMG}@${MANAGER_DIGEST}"
 
-    - name: Download all artifacts
+    - name: Download SBOM artifacts
       uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4
+      with:
+        name: sbom
+        path: sbom
 
-    - name: Sign binary artifacts
-      env:
-        COSIGN_EXPERIMENTAL: 1
+    - name: Attest SBOMs to image digests (cosign attest --type spdxjson)
       run: |
-        # Sign all binary artifacts
-        find . -name "*.exe" -o -name "admission-webhook-*" -o -name "policy-manager-*" | grep -v ".exe" | while read file; do
-          cosign sign-blob --yes "${file}" --output-signature "${file}.sig"
-        done
-        
-        # Sign Helm chart
-        find . -name "*.tgz" | while read file; do
-          cosign sign-blob --yes "${file}" --output-signature "${file}.sig"
+        set -euo pipefail
+        cosign attest --yes --type spdxjson \
+          --predicate sbom/admission-webhook-sbom.spdx.json \
+          "${WEBHOOK_IMG}@${WEBHOOK_DIGEST}"
+        cosign attest --yes --type spdxjson \
+          --predicate sbom/policy-manager-sbom.spdx.json \
+          "${MANAGER_IMG}@${MANAGER_DIGEST}"
+
+    - name: Generate SLSA provenance attestation — admission webhook
+      uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be  # v2
+      with:
+        subject-name: ${{ env.WEBHOOK_IMG }}
+        subject-digest: ${{ env.WEBHOOK_DIGEST }}
+        push-to-registry: true
+
+    - name: Generate SLSA provenance attestation — policy manager
+      uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be  # v2
+      with:
+        subject-name: ${{ env.MANAGER_IMG }}
+        subject-digest: ${{ env.MANAGER_DIGEST }}
+        push-to-registry: true
+
+    - name: Download binary & chart artifacts
+      uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4
+      with:
+        path: artifacts
+
+    - name: Sign binaries, checksums & Helm chart (keyless sign-blob)
+      run: |
+        set -euo pipefail
+        # Keyless cosign signature + Fulcio cert bundle per artifact so consumers
+        # can verify provenance against the documented OIDC identity (SUP-WU-14/15).
+        find artifacts -type f \
+          \( -name 'admission-webhook-*' -o -name 'policy-manager-*' -o -name '*.tgz' -o -name '*checksums.txt' \) \
+          ! -name '*.sig' ! -name '*.pem' -print | while read -r f; do
+          cosign sign-blob --yes \
+            --output-signature "${f}.sig" \
+            --output-certificate "${f}.pem" \
+            "${f}"
         done
 
-    - name: Upload signed artifacts
+    - name: Generate SLSA provenance attestation — release binaries
+      # SDL-WU-28 (SLSA L3): SLSA provenance also covers the loose binary
+      # artifacts, not only the container images. Stored in the GitHub
+      # attestations API; verifiable with `gh attestation verify <binary>`.
+      uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be  # v2
+      with:
+        subject-path: |
+          artifacts/binaries-*/admission-webhook-*
+          artifacts/binaries-*/policy-manager-*
+
+    - name: Upload signed blob artifacts
       uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
       with:
         name: signed-artifacts
         path: |
-          **/*.sig
+          artifacts/**/*.sig
+          artifacts/**/*.pem
 
   # Create GitHub release
   create-release:
     name: Create GitHub Release
     runs-on: ubuntu-latest
-    needs: [validate-release, build-release, build-images, package-helm, generate-sbom, security-scan]
-    if: always() && !failure() && !cancelled()
+    needs: [validate-release, build-release, build-images, package-helm, generate-sbom, security-scan, sign-attest-provenance]
+    # Publish only on a version tag, and only when nothing failed — so signing
+    # (sign-attest-provenance, a hard `needs`) must succeed before any release is
+    # created. A workflow_dispatch run from a branch builds and scans but never
+    # publishes.
+    if: always() && startsWith(github.ref, 'refs/tags/v') && !failure() && !cancelled()
     permissions:
       contents: write
     steps:
@@ -443,10 +581,15 @@ jobs:
         fi
         
         echo "" >> release-notes.md
-        echo "## Container Images" >> release-notes.md
+        echo "## Container Images (pinned by digest)" >> release-notes.md
         echo "" >> release-notes.md
-        echo "- \`${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/admission-webhook:${VERSION}\`" >> release-notes.md
-        echo "- \`${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/policy-manager:${VERSION}\`" >> release-notes.md
+        echo "- \`${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/admission-webhook@${{ needs.build-images.outputs.admission-webhook-digest }}\`" >> release-notes.md
+        echo "- \`${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/policy-manager@${{ needs.build-images.outputs.policy-manager-digest }}\`" >> release-notes.md
+        echo "" >> release-notes.md
+        echo "## Verifying this release" >> release-notes.md
+        echo "" >> release-notes.md
+        echo "All images are keyless-signed and carry SLSA provenance + SPDX SBOM attestations bound to the digests above." >> release-notes.md
+        echo "Run \`scripts/verify-release.sh ${VERSION}\` or follow [docs/supply-chain/verification.md](https://github.com/${{ github.repository }}/blob/${VERSION}/docs/supply-chain/verification.md)." >> release-notes.md
         echo "" >> release-notes.md
         echo "## Installation" >> release-notes.md
         echo "" >> release-notes.md
@@ -473,8 +616,9 @@ jobs:
         # Copy SBOM files
         find . -name "*-sbom.spdx.json" -exec cp {} release-assets/ \;
         
-        # Copy signatures if they exist
+        # Copy keyless signatures + Fulcio certificate bundles (SUP-WU-14/15)
         find . -name "*.sig" -exec cp {} release-assets/ \; 2>/dev/null || true
+        find . -name "*.pem" -exec cp {} release-assets/ \; 2>/dev/null || true
 
     - name: Create release
       uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65  # v2

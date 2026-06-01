@@ -630,7 +630,113 @@ missing_required_sc(c) if c.securityContext.allowPrivilegeEscalation == true
 		e.policies[policy.ID] = policy
 	}
 
+	// SUP-WU-07 / CFG-WU-15: register the opt-in image-provenance policy. It is
+	// DISABLED BY DEFAULT so it never breaks existing deployments; operators
+	// enable it (or load examples/policies/image-provenance.yaml with their own
+	// registry allowlist) once images are published and digest-pinned.
+	ip := imageProvenancePolicy()
+	e.policies[ip.ID] = ip
+
 	return nil
+}
+
+// imageProvenancePolicy returns the bundled, opt-in supply-chain admission
+// policy (SUP-WU-07, NIST CM-14/SR-4/SR-11, NIST SP 800-190 §4.3).
+//
+// It enforces two strong, in-process provenance signals at admission time:
+//  1. allowed-registries     — images must come from an allowlisted registry.
+//  2. require-image-digest   — images must be pinned by an immutable @sha256:
+//     digest (a mutable tag is not verifiable provenance).
+//
+// Full CRYPTOGRAPHIC cosign signature verification is intentionally NOT done on
+// the synchronous admission hot path; it is delegated to the Sigstore
+// policy-controller / Kyverno verifyImages policy shipped with the chart
+// (CFG-WU-15, charts/kube-policies/templates/image-verification-policy.yaml).
+// See docs/policies/image-signing.md. Like the sibling bundled rules, these
+// evaluate a Pod spec (spec.containers); workload-controller template traversal
+// is tracked separately in P10.
+func imageProvenancePolicy() *Policy {
+	now := time.Now()
+	return &Policy{
+		ID:          "image-provenance",
+		Name:        "Image Provenance",
+		Description: "Require images from an allowlisted registry and pinned by immutable digest",
+		Version:     "1.0.0",
+		Enabled:     false, // opt-in; see CFG-WU-15 / docs/policies/image-signing.md
+		Rules: []Rule{
+			{
+				ID:          "allowed-registries",
+				Name:        "Allowed Registries",
+				Description: "Container images must come from an allowlisted registry",
+				Severity:    "HIGH",
+				Category:    "SupplyChain",
+				Frameworks:  []string{"NIST-800-53", "NIST-800-190", "CIS-1.8.0"},
+				Rego: `package kube_policies
+
+import rego.v1
+
+default evaluate := {"allowed": true}
+
+# Allowlisted registry prefixes. Operators override this set in their own copy
+# of the policy (examples/policies/image-provenance.yaml) to match the registries
+# they trust. Defaults to this project's own published registry.
+allowed_registries := {"ghcr.io/jibbscript/"}
+
+evaluate := {
+	"allowed": false,
+	"message": sprintf("Container image '%s' is not from an allowed registry", [input.object.spec.containers[i].image]),
+	"path": sprintf("spec.containers[%d].image", [i]),
+} if {
+	indexes := [j |
+		some j
+		container := input.object.spec.containers[j]
+		not registry_allowed(container.image)
+	]
+	count(indexes) > 0
+	i := indexes[0]
+}
+
+registry_allowed(image) if {
+	some prefix in allowed_registries
+	# Case-insensitive: registry/repository paths are case-insensitive on GHCR,
+	# so normalize before matching the lowercase allowlist prefixes (otherwise
+	# ghcr.io/Jibbscript/... would be falsely denied against ghcr.io/jibbscript/).
+	startswith(lower(image), prefix)
+}
+`,
+			},
+			{
+				ID:          "require-image-digest",
+				Name:        "Require Image Digest",
+				Description: "Container images must be pinned by immutable digest (@sha256:...)",
+				Severity:    "HIGH",
+				Category:    "SupplyChain",
+				Frameworks:  []string{"NIST-800-53", "NIST-800-190", "SLSA"},
+				Rego: `package kube_policies
+
+import rego.v1
+
+default evaluate := {"allowed": true}
+
+evaluate := {
+	"allowed": false,
+	"message": sprintf("Container image '%s' must be pinned by immutable digest (@sha256:...) for verifiable provenance", [input.object.spec.containers[i].image]),
+	"path": sprintf("spec.containers[%d].image", [i]),
+} if {
+	indexes := [j |
+		some j
+		container := input.object.spec.containers[j]
+		not contains(container.image, "@sha256:")
+	]
+	count(indexes) > 0
+	i := indexes[0]
+}
+`,
+			},
+		},
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
 }
 
 // LoadPolicy loads a policy into the engine. Any cached prepared queries for

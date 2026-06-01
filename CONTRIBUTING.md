@@ -16,7 +16,7 @@ Thank you for your interest in contributing to Kube-Policies! This document prov
 
 ## Code of Conduct
 
-This project adheres to the [CNCF Code of Conduct](https://github.com/cncf/foundation/blob/master/code-of-conduct.md). By participating, you are expected to uphold this code. Please report unacceptable behavior to conduct@kube-policies.io.
+This project adheres to the [CNCF Code of Conduct](https://github.com/cncf/foundation/blob/main/code-of-conduct.md). By participating, you are expected to uphold this code. The project's full Code of Conduct — including scope, reporting instructions, and enforcement process — is in [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md). To report unacceptable behavior, follow the instructions there (`conduct@kube-policies.io` is the designated contact, currently a placeholder — see that file for the interim reporting path).
 
 ## Getting Started
 
@@ -424,12 +424,16 @@ if err := authenticateUser(token); err != nil {
 
 ### Reporting Security Issues
 
-If you discover a security vulnerability:
+If you discover a security vulnerability, follow the coordinated disclosure
+process in [SECURITY.md](SECURITY.md). That file is the single authoritative
+source for reporting channels, response SLAs, and embargo policy. In
+particular:
 
-1. **Do not create a public issue**
-2. **Email security@kube-policies.io** with details
-3. **Include steps to reproduce** if applicable
-4. **Wait for acknowledgment** before public disclosure
+- **Do not open a public GitHub issue, pull request, or discussion.**
+- Use GitHub private vulnerability reporting (preferred) or the email channel
+  described in SECURITY.md.
+- Include the information listed under "What to include" in SECURITY.md to
+  help us triage quickly.
 
 ## Community and Communication
 

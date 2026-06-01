@@ -116,7 +116,7 @@ audit tamper-evidence on `emptyDir` storage (AU-9), and the untrustworthy CI Go-
 | POAM-012 | AU-6 | High | Moderate | P7 | 2026-11-30 | No SIEM forwarding / audit reduction |
 | POAM-013 | AU-3 | Moderate | Moderate | P7 | 2026-11-30 | Incomplete audit source/identity attribution |
 | POAM-014 | SA-11 | Critical | High | P1 | 2026-07-15 | Untrustworthy CI from Go-version skew |
-| POAM-015 | SR-4 | High | High | P6 | 2026-11-15 | Signing theater — no OIDC, no SLSA provenance |
+| POAM-015 | SR-4 | High | High | P6 | 2026-11-15 | Signing theater — no OIDC, no SLSA provenance (P6: keyless cosign OIDC signing BY DIGEST + SPDX SBOM attestation + SLSA provenance (actions/attest-build-provenance) implemented in release.yml, gated behind the Trivy scan; reproducible builds verified locally (identical SHA256); live attestation verification pending the first signed tag — Open) |
 | POAM-016 | CP-9 | High | Moderate | P8 | 2026-12-15 | No automated/verified backup of policy state |
 | POAM-017 | CP-10 | High | Moderate | P8 | 2026-12-15 | No DR/HA for the fail-closed gatekeeper |
 | POAM-018 | PS-2 | High | Moderate | P0 | 2026-06-30 | ATO roles unassigned (System Owner/ISSO/AO) |
@@ -134,9 +134,9 @@ audit tamper-evidence on `emptyDir` storage (AU-9), and the untrustworthy CI Go-
 | POAM-030 | SI-4 | High | Moderate | P9 | 2026-12-31 | No detection/monitoring safety net |
 | POAM-031 | IR-8 | High | Moderate | P9 | 2026-12-31 | No Incident Response Plan or runbooks |
 | POAM-032 | CA-7 | Moderate | Low | P9 | 2026-12-31 | No continuous-monitoring strategy / SLOs |
-| POAM-033 | SR-3 | Moderate | Moderate | P6 | 2026-11-15 | Supply-chain governance gaps (SECURITY.md, SCRM) |
+| POAM-033 | SR-3 | Moderate | Moderate | P6 | 2026-11-15 | Supply-chain governance gaps (SECURITY.md, SCRM) (P6: SCRM plan + build threat model + SR-1 policy/procedures + supply-chain control narrative + consumer verification guide + Dependabot (gomod/npm/docker/actions) committed; SECURITY.md present; governance files (CODEOWNERS/GOVERNANCE/MAINTAINERS/CoC) added — substantially remediated; @kube-policies.io contacts remain placeholders — Open) |
 | POAM-034 | SA-15 | Moderate | Moderate | P11 | 2026-12-31 | No secure-SDLC quality gates |
-| POAM-035 | CM-14 | High | Moderate | P6 | 2026-11-15 | No admission-time image signature verification |
+| POAM-035 | CM-14 | High | Moderate | P6 | 2026-11-15 | No admission-time image signature verification (P6: opt-in image-provenance webhook policy [allowed-registries + require-digest, unit-tested] + chart Sigstore ClusterImagePolicy [imageVerification.enabled, default off] implemented; cryptographic verification requires Sigstore policy-controller install; in-cluster enforce-mode proof pending — Open) |
 | POAM-036 | AC-12 | Low | Low | P3 | 2026-09-15 | No dashboard session management |
 | POAM-037 | CM-8 | Moderate | Low | P10 | 2026-10-31 | No customer-posture inventory enforcement |
 | POAM-038 | AU-7 | Low | Low | P7 | 2026-11-30 | No audit reduction/report generation |

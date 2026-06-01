@@ -1,0 +1,63 @@
+# Dependabot configuration — SUP-WU-12 / SDL-WU-18
+# Controls: NIST RA-5, SI-2, SR-3, SA-22, SA-15(7); NIST SP 800-218 PW.4
+#
+# Automated, auditable dependency-update PRs across every ecosystem the project
+# ships. This is what keeps the SHA-pinned GitHub Actions (SUP-WU-02) and the
+# digest-pinned container base images (SUP-WU-03 / CFG-WU-09) CURRENT instead of
+# silently rotting — Dependabot rewrites the pin and preserves the pinned form.
+version: 2
+updates:
+  # Go modules (root). Security updates land immediately; version bumps weekly.
+  - package-ecosystem: "gomod"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 10
+    labels: ["dependencies", "go"]
+    commit-message:
+      prefix: "deps(go)"
+    groups:
+      go-minor-patch:
+        update-types: ["minor", "patch"]
+
+  # Dashboard SPA / BFF (web/). npm ecosystem.
+  - package-ecosystem: "npm"
+    directory: "/web"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 10
+    labels: ["dependencies", "javascript"]
+    commit-message:
+      prefix: "deps(npm)"
+    groups:
+      npm-minor-patch:
+        update-types: ["minor", "patch"]
+
+  # Container base images. Dependabot updates the FROM ... @sha256 pins in the
+  # build Dockerfiles, preserving digest pinning (CFG-WU-09 / SUP-WU-03).
+  - package-ecosystem: "docker"
+    directory: "/build/docker"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
+    labels: ["dependencies", "docker"]
+    commit-message:
+      prefix: "deps(docker)"
+
+  # GitHub Actions. Keeps the 40-char SHA pins (SUP-WU-02 / SDL-WU-07) current;
+  # Dependabot rewrites the SHA and the trailing version comment together.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 10
+    labels: ["dependencies", "ci", "github-actions"]
+    commit-message:
+      prefix: "deps(actions)"
+    groups:
+      actions-all:
+        patterns: ["*"]

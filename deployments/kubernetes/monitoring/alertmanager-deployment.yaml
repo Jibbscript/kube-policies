@@ -50,7 +50,9 @@ spec:
           type: RuntimeDefault
       containers:
       - name: alertmanager
-        image: prom/alertmanager:v0.25.0
+        # SUP-WU-09 (CM-2/SI-7): pinned by immutable digest (tag kept for
+        # readability). Demo-grade manifest; currency reviewed manually.
+        image: prom/alertmanager:v0.25.0@sha256:fd4d9a3dd1fd0125108417be21be917f19cc76262347086509a0d43f29b80e98
         # restricted-PSS container securityContext. readOnlyRootFilesystem is
         # safe because every path Alertmanager writes (storage + /tmp) is
         # backed by an emptyDir mount below.

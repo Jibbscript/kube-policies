@@ -350,6 +350,7 @@ scripts/               Test, certificate, logger, and manifest validation tools
 - [Changelog](CHANGELOG.md)
 - [Dashboard README](web/README.md)
 - [Demo verification scripts](demo/verify/)
+- [Supply-chain release verification](docs/supply-chain/verification.md) — verify image signatures, SBOM/SLSA attestations, and signed binaries/chart before deploying (`scripts/verify-release.sh <version>`); see also [image signing & admission enforcement](docs/policies/image-signing.md) and the [supply-chain control narrative](docs/compliance/supply-chain.md)
 - [Compliance evidence package](docs/compliance/README.md) — including the [IAM control narrative](docs/compliance/iam-control-narrative.md) (AC/IA), the [Access Control policy](docs/compliance/policies/AC-policy.md), and the [audit access-control model](docs/audit/access-control.md)
 
 ## Acknowledgments

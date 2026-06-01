@@ -61,7 +61,13 @@ spec:
               topologyKey: kubernetes.io/hostname
       containers:
       - name: admission-webhook
-        image: ghcr.io/enterprise/admission-webhook:v1.0.0
+        # SUP-WU-09 (CM-2/SI-7): real published repository (the prior
+        # ghcr.io/enterprise/admission-webhook:v1.0.0 was a placeholder). This
+        # raw base is a reference manifest; the SUPPORTED, digest-pinned install
+        # path is the Helm chart (set admissionWebhook.image.digest to render
+        # repository@sha256:...). Replace the tag with @sha256:<digest> from the
+        # release before applying this base directly in production.
+        image: ghcr.io/jibbscript/kube-policies/admission-webhook:1.0.0
         imagePullPolicy: IfNotPresent
         ports:
         - name: webhook

@@ -231,7 +231,9 @@ spec:
           type: RuntimeDefault
       containers:
         - name: grafana
-          image: grafana/grafana:9.3.0
+          # SUP-WU-09 (CM-2/SI-7): pinned by immutable digest (tag kept for
+          # readability). Demo-grade manifest; currency reviewed manually.
+          image: grafana/grafana:9.3.0@sha256:659b34a5918d7ae6c2471e6141e03a985e508659bd58535263adf3170f7d15f8
           imagePullPolicy: IfNotPresent
           # restricted-PSS container securityContext. readOnlyRootFilesystem is
           # safe because Grafana's writable paths (/var/lib/grafana and /tmp)

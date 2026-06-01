@@ -1,0 +1,41 @@
+# CODEOWNERS — Kube-Policies
+#
+# Each line is a path pattern followed by one or more owner handles.
+# The last matching pattern wins.
+#
+# Current ownership model: single-maintainer PoC.
+# All entries use @Jibbscript until the project establishes a GitHub
+# organisation with team handles (e.g. @org/maintainers, @org/security).
+# Replace placeholder handles before any multi-contributor launch.
+#
+# Reference: https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners
+
+# Default: every path requires maintainer review unless overridden below.
+*                                   @Jibbscript
+
+# Compliance and security documentation — maintainer review required.
+/docs/compliance/**                 @Jibbscript
+/docs/security/**                   @Jibbscript
+/SECURITY.md                        @Jibbscript
+/CODE_OF_CONDUCT.md                 @Jibbscript
+/GOVERNANCE.md                      @Jibbscript
+/MAINTAINERS.md                     @Jibbscript
+
+# Internal/private packages — elevated scrutiny.
+/internal/**                        @Jibbscript
+
+# CI/CD pipeline — changes here affect the entire supply chain.
+/.github/workflows/**               @Jibbscript
+/.github/dependabot.yml             @Jibbscript
+
+# Helm charts — policy and admission-control logic shipped to clusters.
+/charts/**                          @Jibbscript
+
+# Container build files — image provenance and supply-chain integrity.
+/build/docker/**                    @Jibbscript
+
+# Vulnerability and dependency exceptions — require explicit justification.
+/.trivyignore                       @Jibbscript
+
+# Build and release scripts.
+/scripts/**                         @Jibbscript
