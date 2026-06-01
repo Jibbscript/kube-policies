@@ -1,3 +1,4 @@
+{{- include "kube-policies.validateValues" . -}}
 {{- if .Values.policyManager.enabled }}
 {{- if and .Values.policyManager.tls.mtls.enabled (not .Values.certManager.enabled) }}
 {{- fail "policyManager.tls.mtls.enabled=true requires certManager.enabled=true: demo self-signed certs cannot establish a shared client-CA trust chain for the webhook/dashboard -> policy-manager mTLS path (IAM-WU-03). Enable cert-manager or disable policyManager.tls.mtls." }}
@@ -81,12 +82,32 @@ spec:
               valueFrom:
                 fieldRef:
                   fieldPath: metadata.namespace
+            {{- if eq (include "kube-policies.internalAuthMode" .) "tokenreview" }}
+            # Validate the inbound webhook token via the Kubernetes TokenReview
+            # API, bound to this audience AND subject (IAM-WU-11). Subject pinning
+            # ties acceptance to the webhook's specific SA identity, preventing any
+            # other SA that happens to obtain the same audience token from passing
+            # (AU-2/AU-3). The PM calls TokenReview with its already-automounted
+            # apiserver SA token — no extra volume.
+            - name: POLICY_MANAGER_INTERNAL_AUTH_MODE
+              value: "tokenreview"
+            - name: POLICY_MANAGER_INTERNAL_AUDIENCE
+              value: {{ include "kube-policies.internalAuthAudience" . | quote }}
+            - name: POLICY_MANAGER_INTERNAL_SUBJECT
+              value: "system:serviceaccount:{{ .Release.Namespace }}:{{ include "kube-policies.webhookServiceAccountName" . }}"
+            {{- else }}
+            # Static shared bearer token (IAM-WU-11 escape hatch, mode=static
+            # only). The binary defaults to tokenreview, so mode=static must be
+            # set explicitly here for the PM to consult this token.
+            - name: POLICY_MANAGER_INTERNAL_AUTH_MODE
+              value: "static"
             - name: POLICY_MANAGER_INTERNAL_TOKEN
               valueFrom:
                 secretKeyRef:
                   name: {{ include "kube-policies.fullname" . }}-internal-token
                   key: token
                   optional: true
+            {{- end }}
           # Probes target the plain-HTTP metrics port (9091) where /healthz and
           # /readyz are mounted (NewMetricsRouter). The :8080 API now serves
           # TLS (CRY-WU-05), so an HTTP probe against it would fail the

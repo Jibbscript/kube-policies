@@ -84,10 +84,11 @@ func NewAPIRouter(m *Manager, authCfg config.AuthConfig, rbacCfg config.RBACConf
 	// Decisions machine-plane (M2): the live-ticker ingest/stream/recent
 	// endpoints. This group is intentionally NOT wrapped by the OIDC middleware
 	// — it is a service-to-service plane, not a human one. /decisions/internal
-	// keeps its own constant-time symmetric internal-token auth
-	// (CRY-WU-13, IAM-WU-07); stream/recent are read-only ticker feeds.
-	// Hardening of the inter-service authn for this plane (projected ServiceAccount
-	// tokens) is tracked separately in IAM-WU-11.
+	// authenticates the webhook via an audience-bound projected ServiceAccount
+	// token validated through the Kubernetes TokenReview API (IAM-WU-11), with
+	// the constant-time symmetric internal-token verifier (CRY-WU-13, IAM-WU-07)
+	// retained as an opt-in static fallback for non-cluster/demo deployments.
+	// stream/recent are read-only ticker feeds.
 	decisions := router.Group("/api/v1")
 	{
 		decisions.POST("/decisions/internal", m.IngestInternal)

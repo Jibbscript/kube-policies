@@ -74,6 +74,14 @@ var (
 	policyManagerClientCertPath = flag.String("policy-manager-client-cert-path", "", "Path to the PEM client certificate presented to the policy-manager for mTLS (IAM-WU-03); empty disables client-cert presentation")
 	policyManagerClientKeyPath  = flag.String("policy-manager-client-key-path", "", "Path to the private key for --policy-manager-client-cert-path")
 
+	// policyManagerTokenPath, when set, makes the decision publisher present a
+	// rotating, audience-bound projected ServiceAccount token read from this file
+	// instead of the static POLICY_MANAGER_INTERNAL_TOKEN env (IAM-WU-11). The
+	// chart mounts a projected serviceAccountToken volume (audience=policy-manager,
+	// short TTL) here; the kubelet atomically swaps it as it rotates. Empty
+	// (default) keeps the legacy static-token behavior (backward compatible).
+	policyManagerTokenPath = flag.String("policy-manager-token-path", "", "Path to a projected ServiceAccount token file presented to the policy-manager on the decisions channel (IAM-WU-11); takes precedence over POLICY_MANAGER_INTERNAL_TOKEN. Empty uses the static env token.")
+
 	// metricsTLS, when set, serves the :9090 metrics endpoint over TLS 1.3 and
 	// requires a bearer token on /metrics (CRY-WU-08). /healthz stays open for
 	// probes. Default off so plain-HTTP scraping/probing keeps working.
@@ -216,8 +224,19 @@ func main() {
 		)
 		pmClientTLS = nil
 	}
-	publisher := admission.NewDecisionPublisher(pmURL, pmToken, log, metricsCollector,
-		admission.WithTLSConfig(pmClientTLS))
+	// Inter-service auth for the decisions channel (IAM-WU-11): when
+	// --policy-manager-token-path is set, present the rotating projected
+	// ServiceAccount token from that file (audience-bound, short TTL); it takes
+	// precedence over the static env token. Empty keeps the legacy static-token
+	// behavior (backward compatible). The mTLS wiring above is unchanged.
+	pubOpts := []admission.Option{admission.WithTLSConfig(pmClientTLS)}
+	if *policyManagerTokenPath != "" {
+		pubOpts = append(pubOpts, admission.WithTokenFile(*policyManagerTokenPath))
+		log.Info("decision publisher presents a projected ServiceAccount token (IAM-WU-11)",
+			zap.String("token_path", *policyManagerTokenPath),
+		)
+	}
+	publisher := admission.NewDecisionPublisher(pmURL, pmToken, log, metricsCollector, pubOpts...)
 	defer publisher.Stop()
 
 	// Initialize admission controller

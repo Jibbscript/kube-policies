@@ -91,6 +91,13 @@ spec:
             - --policy-manager-client-cert-path=/etc/policy-manager-client/tls.crt
             - --policy-manager-client-key-path=/etc/policy-manager-client/tls.key
             {{- end }}
+            {{- if eq (include "kube-policies.internalAuthMode" .) "tokenreview" }}
+            # Present an audience-bound, short-TTL projected ServiceAccount token
+            # to the policy-manager decisions channel (IAM-WU-11). Gate on mode
+            # only — not policyManager.enabled — so a split/webhook-only deploy
+            # (PM external) still presents the credential (FIX 5).
+            - --policy-manager-token-path=/var/run/secrets/kube-policies/pm-token/token
+            {{- end }}
             {{- if .Values.metrics.tls.enabled }}
             # Serve /metrics over TLS 1.3 with bearer-token auth (CRY-WU-08).
             - --metrics-tls
@@ -112,12 +119,17 @@ spec:
                   fieldPath: metadata.namespace
             - name: POLICY_MANAGER_INTERNAL_URL
               value: "https://{{ include "kube-policies.fullname" . }}-policy-manager:8080/api/v1/decisions/internal"
+            {{- if eq (include "kube-policies.internalAuthMode" .) "static" }}
+            # Static shared bearer token (IAM-WU-11 escape hatch, mode=static
+            # only). In tokenreview mode the webhook presents the projected SA
+            # token via --policy-manager-token-path instead.
             - name: POLICY_MANAGER_INTERNAL_TOKEN
               valueFrom:
                 secretKeyRef:
                   name: {{ include "kube-policies.fullname" . }}-internal-token
                   key: token
                   optional: true
+            {{- end }}
           livenessProbe:
             httpGet:
               path: /healthz
@@ -164,6 +176,13 @@ spec:
               mountPath: /etc/policy-manager-client
               readOnly: true
             {{- end }}
+            {{- if eq (include "kube-policies.internalAuthMode" .) "tokenreview" }}
+            # Projected SA token for the decisions channel (IAM-WU-11). Gate on
+            # mode only (FIX 5) so a webhook-only / split deploy still mounts it.
+            - name: pm-internal-token
+              mountPath: /var/run/secrets/kube-policies/pm-token
+              readOnly: true
+            {{- end }}
             {{- if and .Values.audit.enabled .Values.audit.integrity.enabled }}
             - name: audit-integrity-key
               # Mount dir derived from keyPath so it always matches the
@@ -207,6 +226,21 @@ spec:
         - name: policy-manager-client
           secret:
             secretName: {{ include "kube-policies.webhookClientCertSecretName" . }}
+        {{- end }}
+        {{- if eq (include "kube-policies.internalAuthMode" .) "tokenreview" }}
+        # Audience-bound, short-TTL projected ServiceAccount token for the
+        # webhook -> policy-manager decisions channel (IAM-WU-11). Gated on mode
+        # only (FIX 5) — a split/webhook-only deploy must still project the token.
+        # The kubelet mints a token scoped to audience=<internalAuth.audience>
+        # with the configured TTL and atomically swaps it as it rotates.
+        - name: pm-internal-token
+          projected:
+            defaultMode: 0440
+            sources:
+              - serviceAccountToken:
+                  path: token
+                  audience: {{ include "kube-policies.internalAuthAudience" . | quote }}
+                  expirationSeconds: {{ dig "internalAuth" "expirationSeconds" 3600 .Values.policyManager }}
         {{- end }}
         {{- if and .Values.audit.enabled .Values.audit.integrity.enabled }}
         # Audit-integrity HMAC key (AUD-WU-05), projected to the file the audit

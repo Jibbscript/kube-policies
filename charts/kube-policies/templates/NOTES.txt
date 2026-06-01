@@ -1,5 +1,16 @@
 Thank you for installing {{ .Chart.Name }} {{ .Chart.Version }}.
 
+## Decisions-channel authentication (IAM-WU-11)
+
+The webhook -> policy-manager decisions channel (/api/v1/decisions/internal)
+defaults to **TokenReview** mode: the webhook presents an audience-bound,
+short-TTL projected ServiceAccount token; the policy-manager validates it via
+the Kubernetes TokenReview API. This works on any real cluster (including kind).
+
+Set policyManager.internalAuth.mode=static ONLY for non-cluster/demo deployments
+where no kubeconfig is available — this falls back to the shared internalToken
+(below) as the sole credential.
+
 ## FIPS 140-3 and the internal token
 
 Images are built with the Go FIPS 140-3 module and default to fips140=on. For

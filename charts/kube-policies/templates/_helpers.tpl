@@ -227,9 +227,57 @@ Inputs: a dict with keys {registry, repository, tag, defaultTag}.
 {{- end -}}
 
 {{/*
+Internal-auth mode for the webhook -> policy-manager decisions channel (IAM-WU-11).
+"tokenreview" (default): the webhook presents an audience-bound projected
+ServiceAccount token validated via the Kubernetes TokenReview API. "static": the
+documented escape hatch using the shared bearer token (non-cluster/demo only).
+*/}}
+{{- define "kube-policies.internalAuthMode" -}}
+{{- dig "internalAuth" "mode" "tokenreview" .Values.policyManager -}}
+{{- end -}}
+
+{{/*
+Expected audience for the projected token (IAM-WU-11). Dedicated to this channel;
+NOT reused from the OIDC audience config. Default "policy-manager".
+*/}}
+{{- define "kube-policies.internalAuthAudience" -}}
+{{- dig "internalAuth" "audience" "policy-manager" .Values.policyManager -}}
+{{- end -}}
+
+{{/*
 Validate required values
 */}}
 {{- define "kube-policies.validateValues" -}}
+{{- /* Internal-auth mode guards (IAM-WU-11). */ -}}
+{{- $internalMode := include "kube-policies.internalAuthMode" . -}}
+{{- if not (has $internalMode (list "tokenreview" "static")) -}}
+{{- fail (printf "policyManager.internalAuth.mode=%q is invalid; must be one of: tokenreview, static (IAM-WU-11)" $internalMode) -}}
+{{- end -}}
+{{- if eq $internalMode "tokenreview" -}}
+  {{- if eq (include "kube-policies.internalAuthAudience" .) "" -}}
+  {{- fail "policyManager.internalAuth.audience must be non-empty when policyManager.internalAuth.mode=tokenreview (IAM-WU-11): the projected token and the policy-manager's expected audience must match" -}}
+  {{- end -}}
+  {{- /* expirationSeconds < 600: the kubelet silently clamps projected token TTLs
+       to its floor of 600s, making a <600 configuration misleading and contradicting
+       the "<=1h" short-TTL posture. Fail early so the operator's intent is explicit.
+       Default 3600 is well above the floor (FIX 7). */ -}}
+  {{- $expSecs := dig "internalAuth" "expirationSeconds" 3600 .Values.policyManager | int -}}
+  {{- if lt $expSecs 600 -}}
+  {{- fail (printf "policyManager.internalAuth.expirationSeconds=%d is below the kubelet's minimum of 600s; the kubelet would silently clamp it, making the configured TTL misleading. Set expirationSeconds >= 600 (default: 3600, i.e. 1h)" $expSecs) -}}
+  {{- end -}}
+  {{- /* rbac.create and automountServiceAccountToken are prerequisites for the
+       policy-manager's TokenReview call — only relevant when the PM is deployed.
+       A webhook-only install (policyManager.enabled=false) with rbac.create=false
+       or automount=false is valid; do NOT fail such renders (FIX 2). */ -}}
+  {{- if .Values.policyManager.enabled -}}
+    {{- if not .Values.rbac.create -}}
+    {{- fail "policyManager.internalAuth.mode=tokenreview requires rbac.create=true (IAM-WU-11): the policy-manager needs the tokenreviews:create grant to validate inbound tokens. Set rbac.create=true or use internalAuth.mode=static." -}}
+    {{- end -}}
+    {{- if not (dig "automountServiceAccountToken" true .Values.policyManager) -}}
+    {{- fail "policyManager.internalAuth.mode=tokenreview requires policyManager.automountServiceAccountToken=true (IAM-WU-11): the policy-manager calls the apiserver TokenReview API with its own SA token. Keep automount on or use internalAuth.mode=static." -}}
+    {{- end -}}
+  {{- end -}}
+{{- end -}}
 {{- if and .Values.admissionWebhook.enabled (not .Values.admissionWebhook.image.repository) -}}
 {{- fail "admissionWebhook.image.repository is required when admissionWebhook is enabled" -}}
 {{- end -}}

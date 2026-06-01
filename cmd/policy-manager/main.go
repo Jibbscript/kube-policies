@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"go.uber.org/zap"
+	"k8s.io/client-go/kubernetes"
 	ctrl "sigs.k8s.io/controller-runtime"
 
 	"github.com/Jibbscript/kube-policies/internal/auth"
@@ -104,11 +105,89 @@ func main() {
 		log.Fatal("Failed to initialize policy manager", zap.Error(err))
 	}
 	// Accept both the current and (during a rotation window) the previous
-	// internal token so secret rotation causes no downtime (CRY-WU-14).
+	// internal token so secret rotation causes no downtime (CRY-WU-14). This is
+	// kept unconditionally so the static fallback is always available; in
+	// tokenreview mode it is only consulted on a clean negative TokenReview
+	// verdict (see Manager.IngestInternal).
 	policyManager.SetInternalTokens(
 		os.Getenv("POLICY_MANAGER_INTERNAL_TOKEN"),
 		os.Getenv("POLICY_MANAGER_INTERNAL_TOKEN_PREVIOUS"),
 	)
+
+	// Inter-service auth mode for the webhook -> policy-manager decisions channel
+	// (IAM-WU-11). Default (unset env): tokenreview — BUT the default is
+	// context-aware (see below). "static" is the documented escape hatch for
+	// non-cluster/demo deployments. Any other value is an operator typo and fails
+	// closed so misconfigured deployments are caught immediately (mirrors the Helm
+	// enum guard in _helpers.tpl).
+	internalAuthModeRaw := os.Getenv("POLICY_MANAGER_INTERNAL_AUTH_MODE")
+	internalAuthModeExplicit := internalAuthModeRaw != "" // operator set it explicitly
+	internalAudience := os.Getenv("POLICY_MANAGER_INTERNAL_AUDIENCE")
+	if internalAudience == "" {
+		internalAudience = "policy-manager"
+	}
+	internalSubject := os.Getenv("POLICY_MANAGER_INTERNAL_SUBJECT")
+
+	switch internalAuthModeRaw {
+	case "static":
+		// Static-only: shared bearer token, no TokenReview client needed.
+		log.Warn("internal decisions channel auth: STATIC bearer token (IAM-WU-11 escape hatch). TokenReview validation is OFF; intended only for non-cluster/demo deployments. Set POLICY_MANAGER_INTERNAL_AUTH_MODE=tokenreview on a real cluster.")
+
+	case "tokenreview", "":
+		// Attempt to wire the TokenReview authenticator. Resolution order:
+		//   1. ctrl.GetConfig() (--kubeconfig flag > KUBECONFIG env > in-cluster)
+		//   2. kubernetes.NewForConfig()
+		// On failure:
+		//   - EXPLICIT tokenreview (env set) → log.Fatal (operator demanded secure
+		//     mode; fail closed, never silent-downgrade).
+		//   - DEFAULT (env unset) → log.Warn and fall back to static-only so a
+		//     previously-working API-only run (--disable-controllers + static token,
+		//     no kubeconfig) is not broken by the Inc5 default change.
+		restCfg, cfgErr := ctrl.GetConfig()
+		if cfgErr != nil {
+			if internalAuthModeExplicit {
+				log.Fatal("could not resolve a Kubernetes config for TokenReview validation (POLICY_MANAGER_INTERNAL_AUTH_MODE=tokenreview was set explicitly — fail closed, IAM-WU-11)",
+					zap.Error(cfgErr),
+					zap.String("hint", "run inside a Pod with a service-account token, set --kubeconfig=PATH, or set POLICY_MANAGER_INTERNAL_AUTH_MODE=static for non-cluster/demo deployments"),
+				)
+			}
+			log.Warn("internal decisions channel auth: TokenReview unavailable (no kube client); defaulting to static bearer token. Set POLICY_MANAGER_INTERNAL_AUTH_MODE=tokenreview explicitly once a kubeconfig is available, or POLICY_MANAGER_INTERNAL_AUTH_MODE=static to silence this warning.",
+				zap.Error(cfgErr),
+			)
+			break
+		}
+		cs, csErr := kubernetes.NewForConfig(restCfg)
+		if csErr != nil {
+			if internalAuthModeExplicit {
+				log.Fatal("could not build a Kubernetes clientset for TokenReview validation (POLICY_MANAGER_INTERNAL_AUTH_MODE=tokenreview was set explicitly — fail closed, IAM-WU-11)",
+					zap.Error(csErr),
+				)
+			}
+			log.Warn("internal decisions channel auth: TokenReview unavailable (clientset build failed); defaulting to static bearer token.",
+				zap.Error(csErr),
+			)
+			break
+		}
+		policyManager.SetInternalTokenReviewer(
+			policymanager.NewInternalTokenAuthenticator(
+				cs.AuthenticationV1().TokenReviews(),
+				internalAudience,
+				internalSubject,
+				log.Named("internal-tokenreview"),
+			),
+		)
+		log.Info("internal decisions channel auth: TokenReview (audience+subject-bound) ENABLED",
+			zap.String("expected_audience", internalAudience),
+			zap.String("expected_subject", internalSubject),
+		)
+
+	default:
+		// Unknown value → operator typo → fail closed. This mirrors the Helm
+		// chart's enum guard (mode must be tokenreview or static).
+		log.Fatal("invalid POLICY_MANAGER_INTERNAL_AUTH_MODE; must be one of: tokenreview, static",
+			zap.String("value", internalAuthModeRaw),
+		)
+	}
 
 	// Background-process context. Canceled on SIGINT/SIGTERM below; the CRD
 	// controllers, the policy manager, and the TLS cert reloader stop when this

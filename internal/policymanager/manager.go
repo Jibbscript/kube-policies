@@ -34,6 +34,14 @@ type Manager struct {
 	bus           *audit.Bus
 	recentRing    *Ring
 	internalToken *auth.TokenVerifier
+
+	// internalReviewer validates an inbound projected ServiceAccount token on
+	// POST /api/v1/decisions/internal via the Kubernetes TokenReview API
+	// (IAM-WU-11). When non-nil it is the primary, audience-bound authenticator
+	// for that endpoint; internalToken remains the opt-in static fallback for
+	// non-cluster/demo deployments. nil leaves behavior exactly as before
+	// (static-token only).
+	internalReviewer *InternalTokenAuthenticator
 }
 
 // PolicyBundle represents a collection of policies
@@ -157,6 +165,18 @@ func (m *Manager) SetInternalToken(token string) {
 // empty current token disables the endpoint.
 func (m *Manager) SetInternalTokens(current, previous string) {
 	m.internalToken = auth.NewTokenVerifier(current, previous)
+}
+
+// SetInternalTokenReviewer installs the audience-bound TokenReview authenticator
+// for POST /api/v1/decisions/internal (IAM-WU-11). When set, an inbound bearer
+// is validated against the Kubernetes TokenReview API first; a clean negative
+// verdict (token not authenticated / wrong audience) may then fall through to
+// the static internalToken verifier if one is configured, but a TokenReview API
+// error always rejects (fail closed). A nil reviewer leaves the endpoint on the
+// static-token-only path. Independent of SetInternalTokens, which is left
+// unchanged so the static fallback is always available.
+func (m *Manager) SetInternalTokenReviewer(reviewer *InternalTokenAuthenticator) {
+	m.internalReviewer = reviewer
 }
 
 // Start starts the policy manager background processes

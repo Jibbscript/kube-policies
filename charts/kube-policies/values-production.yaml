@@ -46,6 +46,13 @@ policyManager:
     # and cert-manager issues those client certs (certManager.enabled=true above).
     mtls:
       enabled: true
+  # Inter-service auth for the decisions channel (IAM-WU-11): audience-bound
+  # projected ServiceAccount token validated via TokenReview. Pinned explicitly
+  # here (matches the chart default) so production never silently runs the static
+  # escape hatch.
+  internalAuth:
+    mode: tokenreview
+    audience: "policy-manager"
 
 # Protect the webhook/policy-manager /metrics endpoints with TLS + bearer auth
 # (CRY-WU-08). Requires the Prometheus scrape config to use https + ca_file +

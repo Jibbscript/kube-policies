@@ -94,6 +94,18 @@ rules:
   - policies/status
   - policyexceptions/status
   verbs: ["get", "update", "patch"]
+{{- if eq (include "kube-policies.internalAuthMode" .) "tokenreview" }}
+# TokenReview validation for the inbound webhook decisions channel (IAM-WU-11).
+# TokenReview is a write-only (create), cluster-scoped subresource of the
+# authentication.k8s.io API: the apiserver evaluates the submitted token and
+# returns the verdict in the response body — nothing is persisted, so only
+# "create" is needed (no get/list/watch). Granted ONLY to the policy-manager and
+# ONLY in tokenreview mode.
+- apiGroups: ["authentication.k8s.io"]
+  resources:
+  - tokenreviews
+  verbs: ["create"]
+{{- end }}
 ---
 apiVersion: {{ include "kube-policies.rbac.apiVersion" . }}
 kind: ClusterRoleBinding

@@ -7,16 +7,64 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"go.uber.org/zap"
 
 	"github.com/Jibbscript/kube-policies/internal/audit"
+	"github.com/Jibbscript/kube-policies/internal/auth"
 )
 
 // IngestInternal handles POST /api/v1/decisions/internal.
 //
-// Auth: Authorization: Bearer <internalToken>. If the stored token is empty
-// (unconfigured) the endpoint returns 401 on every request — an empty token
-// must not act as a wildcard.
+// Auth (IAM-WU-11): the inbound Authorization: Bearer <token> is authenticated
+// in one of two ways, in priority order:
+//
+//  1. Audience-bound TokenReview (primary, when SetInternalTokenReviewer was
+//     called): the token is submitted to the Kubernetes TokenReview API bound to
+//     the expected audience. A TokenReview API error FAILS CLOSED — the request
+//     is rejected with 401 and never falls through to the static path, so a
+//     transient apiserver outage cannot widen what is admitted. A valid,
+//     correct-audience verdict admits the request.
+//  2. Static shared bearer (fallback, opt-in for non-cluster/demo deployments):
+//     reached only on a CLEAN negative TokenReview verdict (token not
+//     authenticated / wrong audience), or when no reviewer is configured. The
+//     presented token is compared against the configured token(s) in constant
+//     time over fixed-length digests so neither contents nor length leak via
+//     timing (CRY-WU-13, IAM-WU-07). An unconfigured verifier returns 401 — an
+//     empty token must not act as a wildcard.
+//
+// Token material is never logged; only verdicts/usernames/errors are.
 func (m *Manager) IngestInternal(c *gin.Context) {
+	raw := auth.BearerToken(c.GetHeader("Authorization"))
+	if raw == "" {
+		c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{
+			"error": "missing bearer token",
+		})
+		return
+	}
+
+	if m.internalReviewer != nil {
+		ok, _, err := m.internalReviewer.Authenticate(c.Request.Context(), raw)
+		if err != nil {
+			// FAIL CLOSED: the TokenReview verdict could not be established.
+			// Reject and do NOT fall through to the static path — never log the
+			// token itself.
+			m.logger.Warn("internal decisions ingest: TokenReview failed; rejecting (fail closed)",
+				zap.Error(err),
+			)
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{
+				"error": "invalid bearer token",
+			})
+			return
+		}
+		if ok {
+			// Authenticated and audience-bound: admit.
+			m.ingestEvent(c)
+			return
+		}
+		// Clean negative verdict: fall through to the static fallback below.
+	}
+
+	// Static fallback (or the only path when no reviewer is configured).
 	if !m.internalToken.Configured() {
 		c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{
 			"error": "internal token not configured",
@@ -26,12 +74,20 @@ func (m *Manager) IngestInternal(c *gin.Context) {
 	// Constant-time bearer-token verification (CRY-WU-13, IAM-WU-07): the
 	// presented token is compared against the configured token(s) over
 	// fixed-length digests so neither token contents nor length leak via timing.
-	if !m.internalToken.VerifyHeader(c.GetHeader("Authorization")) {
+	if !m.internalToken.Verify(raw) {
 		c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{
 			"error": "invalid bearer token",
 		})
 		return
 	}
+	m.ingestEvent(c)
+}
+
+// ingestEvent decodes the PublicEvent body and publishes it to the bus + recent
+// ring. It is the shared tail of IngestInternal, reached only after the caller
+// has been authenticated by either the TokenReview or static path. Body handling
+// is unchanged from the pre-IAM-WU-11 implementation.
+func (m *Manager) ingestEvent(c *gin.Context) {
 	var ev audit.PublicEvent
 	// LENIENT DECODE: json.NewDecoder is used WITHOUT DisallowUnknownFields()
 	// so the wire schema can be extended additively (new optional fields like
