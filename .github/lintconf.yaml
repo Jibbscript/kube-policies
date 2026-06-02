@@ -2,6 +2,13 @@
 # Referenced from .github/ct.yaml via `lint-conf`. Without it, ct v3.x errors:
 # "failed loading configuration: 'lintconf.yaml' neither specified nor found".
 extends: default
+# Only the hand-authored chart metadata/values should be yamllinted. Helm
+# templates are Go-template sources (not valid YAML), the resolved subchart
+# .tgz under charts/ are upstream, and crds/ are generated — exclude all three.
+ignore: |
+  charts/kube-policies/templates/
+  charts/kube-policies/charts/
+  charts/kube-policies/crds/
 rules:
   line-length:
     max: 160

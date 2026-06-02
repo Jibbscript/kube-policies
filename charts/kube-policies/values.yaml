@@ -168,13 +168,13 @@ admissionWebhook:
     # RECOMMENDED for production. Bare hash or sha256:-prefixed both accepted.
     digest: ""
     pullPolicy: IfNotPresent
-  
+
   service:
     type: ClusterIP
     port: 8443
     targetPort: 8443
     annotations: {}
-  
+
   resources:
     limits:
       cpu: 500m
@@ -182,7 +182,7 @@ admissionWebhook:
     requests:
       cpu: 100m
       memory: 128Mi
-  
+
   # Pod Security Context
   podSecurityContext:
     runAsNonRoot: true
@@ -194,7 +194,7 @@ admissionWebhook:
     # <path> for higher-assurance deployments; the default is RuntimeDefault.
     seccompProfile:
       type: RuntimeDefault
-  
+
   # Container Security Context
   securityContext:
     allowPrivilegeEscalation: false
@@ -208,13 +208,13 @@ admissionWebhook:
     # CFG-WU-01/CFG-WU-21: RuntimeDefault at the container level (CIS 5.2.6).
     seccompProfile:
       type: RuntimeDefault
-  
+
   # Node selector
   nodeSelector: {}
-  
+
   # Tolerations
   tolerations: []
-  
+
   # Affinity. RES-WU-04: when EMPTY ({}) the chart renders a default SOFT pod
   # anti-affinity (one replica per node, kubernetes.io/hostname). Set a value to
   # fully override the default (e.g. a required anti-affinity for hard HA).
@@ -274,7 +274,7 @@ admissionWebhook:
     prometheus.io/scrape: "true"
     prometheus.io/port: "9090"
     prometheus.io/path: "/metrics"
-  
+
   # Webhook configuration (RES-WU-09: the chart is the single source of truth for
   # both the Validating and Mutating webhook configurations).
   webhook:
@@ -318,7 +318,7 @@ admissionWebhook:
           operations: ["CREATE", "UPDATE"]
           resources: ["pods"]
           scope: "Namespaced"
-  
+
   # TLS configuration
   tls:
     # Auto-generate certificates.
@@ -377,13 +377,13 @@ policyManager:
     # CFG-WU-10: set digest to pin immutably (repository@sha256:...); drops tag.
     digest: ""
     pullPolicy: IfNotPresent
-  
+
   service:
     type: ClusterIP
     port: 8080
     targetPort: 8080
     annotations: {}
-  
+
   resources:
     limits:
       cpu: 500m
@@ -391,7 +391,7 @@ policyManager:
     requests:
       cpu: 100m
       memory: 128Mi
-  
+
   # Pod Security Context
   podSecurityContext:
     runAsNonRoot: true
@@ -403,7 +403,7 @@ policyManager:
     # <path> for higher-assurance deployments; the default is RuntimeDefault.
     seccompProfile:
       type: RuntimeDefault
-  
+
   # Container Security Context
   securityContext:
     allowPrivilegeEscalation: false
@@ -417,13 +417,13 @@ policyManager:
     # CFG-WU-01/CFG-WU-21: RuntimeDefault at the container level (CIS 5.2.6).
     seccompProfile:
       type: RuntimeDefault
-  
+
   # Node selector
   nodeSelector: {}
-  
+
   # Tolerations
   tolerations: []
-  
+
   # Affinity. RES-WU-04: when EMPTY ({}) the chart renders a default SOFT pod
   # anti-affinity (one replica per node, kubernetes.io/hostname). Set a value to
   # fully override the default.
@@ -624,7 +624,7 @@ policies:
 rbac:
   # Create RBAC resources
   create: true
-  
+
   # Service account configuration. Each component has its OWN ServiceAccount
   # (IAM-WU-09 separation of duties): <fullname>-admission-webhook,
   # <fullname>-policy-manager, and <fullname>-dashboard.
@@ -769,12 +769,12 @@ audit:
   bufferSize: 1000
   flushInterval: "10s"
   retention: "90d"
-  
+
   # Audit backend configuration
   backend:
     # Backend type: file or stdout. The runtime rejects unsupported backends.
     type: file
-    
+
     # File backend configuration.
     # The path must match the writable mount in
     # templates/admission-webhook-deployment.yaml (emptyDir at
