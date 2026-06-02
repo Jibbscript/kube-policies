@@ -43,7 +43,12 @@ PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 # Kind/DAST deployment, so curl uses -k and ZAP (which does not validate TLS
 # certs) scans the endpoint directly.
 TARGET_API_URL="${TARGET_API_URL:-https://localhost:8080}"
-TARGET_BFF_URL="${TARGET_BFF_URL:-http://localhost:3000}"
+# Default only when UNSET (single dash), not when empty: the DAST workflow
+# exports TARGET_BFF_URL="" to DISABLE the dashboard/BFF scan when the dashboard
+# is not deployed. Using ":-" here would re-default that intentional empty back to
+# localhost:3000 and run a doomed scan against a closed port. The main() guard
+# `[ -n "$TARGET_BFF_URL" ]` then correctly skips the BFF scan.
+TARGET_BFF_URL="${TARGET_BFF_URL-http://localhost:3000}"
 TLS_HOST="${TLS_HOST:-localhost}"
 TLS_PORT="${TLS_PORT:-8443}"
 RESULTS_DIR="${RESULTS_DIR:-${PROJECT_ROOT}/test-results/dast}"
