@@ -189,9 +189,12 @@ spec:
             failureThreshold: {{ .Values.admissionWebhook.startupProbe.failureThreshold | default 30 }}
             timeoutSeconds: {{ .Values.admissionWebhook.startupProbe.timeoutSeconds | default 3 }}
           {{- end }}
-          {{- if gt (int (.Values.admissionWebhook.preStopDrainSeconds | default 5)) 0 }}
-          # RES-WU-07 (CP-10/SC-5): native sleep preStop (k8s >= 1.29; silently
-          # pruned on older clusters, where --shutdown-drain-delay still drains).
+          {{- if and (gt (int (.Values.admissionWebhook.preStopDrainSeconds | default 5)) 0) (semverCompare ">= 1.29-0" .Capabilities.KubeVersion.GitVersion) }}
+          # RES-WU-07 (CP-10/SC-5): native sleep preStop. The `sleep` lifecycle
+          # action is a k8s >= 1.29 feature; on k8s < 1.29 the API server REJECTS
+          # an empty preStop handler ("must specify a handler type"), so it is
+          # rendered ONLY on >= 1.29 (gated on .Capabilities.KubeVersion). On older
+          # clusters the in-binary --shutdown-drain-delay performs the drain.
           # Holds the pod in Terminating while it leaves the Service endpoints.
           lifecycle:
             preStop:

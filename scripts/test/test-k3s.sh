@@ -73,13 +73,15 @@ install_k3s() {
         --node-name k3s-master \
         --cluster-init
     
+    # Set up kubeconfig BEFORE the readiness wait — otherwise kubectl falls back
+    # to localhost:8080 and the wait loop burns its full timeout on "connection
+    # refused" (the k3s kubeconfig is written at install time, before nodes Ready).
+    sudo chmod 644 /etc/rancher/k3s/k3s.yaml
+    export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
+
     # Wait for k3s to be ready
     log "Waiting for k3s to be ready..."
     timeout 300 bash -c 'until kubectl get nodes | grep -q Ready; do sleep 5; done'
-    
-    # Set up kubeconfig
-    export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
-    sudo chmod 644 /etc/rancher/k3s/k3s.yaml
     
     success "k3s installed successfully"
 }

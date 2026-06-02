@@ -231,8 +231,10 @@ admissionWebhook:
   terminationGracePeriodSeconds: 30
   # preStopDrainSeconds keeps the pod serving after SIGTERM: it sets the binary's
   # --shutdown-drain-delay (works on ALL k8s incl. the distroless image, no shell)
-  # AND renders a native lifecycle `sleep` preStop (k8s >= 1.29; harmlessly pruned
-  # on older clusters). 0 disables both. Keep <= terminationGracePeriodSeconds.
+  # AND renders a native lifecycle `sleep` preStop ONLY on k8s >= 1.29 (gated on
+  # .Capabilities.KubeVersion; k8s < 1.29 rejects an empty preStop handler, so the
+  # chart omits it there and relies on --shutdown-drain-delay). 0 disables both.
+  # Keep <= terminationGracePeriodSeconds.
   preStopDrainSeconds: 5
   # RES-WU-05 (CP-10): startupProbe bounds cold start (OPA bundle compile) so a
   # slow start cannot trip livenessProbe. Max startup = periodSeconds*failureThreshold.

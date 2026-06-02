@@ -247,5 +247,3 @@ Penetration Agent or Team — typically a **3PAO** for a FedRAMP authorization).
 - [SECURITY.md](../../SECURITY.md) — authoritative remediation SLAs.
 - DAST automation: [`.github/workflows/dast.yml`](../../.github/workflows/dast.yml) (and `scripts/test/dast.sh`).
 - FedRAMP Moderate baseline; NIST SP 800-53 Rev 5 (CA-8, CA-8(1), SA-11, RA-5(5), SC-8); OWASP WSTG; PTES.
-</content>
-</invoke>

@@ -233,8 +233,10 @@ jobs:
       contents: read
       packages: write
     outputs:
-      admission-webhook-image: ${{ steps.meta-webhook.outputs.tags }}
-      policy-manager-image: ${{ steps.meta-manager.outputs.tags }}
+      # First tag only — meta.outputs.tags is newline-separated (multiple tags),
+      # which is an invalid single image reference for the Trivy scan downstream.
+      admission-webhook-image: ${{ fromJSON(steps.meta-webhook.outputs.json).tags[0] }}
+      policy-manager-image: ${{ fromJSON(steps.meta-manager.outputs.json).tags[0] }}
     steps:
     - name: Checkout code
       uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
@@ -324,7 +326,10 @@ jobs:
       run: |
         # Install test dependencies
         go install github.com/onsi/ginkgo/v2/ginkgo@latest
-        go install sigs.k8s.io/controller-runtime/tools/setup-envtest@latest
+        # setup-envtest: the only TAGGED versions (v0.24.x) declare `go 1.26.0`
+        # (unreleased), which is uninstallable under the go1.25 toolchain. Pin the
+        # release-0.21 pseudo-version, which requires only go >= 1.24.
+        go install sigs.k8s.io/controller-runtime/tools/setup-envtest@v0.0.0-20250626154428-7fd020cb5fc3
 
     # SDL-WU-04 (NIST SA-11, SA-11(1)): -coverpkg records cross-package coverage
     # from the integration suite (previously coverage-integration.out held only
@@ -332,7 +337,10 @@ jobs:
     # so the reported/uploaded coverage reflects both tiers.
     - name: Run integration tests
       run: |
-        export KUBEBUILDER_ASSETS=$(setup-envtest use ${{ env.KUBERNETES_VERSION }} --bin-dir /tmp/envtest-bins -p path)
+        # envtest control-plane binaries are published only for select k8s patch
+        # releases; 1.28.15 (the kind node version) has no envtest archive, so use
+        # the nearest published 1.28 patch for the apiserver/etcd test binaries.
+        export KUBEBUILDER_ASSETS=$(setup-envtest use 1.28.3 --bin-dir /tmp/envtest-bins -p path)
         go test -v -race -coverpkg=./cmd/...,./internal/...,./pkg/... -coverprofile=coverage-integration.out ./test/integration/...
 
     # SDL-WU-04: feed the integration profile to Codecov under the `integration`

@@ -166,9 +166,11 @@ spec:
             failureThreshold: {{ .Values.policyManager.startupProbe.failureThreshold | default 30 }}
             timeoutSeconds: {{ .Values.policyManager.startupProbe.timeoutSeconds | default 3 }}
           {{- end }}
-          {{- if gt (int (.Values.policyManager.preStopDrainSeconds | default 5)) 0 }}
-          # RES-WU-07 (CP-10): native sleep preStop (k8s >= 1.29; pruned on older
-          # clusters, where --shutdown-drain-delay drains). Holds the pod in
+          {{- if and (gt (int (.Values.policyManager.preStopDrainSeconds | default 5)) 0) (semverCompare ">= 1.29-0" .Capabilities.KubeVersion.GitVersion) }}
+          # RES-WU-07 (CP-10): native sleep preStop. The `sleep` lifecycle action is
+          # a k8s >= 1.29 feature; on k8s < 1.29 the API server REJECTS an empty
+          # preStop handler, so it is rendered ONLY on >= 1.29. On older clusters the
+          # in-binary --shutdown-drain-delay performs the drain. Holds the pod in
           # Terminating while it leaves the Service endpoints.
           lifecycle:
             preStop:

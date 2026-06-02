@@ -249,9 +249,12 @@ spec:
             failureThreshold: {{ .Values.dashboard.startupProbe.failureThreshold | default 30 }}
             timeoutSeconds: {{ .Values.dashboard.startupProbe.timeoutSeconds | default 3 }}
           {{- end }}
-          {{- if gt (int (.Values.dashboard.preStopDrainSeconds | default 5)) 0 }}
-          # RES-WU-07 (CP-10): native sleep preStop (k8s >= 1.29; pruned on older
-          # clusters). Holds the pod in Terminating while it leaves the endpoints.
+          {{- if and (gt (int (.Values.dashboard.preStopDrainSeconds | default 5)) 0) (semverCompare ">= 1.29-0" .Capabilities.KubeVersion.GitVersion) }}
+          # RES-WU-07 (CP-10): native sleep preStop. The `sleep` lifecycle action is
+          # a k8s >= 1.29 feature; on k8s < 1.29 the API server REJECTS an empty
+          # preStop handler, so it is rendered ONLY on >= 1.29. The dashboard (scratch
+          # image, no in-binary drain flag) relies on its own graceful HTTP shutdown
+          # on older clusters. Holds the pod in Terminating while it leaves endpoints.
           lifecycle:
             preStop:
               sleep:
