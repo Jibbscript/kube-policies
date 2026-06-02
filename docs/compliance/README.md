@@ -67,6 +67,14 @@ This index is reviewed at least **annually** (next review **2027-05-29**) and on
 | [poam.csv](poam.csv) | Machine-readable POA&M (`POAM-*`) with severity, remediation, milestones, and scheduled completion. |
 | [threat-model.md](threat-model.md) | Canonical system threat model (STRIDE). |
 | [assessment/SAP.md](assessment/SAP.md) | Security Assessment Plan: scope, methods, and schedule for independent assessment. |
+| [assessment/self-assessment-results.md](assessment/self-assessment-results.md) | Internal control self-assessment (pre-3PAO): all 300 controls assessed against the SAP, with results + evidence. |
+| [assessment/pentest-report.md](assessment/pentest-report.md) | Internal pre-assessment penetration-test report (illustrative, pre-3PAO). |
+| [assessment/independent-code-review.md](assessment/independent-code-review.md) | Internal independent code-review report (pre-3PAO). |
+| [assessment/cis-benchmark-results.md](assessment/cis-benchmark-results.md) | CIS Kubernetes Benchmark + PSS-restricted conformance findings report. |
+| [cis-k8s-800-190-mapping.md](cis-k8s-800-190-mapping.md) | CIS Kubernetes Benchmark + NIST SP 800-190 self-assessment mapping (DOC-WU-29). |
+| [conmon/conmon-plan.md](conmon/conmon-plan.md) | Continuous Monitoring plan (monthly scans, POA&M cadence, significant-change process) + [cadence.md](conmon/cadence.md). |
+| [plans/remediation-roadmap.md](plans/remediation-roadmap.md) | The 13-phase / 285-WU remediation roadmap (phase model, control coverage, human-owned items). |
+| [authorization-package/README.md](authorization-package/README.md) | **FedRAMP-Moderate readiness package** (self-attested, pre-3PAO): index, completeness checklist, and [Readiness Assessment Report](authorization-package/readiness-assessment-report.md). |
 | [../security/threat-model.md](../security/threat-model.md) | Pointer stub to the canonical [threat-model.md](threat-model.md). |
 
 ## Policies
@@ -93,8 +101,9 @@ This index is reviewed at least **annually** (next review **2027-05-29**) and on
 |---|---|
 | [../../SECURITY.md](../../SECURITY.md) | Coordinated vulnerability-disclosure (CVD) policy and remediation SLAs. |
 
-## Planned (not yet authored)
+## Independent assessment (human-owned, not yet executed)
 
 | Artifact | Status | Description |
 |---|---|---|
-| DOC-WU-29 — CIS / NIST SP 800-190 self-assessment mapping | **Planned (phase P10)** | Self-assessment crosswalk mapping the system against the CIS Kubernetes Benchmark and NIST SP 800-190 (Application Container Security Guide). Forthcoming. |
+| 3PAO Security Assessment Report (SAR) | **Pending independent assessment** (POAM-051) | Produced by an independent 3PAO; the internal [self-assessment](assessment/self-assessment-results.md) does not satisfy the CA-2/CA-8(1)/SA-11 independence requirement. |
+| Authorization decision (ATO) | **Pending AO decision** (POAM-057) | Issued by the Authorizing Official after the independent assessment. No ATO has been granted; the system is an unauthorized PoC. |
