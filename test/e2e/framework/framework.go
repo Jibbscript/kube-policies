@@ -53,8 +53,12 @@ func NewFramework(baseName string) *Framework {
 func (f *Framework) BeforeEach() {
 	ginkgo.By("Setting up test environment")
 
-	// Create unique namespace for this test
-	f.Namespace = fmt.Sprintf("e2e-%s-%d", f.BaseName, time.Now().Unix())
+	// Create unique namespace for this test. UnixNano (not Unix): specs in the
+	// same Describe share f.BaseName, and in CI they run well under a second
+	// apart, so seconds-resolution names collide — the next spec's namespace
+	// create then races the previous spec's still-Terminating namespace and fails
+	// with "object is being deleted: namespaces ... already exists".
+	f.Namespace = fmt.Sprintf("e2e-%s-%d", f.BaseName, time.Now().UnixNano())
 
 	// Initialize Kubernetes clients
 	var err error

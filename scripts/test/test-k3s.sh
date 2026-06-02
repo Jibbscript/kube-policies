@@ -94,6 +94,17 @@ create_registry() {
     docker stop k3s-registry 2>/dev/null || true
     docker rm k3s-registry 2>/dev/null || true
     
+    # Pre-pull registry:2 with retries: it comes from Docker Hub, which
+    # intermittently rate-limits / times out anonymous pulls on CI runners
+    # ("net/http: request canceled while waiting for connection"), failing the
+    # whole job. Retry so a transient Docker Hub hiccup does not.
+    local _try
+    for _try in 1 2 3 4 5; do
+        docker pull registry:2 && break
+        warn "docker pull registry:2 failed (attempt ${_try}/5); retrying in 5s..."
+        sleep 5
+    done
+
     # Create registry
     docker run -d --restart=always \
         -p "127.0.0.1:${REGISTRY_PORT}:5000" \
