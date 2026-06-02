@@ -36,6 +36,25 @@ useDefault = true
     # Any PEM blocks or token-shaped strings in these paths are test vectors,
     # not operational secrets.
     '''testdata/''',
+
+    # Policy conftest/golden fixtures: rendered chart manifests used as allow/deny
+    # test vectors. The TLS material in rendered-current.yaml is throwaway test
+    # cert/key data baked into the fixture, not an operational secret.
+    '''test/policy/fixtures/''',
+
+    # Redaction unit test: internal/audit/redaction_test.go deliberately embeds
+    # secret-shaped strings (fake passwords/tokens) to assert they get redacted.
+    # By design it contains "secrets"; none are real.
+    '''internal/audit/redaction_test\.go$''',
+
+    # Documentation, not a secret store:
+    #  - policy-library.md catalogs allow/deny manifest EXAMPLES (e.g. a denied
+    #    ConfigMap with a fake `api_token: "sk-abc123def456"`).
+    #  - poam.csv is the POA&M register; prose like "id-token: write for keyless
+    #    cosign" trips the generic-api-key rule but is a GitHub Actions permission
+    #    description, not a credential.
+    '''docs/policy-library\.md$''',
+    '''docs/compliance/poam\.csv$''',
   ]
 
   # Rule: regexes — patterns matched against the secret value itself.
