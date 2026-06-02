@@ -150,12 +150,181 @@ When Falco findings are forwarded to the SIEM, the SIEM should be configured to 
 - Falco finding volume spike → forward to Prometheus via the Falco metrics exporter and
   alert via Alertmanager.
 
-## 5 Annual review
+## 5 Deployment options
+
+Two mutually exclusive paths exist for loading the kube-policies Falco rules. Choose
+one per cluster.
+
+### 5.1 Option A — Helm chart toggle
+
+When the kube-policies control plane is already managed by the Helm chart, enable the
+opt-in `runtimeDetection` flag:
+
+```bash
+helm upgrade kube-policies charts/kube-policies \
+  --namespace kube-policies-system \
+  --reuse-values \
+  --set runtimeDetection.enabled=true
+```
+
+This renders `charts/kube-policies/templates/falco-rules-configmap.yaml`, creating a
+ConfigMap (`<release>-kube-policies-falco-rules`) in the kube-policies namespace. An
+existing Falco DaemonSet must be configured to mount this ConfigMap as an additional
+rules file. The Helm chart does **not** deploy Falco itself — Falco is cluster
+infrastructure deployed separately.
+
+Default: `runtimeDetection.enabled: false` (off).
+
+### 5.2 Option B — Standalone kustomize manifests
+
+For clusters not managed by the kube-policies Helm chart, or for GitOps workflows
+(Flux, ArgoCD), use the standalone manifests:
+
+```
+deployments/kubernetes/runtime-detection/
+├── namespace.yaml      # falco-system namespace (privileged PSS label required)
+├── rbac.yaml           # ServiceAccount, ClusterRole (read-only), ClusterRoleBinding,
+│                       # namespace-scoped Role for ConfigMap hot-reload
+├── configmap.yaml      # kube-policies-falco-rules + falco-config ConfigMaps
+├── daemonset.yaml      # Falco DaemonSet (eBPF driver, hostPID, privileged)
+├── kustomization.yaml  # Kustomize entry point
+└── README.md           # Deployment, image pinning, alerting, tuning guidance
+```
+
+Apply:
+
+```bash
+# Dry-run (YAML structural validation — no live cluster required):
+yq eval '.' deployments/kubernetes/runtime-detection/*.yaml > /dev/null
+
+# Apply:
+kubectl apply -k deployments/kubernetes/runtime-detection/
+```
+
+The standalone manifests embed the same canonical rules file
+(`monitoring/falco/kube-policies-rules.yaml`) and are kept in sync manually. A CI
+freshness diff is recommended to catch divergence.
+
+See `deployments/kubernetes/runtime-detection/README.md` for full deployment,
+image-pinning, and tuning guidance.
+
+> **This control is OPT-IN and is not enabled by default.** Neither path is active
+> unless explicitly applied. No Falco deployment is present in the unauthorized PoC
+> state of this repository.
+
+## 6 Alerting and incident linkage
+
+### 6.1 Alerting path
+
+Falco emits findings as JSON to stdout. Two forwarding paths are supported:
+
+**Path 1 — falcosidekick (recommended)**
+
+```
+Falco DaemonSet (stdout JSON)
+  └─ falcosidekick (gRPC Unix socket: /run/falco/falco.sock)
+       ├─ Slack webhook  (CRITICAL/ERROR findings → immediate page)
+       ├─ Alertmanager   (http://alertmanager.monitoring.svc:9093)
+       └─ SIEM HTTP/TLS  (same endpoint as audit.forwarder)
+```
+
+Enable gRPC in `configmap.yaml`'s `falco.yaml` section and deploy falcosidekick with
+Slack webhook URL, Alertmanager hostport, and SIEM webhook address configured.
+See `deployments/kubernetes/runtime-detection/README.md §Alerting path` for full
+configuration snippets.
+
+**Path 2 — Fluent Bit tail**
+
+Extend the existing audit Fluent Bit forwarder DaemonSet (`audit.forwarder`) to tail
+`/var/log/containers/falco-*.log` with a `grep` filter on `rule kube-policies-` and
+forward to the same SIEM endpoint. See `docs/security/siem-integration.md` for the
+forwarder configuration.
+
+### 6.2 Severity routing
+
+| Falco priority | Recommended action |
+|---|---|
+| CRITICAL | Immediate SEV1 page — incident commander + security. See IR plan §3.1. |
+| ERROR | SEV2 — investigate within 4 hours. |
+| WARNING | SEV2/3 — review within 1 business day. |
+| INFO | SIEM only — no alert. |
+
+### 6.3 Incident response linkage
+
+Runtime detection findings feed into the existing incident response workflow:
+
+- **Incident Response Plan:** [docs/security/incident-response-plan.md](incident-response-plan.md) — §3.1 (SEV1 criteria: attacker-controlled admission webhook), §5 (scenario table), §6.4 (post-incident review).
+- **Runbooks:**
+  - [runbooks/fail-open-event.md](runbooks/fail-open-event.md) — correlate Falco findings with fail-open admission events.
+  - [runbooks/webhook-outage.md](runbooks/webhook-outage.md) — if a Falco finding indicates compromise of the admission-webhook pod.
+  - [runbooks/dos-response.md](runbooks/dos-response.md) — if unexpected process or network activity is part of a resource-exhaustion or DoS attack.
+
+Falco CRITICAL findings (`kube-policies shell in container`,
+`kube-policies sensitive mount or privilege escalation`) map to **SEV1** per the IR
+plan and trigger an immediate page to the incident commander.
+
+## 7 Tuning (reducing false positives)
+
+> References: NIST SI-4 (sensor tuning), SI-3 (malicious code detection),
+> NIST SP 800-190 §4.4 (container runtime threats).
+
+### 7.1 Allowlist expected processes
+
+If a legitimate sidecar or init container triggers `kube-policies unexpected process
+spawned`, add the process name to the `kube_policies_main_procs` macro in
+`monitoring/falco/kube-policies-rules.yaml`:
+
+```yaml
+- macro: kube_policies_main_procs
+  condition: (proc.name in (admission-webhook, policy-manager, dashboard, <your-proc>))
+```
+
+Then re-sync `deployments/kubernetes/runtime-detection/configmap.yaml` (copy the
+updated rules content into the ConfigMap's `data` section).
+
+### 7.2 Allowlist expected network destinations
+
+If the SIEM endpoint uses a non-standard port (not 443, 6443, 8081, 8443, 53), add
+it to the `kube-policies unexpected outbound connection` rule's `fd.rport` list:
+
+```yaml
+and not fd.rport in (443, 6443, 8081, 8443, 53, <your-siem-port>)
+```
+
+Always key on the **destination** (`fd.rport`/`fd.rip`), not the source port —
+source-port allowlisting produces constant false positives and does not detect
+exfiltration (P9 lessons learned).
+
+### 7.3 Scope rules away from init containers
+
+Falco applies rules to all containers including init containers. To exclude a
+known-noisy init container from the `kube_policies_pods` macro:
+
+```yaml
+- macro: kube_policies_pods
+  condition: >
+    (k8s.ns.name = "kube-policies-system" or
+     container.image.repository contains "kube-policies")
+    and not container.name in (init-permissions, init-migrate)
+```
+
+### 7.4 Compliance references
+
+| Standard | Control | Relevance |
+|---|---|---|
+| NIST SP 800-53 Rev 5 | SI-4 | Information System Monitoring — deploy sensors, collect indicators, alert on anomalies. |
+| NIST SP 800-53 Rev 5 | SI-3 | Malicious Code Protection — detect and respond to malicious executables and shells at runtime. |
+| NIST SP 800-53 Rev 5 | SI-4(2) | Automated Tools for Real-Time Analysis — Falco provides host-level syscall inspection independent of Kubernetes admission. |
+| NIST SP 800-53 Rev 5 | SI-4(4) | Inbound and Outbound Communications Traffic — NetworkPolicy + Falco egress rules provide layered enforcement and detection. |
+| NIST SP 800-53 Rev 5 | SC-7 | Boundary Protection — unexpected outbound connections from distroless pods are high-confidence exfiltration indicators. |
+| NIST SP 800-190 | §4.4 | Container Runtime Threats — monitor for unexpected processes, filesystem modifications, and unusual network activity. |
+
+## 8 Annual review
 
 This document is reviewed at least **annually** (next review: **2027-06-01**) and whenever
 the NetworkPolicy templates, Falco rules, or SIEM forwarding configuration changes.
 
-## 6 References
+## 9 References
 
 - NetworkPolicy templates: `charts/kube-policies/templates/networkpolicy-*.yaml`
 - Falco rules: `monitoring/falco/kube-policies-rules.yaml`

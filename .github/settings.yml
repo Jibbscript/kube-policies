@@ -1,0 +1,105 @@
+# .github/settings.yml — Branch-protection desired state (SDL-WU-22)
+#
+# This file encodes the REQUIRED branch-protection policy for the `main` branch
+# of the kube-policies repository. It is the machine-readable companion to
+# docs/security/branch-protection.md (controls: CM-3, AU-10, SA-15, IA-5,
+# SLSA L3, SSDF PO.3).
+#
+# Two application paths:
+#   1. Probot Settings app  — install https://github.com/apps/settings on the
+#      repository; the app reads this file and reconciles GitHub settings on
+#      every push to the default branch.
+#   2. Manual reference     — apply each setting by hand via
+#      GitHub → Settings → Branches → Branch protection rules → main.
+#
+# IMPORTANT: This documents the DESIRED / REQUIRED configuration. The
+# kube-policies repository is a single-maintainer PoC with no ATO. These
+# settings have NOT yet been enabled in GitHub repository settings. Apply them
+# when the project acquires a GitHub organisation or moves to production.
+#
+# Status-check names must match the exact GitHub check name produced by each
+# workflow job. Verify them against the "Checks" tab of a recent PR before
+# enabling the required-status-checks rule.
+
+repository:
+  # General
+  has_issues: true
+  has_projects: false
+  has_wiki: false
+  allow_squash_merge: true
+  allow_merge_commit: false
+  allow_rebase_merge: true
+  delete_branch_on_merge: true
+
+branches:
+  - name: main
+    protection:
+      # ── Pull Request Reviews ───────────────────────────────────────────────
+      # CM-3: changes require review/approval before implementation.
+      # SA-15: enforce secure development process via mandatory code review.
+      # SSDF PO.3: protected branches + mandatory review as SDLC baseline.
+      required_pull_request_reviews:
+        required_approving_review_count: 1
+        # AU-10 / CM-3: CODEOWNER must explicitly approve the final diff.
+        require_code_owner_reviews: true
+        # CM-3 / AU-10: a new commit after approval invalidates the approval;
+        # the CODEOWNER must re-review the final state of the PR.
+        dismiss_stale_reviews: true
+        dismissal_restrictions:
+          users: []
+          teams: []
+
+      # ── Required Status Checks ─────────────────────────────────────────────
+      # CM-3: changes must be tested/validated before merge.
+      # SA-15: tooling enforces secure coding standards end-to-end.
+      # SLSA L3: every commit on main has a passing, attributable build record.
+      required_status_checks:
+        # Require the branch to be up to date with main before merge.
+        # Prevents a merge-race where a PR that passed checks against an older
+        # main could introduce a regression after a concurrent merge (CM-3).
+        strict: true
+        contexts:
+          # ci.yml job `ci-gate` (name: "CI Gate") — aggregates ALL upstream
+          # CI jobs; fails if any required job failed OR was skipped (anti-bypass
+          # via `if: always()` + result != "success" check on each upstream job).
+          - "CI Gate"
+          # codeql.yml job `analyze` (name: "Analyze (${{ matrix.language }})")
+          # — CodeQL SAST for Go sources (SA-15, SLSA L3).
+          - "Analyze (go)"
+          # codeql.yml job `analyze` — CodeQL SAST for JavaScript/TypeScript
+          # UI sources (SA-15).
+          - "Analyze (javascript-typescript)"
+          # secrets-scan.yml job `gitleaks`
+          # (name: "Gitleaks — secret scan (full history)") — full-history
+          # credential scanning; any detected secret fails the check (IA-5, AU-10).
+          - "Gitleaks — secret scan (full history)"
+          # ui.yml job `ui` (name: "Lint, Test, and Build UI") — UI lint,
+          # Vitest, Rego bundle smoke, and production build (SA-15).
+          - "Lint, Test, and Build UI"
+
+      # ── Signed Commits ─────────────────────────────────────────────────────
+      # AU-10: non-repudiation — every commit on main must carry a verifiable
+      # cryptographic signature (GPG, SSH signing key, or Sigstore gitsign).
+      # IA-5: signing keys are managed authenticators bound to a known identity.
+      # Consistent with the project's keyless cosign/SLSA provenance posture
+      # (release.yml, P6 / commit 6ca189f).
+      required_signatures: true
+
+      # ── Linear History ─────────────────────────────────────────────────────
+      # AU-10: linear signed history makes author attribution unambiguous for
+      # forensic review; `git log --first-parent` is a clean audit sequence.
+      required_linear_history: true
+
+      # ── No Force-Push, No Deletion ─────────────────────────────────────────
+      # AU-10 / CM-3: force-pushing rewrites history and can silently remove
+      # signed evidence of prior changes, destroying the audit trail.
+      allow_force_pushes: false
+      # AU-10 / CM-3: prevent accidental or malicious deletion of the protected
+      # branch and its rule set.
+      allow_deletions: false
+
+      # ── Enforce for Administrators ─────────────────────────────────────────
+      # CM-3 / AU-10: closes the privileged-account bypass vector.
+      # An admin bypassing branch protection is indistinguishable from a
+      # compromised admin account.
+      enforce_admins: true

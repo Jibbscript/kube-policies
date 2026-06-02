@@ -74,12 +74,17 @@ jobs:
           exit 1
         fi
 
-    - name: Check for security issues
+    # SDL-WU-06 (NIST SA-11(1), SR-3, SSDF PW.8): gosec gates the lint job on
+    # MEDIUM+ severity / MEDIUM+ confidence findings — not just SARIF upload.
+    # gosec writes the SARIF report and then exits non-zero on a qualifying
+    # finding, so the upload step still runs under `if: always()`.
+    - name: Check for security issues (gosec — fail on MEDIUM+)
       uses: securego/gosec@4a3bd8af174872c778439083ded7adbf3747e770  # v2.26.1
       with:
-        args: '-fmt sarif -out gosec.sarif ./...'
+        args: '-severity medium -confidence medium -fmt sarif -out gosec.sarif ./...'
 
-    - name: Upload SARIF file
+    - name: Upload gosec SARIF file
+      if: always()
       uses: github/codeql-action/upload-sarif@03e4368ac7daa2bd82b3e85262f3bf87ee112f57  # v3
       with:
         sarif_file: gosec.sarif
@@ -116,6 +121,14 @@ jobs:
     - name: Run unit tests
       run: |
         go test -v -race -coverprofile=coverage.out -covermode=atomic ./cmd/... ./internal/... ./pkg/...
+
+    # SDL-WU-03 (NIST SA-11, SA-11(1)): hard coverage floor, independent of
+    # Codecov availability. Starts at the current measured floor and ratchets to
+    # 80% per docs/testing.md; CI fails if total unit coverage drops below it.
+    - name: Enforce unit-coverage floor
+      env:
+        MIN_COVERAGE: '60'
+      run: ./scripts/test/cover-gate.sh coverage.out
 
     - name: Generate coverage report
       run: go tool cover -html=coverage.out -o coverage.html
@@ -299,10 +312,25 @@ jobs:
         go install github.com/onsi/ginkgo/v2/ginkgo@latest
         go install sigs.k8s.io/controller-runtime/tools/setup-envtest@latest
 
+    # SDL-WU-04 (NIST SA-11, SA-11(1)): -coverpkg records cross-package coverage
+    # from the integration suite (previously coverage-integration.out held only
+    # the mode line). The merge-coverage script combines it with the unit profile
+    # so the reported/uploaded coverage reflects both tiers.
     - name: Run integration tests
       run: |
         export KUBEBUILDER_ASSETS=$(setup-envtest use ${{ env.KUBERNETES_VERSION }} --bin-dir /tmp/envtest-bins -p path)
-        go test -v -race -coverprofile=coverage-integration.out ./test/integration/...
+        go test -v -race -coverpkg=./cmd/...,./internal/...,./pkg/... -coverprofile=coverage-integration.out ./test/integration/...
+
+    # SDL-WU-04: feed the integration profile to Codecov under the `integration`
+    # flag so reported coverage reflects both tiers (the unit-tests job uploads
+    # the `unittests` flag). The hard cover-gate floor is enforced on the unit
+    # profile in the unit-tests job.
+    - name: Upload integration coverage to Codecov
+      uses: codecov/codecov-action@b9fd7d16f6d7d1b5d2bec1a2887e65ceed900238  # v4
+      with:
+        file: ./coverage-integration.out
+        flags: integration
+        name: codecov-integration
 
     - name: Upload integration test results
       uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
@@ -484,6 +512,41 @@ jobs:
         severity: 'CRITICAL,HIGH'
         ignore-unfixed: true
         trivyignores: '.trivyignore'
+        exit-code: '1'
+
+    # --- VUL-WU-02 (NIST RA-5, SI-2, SP 800-190): IaC misconfiguration scan over
+    # the shipped artifacts (Helm charts, deployment manifests, Dockerfiles). The
+    # deliberately-insecure policy/test/demo/UI fixtures are excluded via skip-dirs
+    # — they exist to prove the engine DENIES them, so gating on them is wrong.
+    # Legitimate operational-infra findings (kube-bench scanner, Prometheus
+    # node-proxy) are path-scoped + dated in .trivyignore.yaml. SARIF (non-gating)
+    # for the Security tab, then a gating pass on CRITICAL/HIGH. ---
+    - name: Run Trivy config (misconfig) scan (SARIF)
+      uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # v0.36.0
+      with:
+        scan-type: 'config'
+        scan-ref: '.'
+        format: 'sarif'
+        output: 'trivy-config.sarif'
+        skip-dirs: 'demo,test,web,examples'
+        trivyignores: '.trivyignore.yaml'
+        exit-code: '0'
+
+    - name: Upload Trivy config scan results to GitHub Security tab
+      if: always()
+      uses: github/codeql-action/upload-sarif@03e4368ac7daa2bd82b3e85262f3bf87ee112f57  # v3
+      with:
+        sarif_file: 'trivy-config.sarif'
+
+    - name: Trivy GATE — config/misconfig (CRITICAL,HIGH; fail build)
+      uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # v0.36.0
+      with:
+        scan-type: 'config'
+        scan-ref: '.'
+        format: 'table'
+        severity: 'CRITICAL,HIGH'
+        skip-dirs: 'demo,test,web,examples'
+        trivyignores: '.trivyignore.yaml'
         exit-code: '1'
 
   # Performance tests
@@ -1304,6 +1367,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      security-events: write
     steps:
     - name: Checkout code
       uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
@@ -1317,7 +1381,19 @@ jobs:
     - name: Install govulncheck (pinned)
       run: go install golang.org/x/vuln/cmd/govulncheck@v1.3.0
 
-    - name: Run govulncheck
+    # VUL-WU-03 (NIST RA-5, SI-2, SI-2(2)): emit SARIF for the Security tab
+    # (non-gating; `|| true` so a finding still uploads), then a gating text
+    # run that fails the build on any reachable known vulnerability.
+    - name: Run govulncheck (SARIF for Security tab)
+      run: govulncheck -format sarif ./... > govulncheck.sarif || true
+
+    - name: Upload govulncheck SARIF
+      if: always()
+      uses: github/codeql-action/upload-sarif@03e4368ac7daa2bd82b3e85262f3bf87ee112f57  # v3
+      with:
+        sarif_file: govulncheck.sarif
+
+    - name: Run govulncheck (gate — fail on reachable vulnerability)
       run: govulncheck ./...
 
   # SUP-WU-11 (SI-7 / SLSA reproducible builds): prove the binaries are a pure
@@ -1347,16 +1423,42 @@ jobs:
         GOARCH: amd64
       run: ./scripts/verify-reproducible-build.sh
 
+  # Fuzz smoke (SDL-WU-12 / NIST SA-11(8), SI-10, SSDF PW.8): run each Go native
+  # fuzz target for a short duration on every PR/push to catch newly-introduced
+  # crashers. Extended nightly fuzzing with corpus persistence lives in
+  # fuzz-nightly.yml. The two targets prove fail-closed/defined-verdict behavior
+  # of the AdmissionReview parser and the OPA/Rego evaluator under arbitrary input.
+  fuzz-smoke:
+    name: Fuzz Smoke
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+
+    - name: Set up Go
+      uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff  # v5
+      with:
+        go-version: ${{ env.GO_VERSION }}
+        cache-dependency-path: go.sum
+
+    - name: Fuzz admission request parser (smoke)
+      run: go test -run='^$' -fuzz=FuzzAdmissionRequest -fuzztime=40s ./internal/admission/
+
+    - name: Fuzz policy engine evaluator (smoke)
+      run: go test -run='^$' -fuzz=FuzzEngineEvaluate -fuzztime=40s ./internal/policy/
+
   # Aggregate gate — single required check for branch protection.
   ci-gate:
     name: CI Gate
     runs-on: ubuntu-latest
     if: always()
-    needs: [lint, unit-tests, fips-verify, build-images, integration-tests, e2e-kind, e2e-k3s, security-scan, helm-tests, docs-tests, rbac-sa-gate, network-posture-gate, manifest-hardening-gate, helm-unittest, monitoring-rules, actionlint, govulncheck, reproducible-build]
+    needs: [lint, unit-tests, fips-verify, build-images, integration-tests, e2e-kind, e2e-k3s, security-scan, helm-tests, docs-tests, rbac-sa-gate, network-posture-gate, manifest-hardening-gate, helm-unittest, monitoring-rules, actionlint, govulncheck, reproducible-build, fuzz-smoke]
     steps:
     - name: Verify all required jobs succeeded
       run: |
-        results="${{ needs.lint.result }} ${{ needs.unit-tests.result }} ${{ needs.fips-verify.result }} ${{ needs.build-images.result }} ${{ needs.integration-tests.result }} ${{ needs.e2e-kind.result }} ${{ needs.e2e-k3s.result }} ${{ needs.security-scan.result }} ${{ needs.helm-tests.result }} ${{ needs.docs-tests.result }} ${{ needs.rbac-sa-gate.result }} ${{ needs.network-posture-gate.result }} ${{ needs.manifest-hardening-gate.result }} ${{ needs.helm-unittest.result }} ${{ needs.monitoring-rules.result }} ${{ needs.actionlint.result }} ${{ needs.govulncheck.result }} ${{ needs.reproducible-build.result }}"
+        results="${{ needs.lint.result }} ${{ needs.unit-tests.result }} ${{ needs.fips-verify.result }} ${{ needs.build-images.result }} ${{ needs.integration-tests.result }} ${{ needs.e2e-kind.result }} ${{ needs.e2e-k3s.result }} ${{ needs.security-scan.result }} ${{ needs.helm-tests.result }} ${{ needs.docs-tests.result }} ${{ needs.rbac-sa-gate.result }} ${{ needs.network-posture-gate.result }} ${{ needs.manifest-hardening-gate.result }} ${{ needs.helm-unittest.result }} ${{ needs.monitoring-rules.result }} ${{ needs.actionlint.result }} ${{ needs.govulncheck.result }} ${{ needs.reproducible-build.result }} ${{ needs.fuzz-smoke.result }}"
         echo "job results: ${results}"
         # shellcheck disable=SC2086
         for r in ${results}; do

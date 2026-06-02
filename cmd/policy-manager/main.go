@@ -174,12 +174,12 @@ func main() {
 	// as an empty POLICY_MANAGER_INTERNAL_SUBJECT for /internal.
 	decisionsReaderSubject := os.Getenv("POLICY_MANAGER_DECISIONS_READER_SUBJECT")
 
-	switch internalAuthModeRaw {
-	case "static":
+	switch classifyInternalAuthMode(internalAuthModeRaw) {
+	case authModeStatic:
 		// Static-only: shared bearer token, no TokenReview client needed.
 		log.Warn("internal decisions channel auth: STATIC bearer token (IAM-WU-11 escape hatch). TokenReview validation is OFF; intended only for non-cluster/demo deployments. Set POLICY_MANAGER_INTERNAL_AUTH_MODE=tokenreview on a real cluster.")
 
-	case "tokenreview", "":
+	case authModeTokenReview:
 		// Attempt to wire the TokenReview authenticator. Resolution order:
 		//   1. ctrl.GetConfig() (--kubeconfig flag > KUBECONFIG env > in-cluster)
 		//   2. kubernetes.NewForConfig()
@@ -246,7 +246,7 @@ func main() {
 			zap.String("expected_subject", decisionsReaderSubject),
 		)
 
-	default:
+	case authModeInvalid:
 		// Unknown value → operator typo → fail closed. This mirrors the Helm
 		// chart's enum guard (mode must be tokenreview or static).
 		log.Fatal("invalid POLICY_MANAGER_INTERNAL_AUTH_MODE; must be one of: tokenreview, static",
@@ -323,8 +323,8 @@ func main() {
 	}
 	tlsConf.GetCertificate = certReloader.GetCertificate
 	go func() {
-		if err := certReloader.Start(ctx); err != nil {
-			log.Error("TLS certificate reloader stopped with error", zap.Error(err))
+		if startErr := certReloader.Start(ctx); startErr != nil {
+			log.Error("TLS certificate reloader stopped with error", zap.Error(startErr))
 		}
 	}()
 
@@ -332,25 +332,14 @@ func main() {
 	// override the config-file values (security.ratelimit.*). The SSE stream cap
 	// (max_stream_connections) bounds the long-lived /decisions/stream
 	// connections separately from the general concurrency cap.
-	rlCfg := cfg.Security.RateLimit
-	if *rateLimitDisabled {
-		rlCfg.Enabled = false
-	}
-	if *rateLimitRPS >= 0 {
-		rlCfg.RequestsPerSecond = *rateLimitRPS
-	}
-	if *rateLimitBurst >= 0 {
-		rlCfg.Burst = *rateLimitBurst
-	}
-	if *rateLimitMaxConcurrent >= 0 {
-		rlCfg.MaxConcurrent = *rateLimitMaxConcurrent
-	}
-	if *rateLimitMaxBodyBytes >= 0 {
-		rlCfg.MaxBodyBytes = *rateLimitMaxBodyBytes
-	}
-	if *rateLimitMaxStreamConns >= 0 {
-		rlCfg.MaxStreamConnections = *rateLimitMaxStreamConns
-	}
+	rlCfg := resolveRateLimit(cfg.Security.RateLimit, rateLimitOverrides{
+		disabled:          *rateLimitDisabled,
+		requestsPerSecond: *rateLimitRPS,
+		burst:             *rateLimitBurst,
+		maxConcurrent:     *rateLimitMaxConcurrent,
+		maxBodyBytes:      *rateLimitMaxBodyBytes,
+		maxStreamConns:    *rateLimitMaxStreamConns,
+	})
 	log.Info("policy-manager rate-limiting configured",
 		zap.Bool("enabled", rlCfg.Enabled),
 		zap.Float64("requests_per_second", rlCfg.RequestsPerSecond),
@@ -360,14 +349,12 @@ func main() {
 		zap.Int("max_stream_connections", rlCfg.MaxStreamConnections),
 	)
 
-	apiServer := &http.Server{
-		Addr:         fmt.Sprintf(":%d", *port),
-		Handler:      policymanager.NewAPIRouter(policyManager, cfg.Security.Authentication, cfg.Security.RBAC, apiVerifier, rlCfg, metricsCollector),
-		TLSConfig:    tlsConf,
-		ReadTimeout:  30 * time.Second,
-		WriteTimeout: 30 * time.Second,
-		IdleTimeout:  60 * time.Second,
-	}
+	apiServer := newHTTPServer(
+		*port,
+		policymanager.NewAPIRouter(policyManager, cfg.Security.Authentication, cfg.Security.RBAC, apiVerifier, rlCfg, metricsCollector),
+		tlsConf,
+		serverTimeouts{read: 30 * time.Second, write: 30 * time.Second, idle: 60 * time.Second},
+	)
 	// When --metrics-tls is set (CRY-WU-08), the :9091 metrics endpoint serves
 	// TLS 1.3 (reusing the same hot-reload serving cert) and requires a bearer
 	// token on /metrics; /healthz + /readyz stay open for probes.
@@ -386,14 +373,12 @@ func main() {
 			os.Getenv("POLICY_MANAGER_INTERNAL_TOKEN_PREVIOUS"),
 		)
 	}
-	metricsServer := &http.Server{
-		Addr:         fmt.Sprintf(":%d", *metricsPort),
-		Handler:      policymanager.NewMetricsRouter(metricsVerifier),
-		TLSConfig:    metricsTLSConf,
-		ReadTimeout:  10 * time.Second,
-		WriteTimeout: 10 * time.Second,
-		IdleTimeout:  30 * time.Second,
-	}
+	metricsServer := newHTTPServer(
+		*metricsPort,
+		policymanager.NewMetricsRouter(metricsVerifier),
+		metricsTLSConf,
+		serverTimeouts{read: 10 * time.Second, write: 10 * time.Second, idle: 30 * time.Second},
+	)
 
 	// Start servers
 	go func() {
@@ -568,4 +553,100 @@ func buildAPITLSConfig(tlsCfg config.TLSConfig, requireClientCert bool) (*tls.Co
 		tlsConf.ClientAuth = tls.VerifyClientCertIfGiven
 	}
 	return tlsConf, nil
+}
+
+// rateLimitOverrides carries the CLI flag overrides for the rate-limit /
+// DoS-protection config (NET-WU-15, RES-WU-17). The sentinel-"use config"
+// convention matches the flag defaults: disabled=false leaves the config's
+// Enabled untouched, and every numeric override is applied only when >= 0
+// (a negative value, e.g. the flag default -1, defers to the config file).
+type rateLimitOverrides struct {
+	disabled          bool
+	requestsPerSecond float64
+	burst             int
+	maxConcurrent     int
+	maxBodyBytes      int64
+	maxStreamConns    int
+}
+
+// resolveRateLimit merges the CLI flag overrides over the config-file
+// security.ratelimit.* values. Flags win when set; an unset numeric flag
+// (negative sentinel) keeps the config value. This is the exact precedence the
+// inline main() block applied, lifted out verbatim so it can be unit-tested
+// independently of the global flag state.
+func resolveRateLimit(cfg config.RateLimitConfig, o rateLimitOverrides) config.RateLimitConfig {
+	if o.disabled {
+		cfg.Enabled = false
+	}
+	if o.requestsPerSecond >= 0 {
+		cfg.RequestsPerSecond = o.requestsPerSecond
+	}
+	if o.burst >= 0 {
+		cfg.Burst = o.burst
+	}
+	if o.maxConcurrent >= 0 {
+		cfg.MaxConcurrent = o.maxConcurrent
+	}
+	if o.maxBodyBytes >= 0 {
+		cfg.MaxBodyBytes = o.maxBodyBytes
+	}
+	if o.maxStreamConns >= 0 {
+		cfg.MaxStreamConnections = o.maxStreamConns
+	}
+	return cfg
+}
+
+// serverTimeouts groups the three http.Server timeout knobs so newHTTPServer
+// keeps a small, named signature instead of three bare time.Duration args.
+type serverTimeouts struct {
+	read  time.Duration
+	write time.Duration
+	idle  time.Duration
+}
+
+// newHTTPServer constructs an *http.Server listening on :port with the given
+// handler, optional TLS config, and timeouts. It is the verbatim struct literal
+// the inline main() blocks used for the API (:8080) and metrics (:9091)
+// servers, lifted out so the address formatting and field wiring are
+// unit-tested. A nil tlsConf yields a plain-HTTP server (the metrics default).
+func newHTTPServer(port int, handler http.Handler, tlsConf *tls.Config, t serverTimeouts) *http.Server {
+	return &http.Server{
+		Addr:         fmt.Sprintf(":%d", port),
+		Handler:      handler,
+		TLSConfig:    tlsConf,
+		ReadTimeout:  t.read,
+		WriteTimeout: t.write,
+		IdleTimeout:  t.idle,
+	}
+}
+
+// internalAuthMode classifies the POLICY_MANAGER_INTERNAL_AUTH_MODE selection
+// (IAM-WU-11) for the webhook -> policy-manager decisions channel.
+type internalAuthMode int
+
+const (
+	// authModeStatic: shared bearer token, no TokenReview (the demo/non-cluster
+	// escape hatch). Selected by the literal value "static".
+	authModeStatic internalAuthMode = iota
+	// authModeTokenReview: audience+subject-bound TokenReview (the default).
+	// Selected by "tokenreview" or an unset/empty value.
+	authModeTokenReview
+	// authModeInvalid: an operator typo. Any other value fails closed, mirroring
+	// the Helm chart's enum guard.
+	authModeInvalid
+)
+
+// classifyInternalAuthMode maps the raw POLICY_MANAGER_INTERNAL_AUTH_MODE env
+// value to its mode. The empty string defaults to TokenReview (the Inc5
+// default); the static escape hatch and the typo→fail-closed branch are
+// preserved exactly as the inline switch handled them.
+func classifyInternalAuthMode(raw string) internalAuthMode {
+	switch raw {
+	case "static":
+		return authModeStatic
+	case "tokenreview", "":
+		return authModeTokenReview
+	default:
+		return authModeInvalid
+	}
 }

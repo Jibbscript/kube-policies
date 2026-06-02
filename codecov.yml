@@ -1,0 +1,53 @@
+# codecov.yml — SDL-WU-02 / NIST SA-11 (developer security testing)
+# Coverage reporting configuration for Codecov.io.
+# Ratchet schedule: project floor moves 60% → 70% → 80% over three quarterly
+# releases; update coverage.status.project.target accordingly and flip
+# informational to false once the gate is stable. The hard CI gate
+# (scripts/test/cover-gate.sh, MIN_COVERAGE) must track this floor.
+
+coverage:
+  precision: 2
+  round: down
+  range: "60...100"
+
+  status:
+    project:
+      default:
+        # SDL-WU-02: conservative floor below the measured 68.6% unit total,
+        # matching the cover-gate.sh hard gate. informational: true until the
+        # ratchet reaches a stable gate.
+        target: "60%"
+        threshold: "1%"
+        informational: true
+
+    patch:
+      default:
+        # All changed lines in a PR must reach 80% coverage.
+        target: "80%"
+        threshold: "0%"
+        informational: false
+
+flags:
+  unittests:
+    paths:
+      - "**/*.go"
+    carryforward: true
+
+  integration:
+    paths:
+      - "**/*.go"
+    carryforward: true
+
+ignore:
+  - "**/zz_generated*.go"
+  - "**/*.pb.go"
+  - "test/**"
+  - "docs/**"
+  - "web/**"
+  - "**/mock_*.go"
+  - "internal/policymanager/apis/policies/v1/zz_generated_deepcopy.go"
+
+comment:
+  layout: "reach,diff,flags,files,footer"
+  behavior: default
+  require_changes: false

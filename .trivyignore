@@ -1,4 +1,4 @@
-# .trivyignore — suppressions for the GATING Trivy scans (CFG-WU-11).
+# .trivyignore — suppressions for the GATING Trivy scans (CFG-WU-11, VUL-WU-02).
 #
 # The CI Trivy steps run with --severity CRITICAL,HIGH --exit-code 1
 # --ignore-unfixed=true --ignorefile .trivyignore, so a CRITICAL/HIGH finding
@@ -7,8 +7,9 @@
 # SARIF-upload step runs with --exit-code 0 so the GitHub Security tab still
 # populates with the full finding set regardless of suppressions here.
 #
-# RULES FOR ADDING AN ENTRY (every suppression must be justified, dated, and
-# time-boxed — an undated/forever suppression is a silent risk acceptance):
+# RULES FOR ADDING AN ENTRY (NIST RA-5, SI-2, SP 800-190 §4.4 — every
+# suppression must be justified, dated, and time-boxed; an undated/forever
+# suppression is a silent risk acceptance that violates VUL-WU-02 policy):
 #
 #   CVE-XXXX-NNNNN   # OWNER: <name/team> | JUSTIFICATION: <why not exploitable
 #                    # / why accepted> | ADDED: YYYY-MM-DD | EXPIRES: YYYY-MM-DD

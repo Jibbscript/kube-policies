@@ -195,6 +195,14 @@ test-integration: ## Run integration tests
 		echo "$(GREEN)Integration test coverage report: coverage-integration.html$(NC)"; \
 	fi
 
+.PHONY: cover-gate
+cover-gate: ## Enforce the unit-coverage floor (SDL-WU-03) — fails below MIN_COVERAGE (default 60, ratchets to 80)
+	@MIN_COVERAGE=$${MIN_COVERAGE:-60} bash scripts/test/cover-gate.sh coverage-unit.out
+
+.PHONY: cover-merge
+cover-merge: ## Merge unit + integration coverage profiles into coverage-merged.out (SDL-WU-04)
+	@bash scripts/test/merge-coverage.sh coverage-unit.out coverage-integration.out
+
 .PHONY: test-e2e
 test-e2e: ## Run end-to-end tests
 	@echo "$(BLUE)Running E2E tests...$(NC)"
@@ -266,18 +274,29 @@ vet: ## Run go vet
 	go vet ./...
 	@echo "$(GREEN)Vet completed$(NC)"
 
+# Pinned security-tool versions (VUL-WU-20) — mirror the CI gate versions so
+# `make security` / `make check` reproduce the CI security gates locally instead
+# of silently skipping when a tool is absent.
+GOSEC_VERSION ?= v2.26.1
+GOVULNCHECK_VERSION ?= v1.3.0
+
 .PHONY: security
-security: ## Run security scans
+security: ## Run security scans (installs pinned gosec+govulncheck; fails on findings; Trivy if present — VUL-WU-20)
 	@echo "$(BLUE)Running security scans...$(NC)"
-	@if command -v gosec >/dev/null 2>&1; then \
-		gosec ./...; \
+	@command -v gosec >/dev/null 2>&1 || { echo "$(YELLOW)installing gosec $(GOSEC_VERSION)...$(NC)"; go install github.com/securego/gosec/v2/cmd/gosec@$(GOSEC_VERSION); }
+	@command -v govulncheck >/dev/null 2>&1 || { echo "$(YELLOW)installing govulncheck $(GOVULNCHECK_VERSION)...$(NC)"; go install golang.org/x/vuln/cmd/govulncheck@$(GOVULNCHECK_VERSION); }
+	PATH="$$(go env GOPATH)/bin:$$PATH" gosec -severity medium -confidence medium ./...
+	PATH="$$(go env GOPATH)/bin:$$PATH" govulncheck ./...
+	@# Trivy mirrors the CI fs/image/config gates. It is not go-installable, so it
+	@# is run only when present locally (CI always runs the gated Trivy scans).
+	@if command -v trivy >/dev/null 2>&1; then \
+		echo "$(BLUE)Trivy fs scan (CRITICAL,HIGH)...$(NC)"; \
+		trivy fs --severity CRITICAL,HIGH --ignore-unfixed --exit-code 1 .; \
+		echo "$(BLUE)Trivy config/misconfig scan (CRITICAL,HIGH)...$(NC)"; \
+		trivy config --severity CRITICAL,HIGH --exit-code 1 \
+			--skip-dirs 'demo,test,web,examples' --ignorefile .trivyignore.yaml .; \
 	else \
-		echo "$(YELLOW)gosec not installed, skipping security scan$(NC)"; \
-	fi
-	@if command -v govulncheck >/dev/null 2>&1; then \
-		govulncheck ./...; \
-	else \
-		echo "$(YELLOW)govulncheck not installed, skipping vulnerability check$(NC)"; \
+		echo "$(YELLOW)trivy not installed locally; CI runs the gated Trivy fs/image/config scans$(NC)"; \
 	fi
 
 .PHONY: check-logger-wiring

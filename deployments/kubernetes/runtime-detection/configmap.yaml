@@ -1,0 +1,209 @@
+# ConfigMap: kube-policies Falco ruleset for the standalone DaemonSet deployment.
+#
+# SINGLE SOURCE OF TRUTH: The canonical rule file is
+#   monitoring/falco/kube-policies-rules.yaml
+# This ConfigMap embeds that content verbatim. When updating rules, edit the
+# canonical file and re-copy the content here (or add a Makefile/CI target to
+# keep them in sync — see the note at the bottom of this file).
+#
+# The Helm chart ships an equivalent ConfigMap via
+#   charts/kube-policies/templates/falco-rules-configmap.yaml
+# when runtimeDetection.enabled=true. This standalone manifest is the non-Helm
+# alternative for clusters not managed by the kube-policies chart.
+#
+# NIST SI-4, SI-4(2), SI-4(4); IRM-WU-23.
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: kube-policies-falco-rules
+  namespace: falco-system
+  labels:
+    app.kubernetes.io/name: falco
+    app.kubernetes.io/component: runtime-detection
+    app.kubernetes.io/managed-by: kustomize
+  annotations:
+    # Source file: monitoring/falco/kube-policies-rules.yaml (canonical).
+    # Keep in sync: cp monitoring/falco/kube-policies-rules.yaml \
+    #   deployments/kubernetes/runtime-detection/rules-content.yaml
+    # then embed below. A CI freshness check (diff) is recommended.
+    kube-policies/rules-source: "monitoring/falco/kube-policies-rules.yaml"
+data:
+  # The key name matches the filename Falco expects when mounted as a rules_file.
+  kube-policies-rules.yaml: |
+    # Falco runtime-detection rules for kube-policies (IRM-WU-23; NIST SI-4, SI-4(2),
+    # SI-4(4), SC-7; CIS Kubernetes Benchmark 5.3.2).
+    #
+    # The kube-policies control-plane pods run gcr.io/distroless/static images with
+    # NO shell and a single static Go binary, so the expected runtime behavior is
+    # extremely narrow: one long-running process, TLS to the apiserver / policy-
+    # manager / SIEM, and nothing else. That tight baseline makes anomaly detection
+    # high-signal — any shell, any unexpected exec, any write to the read-only root
+    # filesystem, or any unexpected outbound connection is suspicious.
+    #
+    # Deployment: load this file into a Falco DaemonSet (falco.rules_file or a mounted
+    # ConfigMap — the chart ships it opt-in as a ConfigMap via runtimeDetection.enabled).
+    # Forward findings to the SIEM via falcosidekick or by tailing Falco's JSON output
+    # with the same forwarder used for audit logs (docs/security/siem-integration.md).
+    # Every rule is tagged `kube-policies` so the SIEM can filter rule: kube-policies-*.
+    #
+    # Tune `kube_policies_pods` to your install: by default it matches the release
+    # namespace (kube-policies-system) AND the project image repository, so it works
+    # whether or not Falco has k8s label enrichment.
+
+    - macro: kube_policies_pods
+      condition: >
+        (k8s.ns.name = "kube-policies-system" or
+         container.image.repository contains "kube-policies")
+
+    - macro: kube_policies_main_procs
+      condition: (proc.name in (admission-webhook, policy-manager, dashboard))
+
+    - rule: kube-policies unexpected process spawned
+      desc: >
+        A process other than the known kube-policies binaries was executed inside a
+        kube-policies pod. The images are distroless (no shell), so any extra exec —
+        a debugger, a downloaded tool, a shell — indicates compromise or an
+        unauthorized exec into the pod.
+      condition: >
+        spawned_process and container and kube_policies_pods
+        and not kube_policies_main_procs
+      output: >
+        Unexpected process in kube-policies pod
+        (proc=%proc.name cmdline=%proc.cmdline pod=%k8s.pod.name ns=%k8s.ns.name
+         image=%container.image.repository user=%user.name)
+      priority: WARNING
+      tags: [kube-policies, process, mitre_execution, T1059]
+      source: syscall
+
+    - rule: kube-policies shell in container
+      desc: >
+        A shell was spawned in a kube-policies pod. The distroless images contain no
+        shell, so this is a strong indicator of an interactive intrusion or a
+        container breakout attempt.
+      condition: >
+        spawned_process and container and kube_policies_pods
+        and proc.name in (sh, bash, dash, ash, busybox, zsh, ksh)
+      output: >
+        Shell spawned in kube-policies pod
+        (shell=%proc.name parent=%proc.pname cmdline=%proc.cmdline pod=%k8s.pod.name
+         ns=%k8s.ns.name user=%user.name)
+      priority: CRITICAL
+      tags: [kube-policies, shell, mitre_execution, T1059]
+      source: syscall
+
+    - rule: kube-policies write below read-only root
+      desc: >
+        A write was attempted to a path that should be read-only. kube-policies pods
+        run with readOnlyRootFilesystem=true; writes outside the explicitly mounted
+        writable volumes (/tmp, the audit log dir) indicate tampering.
+      condition: >
+        open_write and container and kube_policies_pods
+        and not fd.name startswith /tmp
+        and not fd.name startswith /var/log/kube-policies
+        and not fd.name startswith /proc
+        and not fd.name startswith /dev
+      output: >
+        Write below read-only root in kube-policies pod
+        (file=%fd.name proc=%proc.name pod=%k8s.pod.name ns=%k8s.ns.name)
+      priority: ERROR
+      tags: [kube-policies, filesystem, mitre_persistence]
+      source: syscall
+
+    - rule: kube-policies unexpected outbound connection
+      desc: >
+        A kube-policies pod opened an outbound connection to a destination outside
+        its expected egress set (apiserver, policy-manager, DNS, the configured
+        SIEM). Unexpected egress can indicate exfiltration or C2. Tune the allowed
+        ports to match your NetworkPolicy egress rules.
+      condition: >
+        outbound and container and kube_policies_pods
+        and not fd.rport in (443, 6443, 8081, 8443, 53)
+        and not fd.rip in ("127.0.0.1", "::1")
+      output: >
+        Unexpected outbound connection from kube-policies pod
+        (connection=%fd.name dport=%fd.dport proc=%proc.name pod=%k8s.pod.name
+         ns=%k8s.ns.name)
+      priority: WARNING
+      tags: [kube-policies, network, mitre_exfiltration, SC-7]
+      source: syscall
+
+    - rule: kube-policies sensitive mount or privilege escalation
+      desc: >
+        A kube-policies container attempted to read a sensitive host path or a
+        privilege-escalation primitive. The pods run non-root with all capabilities
+        dropped, so this indicates an attempted breakout.
+      condition: >
+        open_read and container and kube_policies_pods
+        and (fd.name startswith /etc/shadow or
+             fd.name startswith /root/.ssh or
+             fd.name = /var/run/docker.sock or
+             fd.name startswith /var/lib/kubelet/pods)
+      output: >
+        Sensitive read in kube-policies pod
+        (file=%fd.name proc=%proc.name pod=%k8s.pod.name ns=%k8s.ns.name user=%user.name)
+      priority: CRITICAL
+      tags: [kube-policies, filesystem, mitre_privilege_escalation]
+      source: syscall
+---
+# Falco main configuration — minimal, tuned for kube-policies rule loading.
+# Mount this alongside the rules ConfigMap on the DaemonSet (see daemonset.yaml).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: falco-config
+  namespace: falco-system
+  labels:
+    app.kubernetes.io/name: falco
+    app.kubernetes.io/component: runtime-detection
+    app.kubernetes.io/managed-by: kustomize
+data:
+  falco.yaml: |
+    # Falco configuration for kube-policies runtime detection.
+    # Reference: https://falco.org/docs/reference/daemon/config-options/
+
+    # Emit findings as JSON for machine-readable SIEM forwarding.
+    json_output: true
+    json_include_output_property: true
+    json_include_tags_property: true
+
+    # Log to stdout; the DaemonSet's log driver (or a sidecar / Fluent Bit) tails this.
+    log_stderr: true
+    log_syslog: false
+    log_level: info
+
+    # Rule files: default Falco rules (from the Falco image) + kube-policies overlay.
+    # The kube-policies-rules.yaml ConfigMap is mounted at /etc/falco/rules.d/.
+    rules_file:
+      - /etc/falco/falco_rules.yaml
+      - /etc/falco/falco_rules.local.yaml
+      - /etc/falco/rules.d/kube-policies-rules.yaml
+
+    # Watch for ConfigMap changes and hot-reload rules without DaemonSet restart.
+    # Requires the falco-configmap-reader Role (see rbac.yaml).
+    watch_config_files: true
+
+    # gRPC output — enable if using falcosidekick for Slack/Alertmanager forwarding.
+    # See "Alerting path" in the README and docs/security/runtime-detection.md.
+    grpc:
+      enabled: false
+      bind_address: "unix:///run/falco/falco.sock"
+      threadiness: 0
+
+    grpc_output:
+      enabled: false
+
+    # Syscall event drops: emit a WARNING if the kernel ring buffer drops events.
+    syscall_event_drops:
+      actions:
+        - log
+        - alert
+      rate: 0.03333
+      max_burst: 1
+
+    # Metadata fetching for k8s enrichment (pod/namespace labels in output).
+    # Falco uses the node's local kubelet API or the apiserver (via the RBAC above).
+    metadata_download:
+      max_mb: 100
+      chunk_wait_us: 1000
+      watch_freq_sec: 1

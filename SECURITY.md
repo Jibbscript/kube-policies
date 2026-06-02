@@ -155,3 +155,4 @@ Open weaknesses for this disclosure/remediation program are tracked under
 - [System Security Plan](docs/compliance/ssp/SSP.md) — system description and control narratives.
 - [System facts sheet](docs/compliance/system-facts.md) — authoritative component, port, and trust-zone IDs.
 - [Production Readiness Plan](.omc/plans/PRODUCTION-READINESS-FEDRAMP-CIS.md) — phased remediation (P0–P12).
+- [Vulnerability Management Procedure](docs/security/vulnerability-management.md) — scan inventory, cadence, triage workflow, suppression registers, and evidence retention (NIST RA-5, SI-2, SI-4, SI-5, CA-5).

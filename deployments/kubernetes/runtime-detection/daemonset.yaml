@@ -1,0 +1,231 @@
+# Falco DaemonSet — standalone (non-Helm) runtime detection for kube-policies.
+#
+# OPT-IN: Apply this manifest only when you want Falco deployed outside the
+# kube-policies Helm chart path (runtimeDetection.enabled=true).
+# Target workloads: admission-webhook + policy-manager in kube-policies-system.
+#
+# Image pinning: the image below is pinned to a specific tag. Operators SHOULD
+# also pin by digest for supply-chain integrity:
+#   docker.io/falcosecurity/falco-no-driver:<tag>@sha256:<digest>
+#
+# TODO-PIN: Replace the image tag and digest below with the current stable
+# release from https://github.com/falcosecurity/falco/releases once confirmed
+# for your kernel version. As of 2026-06 the latest stable series is 0.39.x.
+# To retrieve the digest:
+#   docker pull falcosecurity/falco-no-driver:0.39.2
+#   docker inspect --format='{{index .RepoDigests 0}}' falcosecurity/falco-no-driver:0.39.2
+#
+# The falco-no-driver image is preferred for eBPF-based deployments (kernel 5.8+).
+# For older kernels, use falcosecurity/falco:0.39.2 with the kernel module driver.
+# See https://falco.org/docs/getting-started/deployment/ for driver selection.
+#
+# NIST SI-4, SI-4(2), SI-4(4), SC-7; IRM-WU-23.
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: falco
+  namespace: falco-system
+  labels:
+    app.kubernetes.io/name: falco
+    app.kubernetes.io/component: runtime-detection
+    app.kubernetes.io/managed-by: kustomize
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: falco
+      app.kubernetes.io/component: runtime-detection
+  updateStrategy:
+    type: RollingUpdate
+    rollingUpdate:
+      # Update one node at a time to maintain detection coverage during upgrades.
+      maxUnavailable: 1
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: falco
+        app.kubernetes.io/component: runtime-detection
+      annotations:
+        # Trigger a DaemonSet rollout when the rules ConfigMap changes
+        # (set via `kubectl rollout restart` or a config-hash annotation in CI).
+        checksum/rules: "update-this-with-sha256-of-configmap-on-change"
+    spec:
+      serviceAccountName: falco
+      # hostPID: Falco must observe all host processes for syscall inspection.
+      hostPID: true
+      # hostNetwork: NOT required for eBPF-based Falco (falco-no-driver).
+      # Set to true only if using the kernel module driver and your CNI requires it.
+      hostNetwork: false
+      # tolerations: allow scheduling on control-plane / tainted nodes so
+      # Falco covers every node including the control-plane.
+      tolerations:
+        - key: node-role.kubernetes.io/control-plane
+          operator: Exists
+          effect: NoSchedule
+        - key: node-role.kubernetes.io/master
+          operator: Exists
+          effect: NoSchedule
+        - key: node.kubernetes.io/not-ready
+          operator: Exists
+          effect: NoExecute
+          tolerationSeconds: 30
+        - key: node.kubernetes.io/unreachable
+          operator: Exists
+          effect: NoExecute
+          tolerationSeconds: 30
+      # priorityClassName: ensures Falco pods are not evicted under resource
+      # pressure — detection continuity is safety-critical.
+      priorityClassName: system-node-critical
+      initContainers:
+        # The driver-loader init container installs the eBPF probe for the
+        # running kernel. For falco-no-driver (eBPF) this is the preferred path.
+        # If your cluster uses the kernel module driver, replace with:
+        #   image: falcosecurity/falco-driver-loader:0.39.2  # TODO-PIN digest
+        - name: falco-driver-loader
+          # TODO-PIN: pin digest alongside tag (see header comment).
+          image: falcosecurity/falco-driver-loader:0.39.2
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            privileged: true
+          env:
+            - name: FALCO_DRIVER_CHOICE
+              # "bpf" selects the eBPF CO-RE probe (kernel 5.8+).
+              # Set to "module" for older kernels.
+              value: bpf
+          volumeMounts:
+            - name: root-falco-fs
+              mountPath: /root/.falco
+            - name: proc-fs
+              mountPath: /host/proc
+              readOnly: true
+            - name: boot-fs
+              mountPath: /host/boot
+              readOnly: true
+            - name: lib-modules
+              mountPath: /host/lib/modules
+              readOnly: true
+            - name: usr-fs
+              mountPath: /host/usr
+              readOnly: true
+            - name: etc-fs
+              mountPath: /host/etc
+              readOnly: true
+      containers:
+        - name: falco
+          # TODO-PIN: pin by digest (see header comment).
+          image: falcosecurity/falco-no-driver:0.39.2
+          imagePullPolicy: IfNotPresent
+          args:
+            - /usr/bin/falco
+            - --cri=/run/containerd/containerd.sock
+            - --cri=/run/crio/crio.sock
+            - -pk
+          securityContext:
+            # Falco requires privileged to load the eBPF probe and inspect syscalls.
+            # There is no safe way to run Falco without this permission.
+            privileged: true
+            # All capabilities are granted by privileged=true; explicitly listing
+            # the required subset here for documentation (enforced by privileged).
+            capabilities:
+              add:
+                - SYS_PTRACE
+                - SYS_ADMIN
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 1000m
+              memory: 512Mi
+          env:
+            - name: FALCO_BPF_PROBE
+              value: ""
+          ports:
+            - name: metrics
+              containerPort: 8765
+              protocol: TCP
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8765
+            initialDelaySeconds: 60
+            periodSeconds: 15
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8765
+            initialDelaySeconds: 30
+            periodSeconds: 15
+            failureThreshold: 3
+          volumeMounts:
+            # Falco configuration file (falco.yaml).
+            - name: falco-config
+              mountPath: /etc/falco/falco.yaml
+              subPath: falco.yaml
+              readOnly: true
+            # kube-policies rules loaded into the rules.d overlay directory.
+            - name: kube-policies-rules
+              mountPath: /etc/falco/rules.d/kube-policies-rules.yaml
+              subPath: kube-policies-rules.yaml
+              readOnly: true
+            # Host proc/sys for syscall inspection.
+            - name: proc-fs
+              mountPath: /host/proc
+              readOnly: true
+            - name: etc-fs
+              mountPath: /host/etc
+              readOnly: true
+            # containerd/CRI socket for container metadata enrichment.
+            - name: containerd-sock
+              mountPath: /run/containerd/containerd.sock
+            - name: crio-sock
+              mountPath: /run/crio/crio.sock
+              # optional: CRI-O clusters only; this mount will simply not exist
+              # on containerd-only nodes and is harmless.
+            # eBPF probe directory (driver loader output).
+            - name: root-falco-fs
+              mountPath: /root/.falco
+            # Unix socket for falcosidekick gRPC (if enabled in falco.yaml).
+            - name: falco-grpc-sock
+              mountPath: /run/falco
+      volumes:
+        - name: falco-config
+          configMap:
+            name: falco-config
+            items:
+              - key: falco.yaml
+                path: falco.yaml
+        - name: kube-policies-rules
+          configMap:
+            name: kube-policies-falco-rules
+            items:
+              - key: kube-policies-rules.yaml
+                path: kube-policies-rules.yaml
+        - name: proc-fs
+          hostPath:
+            path: /proc
+        - name: boot-fs
+          hostPath:
+            path: /boot
+        - name: lib-modules
+          hostPath:
+            path: /lib/modules
+        - name: usr-fs
+          hostPath:
+            path: /usr
+        - name: etc-fs
+          hostPath:
+            path: /etc
+        - name: root-falco-fs
+          emptyDir: {}
+        - name: containerd-sock
+          hostPath:
+            path: /run/containerd/containerd.sock
+            type: Socket
+        - name: crio-sock
+          hostPath:
+            path: /run/crio/crio.sock
+            # type omitted (FileOrCreate not appropriate for a socket);
+            # the kubelet will silently skip mounting if the path does not exist.
+        - name: falco-grpc-sock
+          emptyDir: {}

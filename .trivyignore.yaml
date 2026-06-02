@@ -1,0 +1,38 @@
+# Trivy path-scoped misconfiguration suppressions (VUL-WU-02)
+# Controls: NIST RA-5, SI-2, SP 800-190 §4.x
+#
+# The CI "Trivy GATE — config/misconfig" step (.github/workflows/ci.yml) scans
+# the shipped IaC (charts/, deployments/, build/docker/) and FAILS on a
+# CRITICAL/HIGH misconfiguration. The deliberately-insecure policy/test/demo/UI
+# fixtures (demo/, test/, web/, examples/) are excluded at the scan level via
+# skip-dirs — they exist precisely to prove the engine DENIES them, so gating on
+# them would be semantically wrong.
+#
+# The few entries below are LEGITIMATE operational-infra findings on optional
+# deploy manifests. Each is path-scoped (never a global ID suppression) and
+# carries a justification, owner, and expiry. Re-review on or before the expiry.
+misconfigurations:
+  - id: KSV-0010
+    paths:
+      - "deployments/kubernetes/conformance/kube-bench-job.yaml"
+    statement: >-
+      kube-bench is a host CIS-benchmark scanner; it requires hostPID to read
+      the node's kubelet/process configuration. This Job is operator-run
+      tooling, not a workload the product ships into tenant namespaces.
+      Owner: System Owner (TBD). Expires: 2026-12-01 (re-review).
+  - id: KSV-0118
+    paths:
+      - "deployments/kubernetes/conformance/kube-bench-job.yaml"
+    statement: >-
+      kube-bench scanner Job intentionally runs with elevated host access to
+      assess the node; a fully-restricted securityContext would defeat its
+      purpose. Operator-run tooling only.
+      Owner: System Owner (TBD). Expires: 2026-12-01 (re-review).
+  - id: KSV-0047
+    paths:
+      - "deployments/kubernetes/monitoring/prometheus-deployment.yaml"
+    statement: >-
+      Prometheus requires the nodes/proxy RBAC verb to scrape kubelet and
+      node-level metrics. This is the standard, documented Prometheus scrape
+      requirement; the deployment is an optional monitoring extra.
+      Owner: System Owner (TBD). Expires: 2026-12-01 (re-review).

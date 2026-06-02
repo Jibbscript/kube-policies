@@ -18,7 +18,9 @@ production system. It is being driven to **FedRAMP-Moderate** (NIST SP 800-53 Re
 currently **Planned** or **Partial**. The honest, evidence-backed status — FIPS-199
 categorization, control matrix, and POA&M of open weaknesses — lives in the compliance
 package: [docs/compliance/](docs/compliance/README.md). To report a vulnerability, see
-[SECURITY.md](SECURITY.md).
+[SECURITY.md](SECURITY.md). The vulnerability-management procedure (scan inventory, SLA
+tracking, and evidence retention) is at
+[docs/security/vulnerability-management.md](docs/security/vulnerability-management.md).
 
 ## Current Repo State
 

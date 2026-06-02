@@ -1,0 +1,66 @@
+# .gitleaks.toml — gitleaks configuration for kube-policies.
+# SDL-WU-19 / VUL-WU-07.  NIST IA-5, SI-7, SSDF PW.4.
+#
+# Extends the gitleaks default ruleset so every upstream rule fires unless
+# explicitly suppressed in the [allowlist] below.  New rules shipped by
+# upstream gitleaks releases are automatically inherited.
+
+[extend]
+# Pull in the full default ruleset shipped with the gitleaks binary.
+useDefault = true
+
+# ---------------------------------------------------------------------------
+# Allowlist — justified false-positive suppressions ONLY.
+# Each entry carries a comment explaining why it is safe to ignore.
+# Do NOT add broad source-tree paths; keep suppression to the narrowest scope
+# that covers the false positive.
+# ---------------------------------------------------------------------------
+
+[allowlist]
+  description = "Justified allowlist for kube-policies test fixtures and example material"
+
+  # Rule: paths — file-path patterns where ALL findings are suppressed.
+  # Use only for auto-generated test material that cannot contain real secrets.
+  paths = [
+    # Scoped to the test files that actually generate ephemeral TLS/cert/key
+    # material at runtime (e.g. internal/tlsreload/reloader_test.go writes a
+    # throwaway "-----BEGIN CERTIFICATE-----" to a tempfile; cmd/policy-manager
+    # main_test.go builds a self-signed client CA). These are synthetic and
+    # discarded after each run. NOT a blanket *_test.go suppression — a real
+    # credential pasted into a non-crypto test file would still be detected.
+    '''internal/tlsreload/.*_test\.go$''',
+    '''internal/.*/(tls|cert|reload|webhook)[^/]*_test\.go$''',
+    '''cmd/policy-manager/.*_test\.go$''',
+
+    # testdata/ directories contain static fixtures used by unit tests.
+    # Any PEM blocks or token-shaped strings in these paths are test vectors,
+    # not operational secrets.
+    '''testdata/''',
+  ]
+
+  # Rule: regexes — patterns matched against the secret value itself.
+  # Suppress only clearly non-secret shapes that the default rules over-fire on.
+  regexes = [
+    # Kubernetes service-account token placeholder used in docs/ examples.
+    # Real SA tokens are 3-part JWTs; the docs use the literal placeholder
+    # string "<token>" or "YOUR_TOKEN_HERE" which is not a real credential.
+    '''<token>''',
+    '''YOUR_TOKEN_HERE''',
+    '''REPLACE_ME''',
+  ]
+
+  # Rule: commits — specific commit SHAs to skip entirely.
+  # Use sparingly; prefer path/regex suppression for recurring patterns.
+  # (none currently — add with justification if a historical commit contains
+  # a known false positive that cannot be suppressed by path/regex)
+  commits = []
+
+  # Rule: stopwords — substrings in the matched secret that indicate a
+  # placeholder / example value rather than a real secret.
+  stopwords = [
+    "example",
+    "placeholder",
+    "changeme",
+    "your-secret-here",
+    "CHANGEME",
+  ]

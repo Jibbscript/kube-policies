@@ -68,6 +68,20 @@ jobs:
         working-directory: web
         run: pnpm install --frozen-lockfile
 
+      # VUL-WU-06 (NIST RA-5, SI-2, SP 800-190): gate the SHIPPED (production)
+      # dependency tree on HIGH/CRITICAL advisories — this is the runtime attack
+      # surface of the Svelte SPA + BFF. Dev-only build/test tooling advisories
+      # (vitest, esbuild, …) are surfaced informationally below and remediated
+      # via Dependabot per docs/security/vulnerability-management.md, rather than
+      # blocking the build on tools that never ship.
+      - name: Dependency audit (pnpm — production deps gate)
+        working-directory: web
+        run: pnpm audit --prod --audit-level=high
+
+      - name: Dependency audit (full tree — informational)
+        working-directory: web
+        run: pnpm audit --audit-level=high || true
+
       - name: Set up Go
         uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff  # v5
         with:

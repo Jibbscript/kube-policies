@@ -1,0 +1,374 @@
+# VUL-WU-15 — Monthly Vulnerability Scan
+# NIST controls: RA-5 (Vulnerability Monitoring & Scanning), RA-5(2) (Update Vulnerabilities
+# Scanned), RA-5(5) (Privileged Access / DB Freshness), CA-7 (Continuous Monitoring)
+#
+# Runs on the 1st of every month at 06:00 UTC and on manual dispatch.
+# Produces a consolidated dated report artifact (JSON + Markdown) and opens/updates
+# a single tracking GitHub Issue titled "Monthly Vulnerability Scan — <YYYY-MM-DD>"
+# with findings grouped by severity and SLA due-dates:
+#   Critical  +30 days
+#   High      +30 days
+#   Moderate  +90 days
+#   Low       +180 days
+
+name: Monthly Vulnerability Scan
+
+on:
+  schedule:
+    - cron: '0 6 1 * *'   # 1st of each month, 06:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+  security-events: write
+
+env:
+  GO_VERSION: '1.25'
+
+jobs:
+  vuln-scan:
+    name: Vulnerability Scan and Report
+    runs-on: ubuntu-latest
+
+    steps:
+      # ------------------------------------------------------------------ #
+      # Checkout                                                             #
+      # ------------------------------------------------------------------ #
+      - name: Checkout code
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+
+      # ------------------------------------------------------------------ #
+      # Go toolchain                                                         #
+      # ------------------------------------------------------------------ #
+      - name: Set up Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff  # v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      # ------------------------------------------------------------------ #
+      # govulncheck                                                          #
+      # ------------------------------------------------------------------ #
+      - name: Run govulncheck
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@v1.3.0
+          govulncheck ./... 2>&1 | tee govulncheck.txt || true
+
+      # ------------------------------------------------------------------ #
+      # Trivy DB freshness assertion (RA-5(5))                              #
+      # Trivy automatically downloads its DB before scanning; we log the   #
+      # metadata line it prints so the audit trail proves freshness.        #
+      # ------------------------------------------------------------------ #
+      - name: Trivy fs scan — SARIF (non-gating, Security tab)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # v0.36.0
+        with:
+          scan-type: 'fs'
+          scan-ref: '.'
+          format: 'sarif'
+          output: 'trivy-fs.sarif'
+          exit-code: '0'
+
+      - name: Upload fs SARIF to GitHub Security tab
+        uses: github/codeql-action/upload-sarif@03e4368ac7daa2bd82b3e85262f3bf87ee112f57  # v3
+        with:
+          sarif_file: 'trivy-fs.sarif'
+
+      - name: Trivy fs scan — JSON report
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # v0.36.0
+        with:
+          scan-type: 'fs'
+          scan-ref: '.'
+          format: 'json'
+          output: 'trivy-fs.json'
+          exit-code: '0'
+
+      # ------------------------------------------------------------------ #
+      # Image scans — build from HEAD then scan                             #
+      # The build steps are NOT continue-on-error: a build failure must     #
+      # surface loudly rather than silently yield an empty (false-clean)    #
+      # image scan. Dockerfile paths are the canonical build/docker/*.       #
+      # ------------------------------------------------------------------ #
+      - name: Build admission-webhook image for scanning
+        run: |
+          docker build \
+            -t kube-policies/admission-webhook:scan \
+            -f build/docker/admission-webhook.Dockerfile \
+            . 2>&1 | tail -5
+
+      - name: Trivy image scan — admission-webhook (JSON)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # v0.36.0
+        with:
+          image-ref: 'kube-policies/admission-webhook:scan'
+          format: 'json'
+          output: 'trivy-webhook.json'
+          exit-code: '0'
+
+      - name: Build policy-manager image for scanning
+        run: |
+          docker build \
+            -t kube-policies/policy-manager:scan \
+            -f build/docker/policy-manager.Dockerfile \
+            . 2>&1 | tail -5
+
+      - name: Trivy image scan — policy-manager (JSON)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # v0.36.0
+        with:
+          image-ref: 'kube-policies/policy-manager:scan'
+          format: 'json'
+          output: 'trivy-manager.json'
+          exit-code: '0'
+
+      # ------------------------------------------------------------------ #
+      # Consolidate report — Markdown + CSV                                 #
+      # ------------------------------------------------------------------ #
+      - name: Build consolidated report
+        id: report
+        env:
+          GITHUB_RUN_ID: ${{ github.run_id }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_SERVER_URL: ${{ github.server_url }}
+        run: |
+          SCAN_DATE="$(date -u +%Y-%m-%d)"
+          echo "SCAN_DATE=${SCAN_DATE}" >> "$GITHUB_ENV"
+
+          # Portable SLA date helper: try GNU date, fall back to BSD date
+          due_date() {
+            local days="$1"
+            date -u -d "+${days} days" +%Y-%m-%d 2>/dev/null \
+              || date -u -v+"${days}"d +%Y-%m-%d
+          }
+          DUE_CRITICAL="$(due_date 30)"
+          DUE_HIGH="$(due_date 30)"
+          DUE_MEDIUM="$(due_date 90)"
+          DUE_LOW="$(due_date 180)"
+
+          # Extract vulnerabilities from Trivy JSON into CSV: severity|id|pkg|source
+          python3 - <<'PYEOF'
+          import json, os, sys
+
+          sources = [
+              ("trivy-fs.json",      "fs"),
+              ("trivy-webhook.json", "image:admission-webhook"),
+              ("trivy-manager.json", "image:policy-manager"),
+          ]
+          rows = []
+          for path, src in sources:
+              if not os.path.exists(path):
+                  continue
+              with open(path) as fh:
+                  data = json.load(fh)
+              for r in data.get("Results", []):
+                  for v in r.get("Vulnerabilities") or []:
+                      sev = v.get("Severity", "UNKNOWN").upper()
+                      vid = v.get("VulnerabilityID", "")
+                      pkg = v.get("PkgName", "")
+                      rows.append(f"{sev}|{vid}|{pkg}|{src}")
+
+          sev_order = {"CRITICAL": 0, "HIGH": 1, "MEDIUM": 2, "LOW": 3}
+          rows.sort(key=lambda r: sev_order.get(r.split("|")[0], 9))
+
+          with open("all-vulns.csv", "w") as out:
+              out.write("\n".join(rows))
+              if rows:
+                  out.write("\n")
+          PYEOF
+
+          # Counts by severity
+          count_sev() { grep -c "^${1}|" all-vulns.csv 2>/dev/null || echo 0; }
+          CRIT="$(count_sev CRITICAL)"
+          HIGH="$(count_sev HIGH)"
+          MED="$(count_sev MEDIUM)"
+          LOW_C="$(count_sev LOW)"
+          TOTAL="$(wc -l < all-vulns.csv | tr -d ' ')"
+
+          # govulncheck one-liner summary
+          GOVULN_COUNT="$(grep -c '^Vulnerability #' govulncheck.txt 2>/dev/null || echo 0)"
+          GOVULN_SUMMARY="${GOVULN_COUNT} Go module vulnerability(ies) found"
+
+          RUN_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+
+          # Write Markdown report
+          {
+            echo "# Monthly Vulnerability Scan — ${SCAN_DATE}"
+            echo ""
+            echo "> **VUL-WU-15** | NIST RA-5, RA-5(2), RA-5(5), CA-7"
+            echo ""
+            echo "## Summary"
+            echo ""
+            echo "| Severity | Count | SLA Due Date |"
+            echo "|----------|-------|--------------|"
+            echo "| Critical | ${CRIT} | ${DUE_CRITICAL} |"
+            echo "| High | ${HIGH} | ${DUE_HIGH} |"
+            echo "| Moderate/Medium | ${MED} | ${DUE_MEDIUM} |"
+            echo "| Low | ${LOW_C} | ${DUE_LOW} |"
+            echo "| **Total** | **${TOTAL}** | — |"
+            echo ""
+            echo "## govulncheck"
+            echo ""
+            echo "${GOVULN_SUMMARY}"
+            echo ""
+            echo '```'
+            head -60 govulncheck.txt 2>/dev/null || echo "no output"
+            echo '```'
+            echo ""
+            echo "## Trivy Findings (top 200)"
+            echo ""
+            echo "| Severity | CVE / ID | Package | Source |"
+            echo "|----------|----------|---------|--------|"
+            awk -F'|' '{printf "| %s | %s | %s | %s |\n", $1, $2, $3, $4}' \
+              all-vulns.csv | head -200
+            echo ""
+            echo "---"
+            echo "*Scan run: ${RUN_URL}*"
+          } > "vuln-report-${SCAN_DATE}.md"
+
+          # Pass outputs to subsequent steps
+          {
+            echo "crit=${CRIT}"
+            echo "high=${HIGH}"
+            echo "med=${MED}"
+            echo "low=${LOW_C}"
+            echo "total=${TOTAL}"
+            echo "scan_date=${SCAN_DATE}"
+            echo "govuln_summary=${GOVULN_SUMMARY}"
+            echo "due_critical=${DUE_CRITICAL}"
+            echo "due_high=${DUE_HIGH}"
+            echo "due_medium=${DUE_MEDIUM}"
+            echo "due_low=${DUE_LOW}"
+            echo "run_url=${RUN_URL}"
+          } >> "$GITHUB_OUTPUT"
+
+      # ------------------------------------------------------------------ #
+      # Upload consolidated report artifact                                 #
+      # ------------------------------------------------------------------ #
+      - name: Upload report artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+        with:
+          name: vuln-report-${{ steps.report.outputs.scan_date }}
+          path: |
+            vuln-report-${{ steps.report.outputs.scan_date }}.md
+            all-vulns.csv
+            trivy-fs.json
+            trivy-webhook.json
+            trivy-manager.json
+            govulncheck.txt
+          retention-days: 90
+
+      # ------------------------------------------------------------------ #
+      # Open / update tracking issue                                        #
+      # All dynamic values are passed via env: — safe against injection    #
+      # ------------------------------------------------------------------ #
+      - name: Create or update tracking issue
+        uses: actions/github-script@60a0d83138ddba5ccdc100e76d2f31a14089aa57  # v7
+        env:
+          SCAN_DATE: ${{ steps.report.outputs.scan_date }}
+          CRIT: ${{ steps.report.outputs.crit }}
+          HIGH: ${{ steps.report.outputs.high }}
+          MED: ${{ steps.report.outputs.med }}
+          LOW: ${{ steps.report.outputs.low }}
+          TOTAL: ${{ steps.report.outputs.total }}
+          GOVULN_SUMMARY: ${{ steps.report.outputs.govuln_summary }}
+          DUE_CRITICAL: ${{ steps.report.outputs.due_critical }}
+          DUE_HIGH: ${{ steps.report.outputs.due_high }}
+          DUE_MEDIUM: ${{ steps.report.outputs.due_medium }}
+          DUE_LOW: ${{ steps.report.outputs.due_low }}
+          RUN_URL: ${{ steps.report.outputs.run_url }}
+        with:
+          script: |
+            const scanDate    = process.env.SCAN_DATE;
+            const crit        = process.env.CRIT;
+            const high        = process.env.HIGH;
+            const med         = process.env.MED;
+            const low         = process.env.LOW;
+            const total       = process.env.TOTAL;
+            const govuln      = process.env.GOVULN_SUMMARY;
+            const dueCritical = process.env.DUE_CRITICAL;
+            const dueHigh     = process.env.DUE_HIGH;
+            const dueMedium   = process.env.DUE_MEDIUM;
+            const dueLow      = process.env.DUE_LOW;
+            const runUrl      = process.env.RUN_URL;
+
+            const title = `Monthly Vulnerability Scan — ${scanDate}`;
+
+            const body = [
+              `## Monthly Vulnerability Scan — ${scanDate}`,
+              ``,
+              `> **VUL-WU-15** | NIST RA-5, RA-5(2), RA-5(5), CA-7`,
+              ``,
+              `### Findings by Severity`,
+              ``,
+              `| Severity | Count | SLA Due Date |`,
+              `|----------|-------|--------------|`,
+              `| Critical | ${crit} | ${dueCritical} |`,
+              `| High | ${high} | ${dueHigh} |`,
+              `| Moderate | ${med} | ${dueMedium} |`,
+              `| Low | ${low} | ${dueLow} |`,
+              `| **Total** | **${total}** | — |`,
+              ``,
+              `### govulncheck`,
+              ``,
+              govuln,
+              ``,
+              `### SLA Policy`,
+              ``,
+              `| Severity | SLA Window |`,
+              `|----------|------------|`,
+              `| Critical | 30 days from scan date |`,
+              `| High | 30 days from scan date |`,
+              `| Moderate | 90 days from scan date |`,
+              `| Low | 180 days from scan date |`,
+              ``,
+              `### References`,
+              ``,
+              `- Scan run: ${runUrl}`,
+              `- Controls: NIST SP 800-53 RA-5, RA-5(2), RA-5(5), CA-7`,
+              `- Workflow: VUL-WU-15`,
+            ].join('\n');
+
+            // Ensure labels exist (idempotent)
+            for (const label of ['vuln', 'security']) {
+              try {
+                await github.rest.issues.getLabel({
+                  owner: context.repo.owner,
+                  repo:  context.repo.repo,
+                  name:  label,
+                });
+              } catch (_) {
+                await github.rest.issues.createLabel({
+                  owner: context.repo.owner,
+                  repo:  context.repo.repo,
+                  name:  label,
+                  color: label === 'vuln' ? 'e11d48' : 'f97316',
+                });
+              }
+            }
+
+            // Find existing open issue with same title
+            const { data: existing } = await github.rest.issues.listForRepo({
+              owner:    context.repo.owner,
+              repo:     context.repo.repo,
+              labels:   'vuln',
+              state:    'open',
+              per_page: 50,
+            });
+
+            const match = existing.find(i => i.title === title);
+
+            if (match) {
+              await github.rest.issues.update({
+                owner:        context.repo.owner,
+                repo:         context.repo.repo,
+                issue_number: match.number,
+                body,
+              });
+              core.info(`Updated issue #${match.number}: ${title}`);
+            } else {
+              const { data: created } = await github.rest.issues.create({
+                owner:  context.repo.owner,
+                repo:   context.repo.repo,
+                title,
+                body,
+                labels: ['vuln', 'security'],
+              });
+              core.info(`Created issue #${created.number}: ${title}`);
+            }

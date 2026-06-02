@@ -1,0 +1,93 @@
+# SDL-WU-12: Nightly extended fuzzing
+# NIST controls: SA-11(8) (fuzz testing), CA-7 (continuous monitoring), SSDF PW.8
+# Runs each native Go fuzz target for 10 minutes. Any crasher discovered causes a
+# non-zero exit and the artifact is uploaded for triage.
+name: Fuzz Nightly
+
+on:
+  schedule:
+    # 04:00 UTC — offset from the 02:00 UTC ci.yml nightly run
+    - cron: '0 4 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fuzz-nightly-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  GO_VERSION: '1.25'
+  GOTOOLCHAIN: local
+  GOFLAGS: -mod=readonly
+
+jobs:
+  fuzz:
+    name: Fuzz / ${{ matrix.func }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - pkg: ./internal/admission/
+            func: FuzzAdmissionRequest
+          - pkg: ./internal/policy/
+            func: FuzzEngineEvaluate
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+
+      - name: Set up Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff  # v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Run fuzz target (${{ matrix.func }}, 10 m)
+        env:
+          FUZZ_PKG: ${{ matrix.pkg }}
+          FUZZ_FUNC: ${{ matrix.func }}
+        run: |
+          go test -run='^$' \
+            -fuzz="${FUZZ_FUNC}" \
+            -fuzztime=10m \
+            "${FUZZ_PKG}"
+
+      # Upload corpus regardless of outcome so seeds accumulate over time.
+      - name: Upload fuzz corpus
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+        with:
+          name: fuzz-corpus-${{ matrix.func }}-${{ github.run_id }}
+          path: |
+            ${{ matrix.pkg }}/testdata/fuzz/${{ matrix.func }}
+          if-no-files-found: ignore
+
+      # Fail visibly when the Go fuzzer writes a crasher.
+      # go test exits non-zero on crasher, but this step makes the artifact
+      # linkage explicit and produces a clear failure annotation.
+      - name: Check for crashers
+        if: always()
+        env:
+          FUZZ_PKG: ${{ matrix.pkg }}
+          FUZZ_FUNC: ${{ matrix.func }}
+        run: |
+          CRASHER_DIR="${FUZZ_PKG}/testdata/fuzz/${FUZZ_FUNC}"
+          if compgen -G "${CRASHER_DIR}/*/crash-*" > /dev/null 2>&1 || \
+             compgen -G "${CRASHER_DIR}/crash-*"    > /dev/null 2>&1; then
+            echo "::error::Crasher found in ${CRASHER_DIR} — see uploaded corpus artifact"
+            exit 1
+          fi
+
+      - name: Upload crashers (if any)
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+        with:
+          name: fuzz-crashers-${{ matrix.func }}-${{ github.run_id }}
+          path: |
+            ${{ matrix.pkg }}/testdata/fuzz/${{ matrix.func }}
+          if-no-files-found: ignore

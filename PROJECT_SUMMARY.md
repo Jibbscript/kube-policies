@@ -120,7 +120,7 @@ kube-policies/
 - **Network Security**: TLS 1.3 on the admission webhook today; mTLS between services and default-deny NetworkPolicy are **Planned (P3/P4)** — see [POA&M](docs/compliance/POAM.md)
 - **Identity Management**: Kubernetes RBAC today (least-privilege split **Planned — P3**); OIDC SSO for the API/dashboard **Planned (P3)**
 - **Data Protection**: TLS 1.3 in transit on the webhook; encryption-at-rest is **CSP-inherited / Planned (P2)** — KP does not implement at-rest encryption itself
-- **Vulnerability Management**: **Planned (P6/P11)** — gating image/dependency scanning is not yet enforced in CI
+- **Vulnerability Management**: **Implemented (P11)** — gating Trivy (fs/image/config), govulncheck, gosec, gitleaks, and pnpm-audit scans run on every PR and fail CI on findings; a monthly scan, POA&M aging/SLA-breach alerting, and a 30/90/180-day SLA table are documented in [SECURITY.md](SECURITY.md) and [docs/security/vulnerability-management.md](docs/security/vulnerability-management.md). Branch-protection enforcement of these gates is documented ([docs/security/branch-protection.md](docs/security/branch-protection.md)) and pending enablement
 - **Audit Integrity**: **Planned (P7)** — tamper-evident audit logging with integrity chaining is not yet implemented
 
 ### Performance Characteristics (design targets — not yet independently benchmarked)
@@ -210,18 +210,22 @@ make dev-start
 ## Quality Assurance
 
 ### Testing Strategy
-- **Unit Tests**: present across most packages; an enforced coverage gate is *(Planned — P11)* (no verified ≥90% claim today)
+- **Unit Tests**: present across most packages; an enforced coverage gate is **Implemented (P11)** — `scripts/test/cover-gate.sh` + `codecov.yml` enforce a 60% floor (current measured unit total ≈68.6%) that ratchets to 80% per [docs/testing.md](docs/testing.md) (no ≥90% claim is made)
 - **Integration Tests**: component integration validation
 - **End-to-End Tests**: Kind-based workflow testing
 - **Policy Tests**: policy validation/testing (golden-file harness expanded in P10)
 - **Performance Tests** *(Planned — P11)*: load testing and benchmarking
 
-### Security Validation (mostly Planned — see phases P6/P11)
-- **Static Analysis** *(Planned — P11)*: gating SAST (CodeQL/gosec) not yet enforced
-- **Dependency Scanning** *(Planned — P6/P11)*: govulncheck/SCA gating not yet enforced
-- **Container Scanning** *(Planned — P6)*: image scan present but not gating
+### Security Validation
+- **Static Analysis** **(Implemented — P11)**: gating SAST — CodeQL `security-extended` (Go + JS/TS, `codeql.yml`) and gosec (fail on MEDIUM+) run on every PR and fail CI
+- **Dependency Scanning** **(Implemented — P6/P11)**: govulncheck (gating + SARIF), Dependabot (4 ecosystems), and pnpm audit (production-deps gate) enforced; the reachable stdlib CVEs are remediated by pinning the build toolchain to go1.25.10
+- **Container / IaC Scanning** **(Implemented — P5/P11)**: Trivy fs + image + config/misconfig scans are gating (fixable CRITICAL/HIGH → build fail), excluding the deliberately-insecure policy-test fixtures
+- **Secret Scanning** **(Implemented — P11)**: gitleaks over full git history fails CI on any committed secret
+- **Fuzz & DAST** **(Implemented — P11)**: Go native fuzz smoke on PRs + nightly extended fuzzing; OWASP ZAP DAST against the BFF/API (scheduled — first run pending branch push)
 - **Penetration Testing** *(Planned — P12)*: plan authored in P0; execution not yet staffed
 - **Compliance Validation**: offline artifact checks via `make validate-compliance` (Implemented); control-level assessment *(Planned — P12)*
+
+> Branch protection to *enforce* these gates as required checks is documented ([docs/security/branch-protection.md](docs/security/branch-protection.md), [.github/settings.yml](.github/settings.yml)) and pending enablement; the gates themselves run and fail CI today.
 
 ### Code Quality
 - **Linting**: Automated code quality checks

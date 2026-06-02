@@ -2,6 +2,13 @@ module github.com/Jibbscript/kube-policies
 
 go 1.25.0
 
+// VUL-WU-03 / SI-2 flaw remediation: pin the build toolchain to a patch release
+// that fixes the reachable stdlib CVEs govulncheck flags under go1.25.0 (net/*,
+// crypto/x509, crypto/tls, archive/tar, html/template, os, net/url — all "Fixed
+// in: go1.25.x"). Under go1.25.10 govulncheck reports 0 vulnerabilities. With the
+// default GOTOOLCHAIN=auto this floor is enforced for builds, tests, and CI scans.
+toolchain go1.25.10
+
 require (
 	github.com/coreos/go-oidc/v3 v3.18.0
 	github.com/evanphx/json-patch/v5 v5.9.11

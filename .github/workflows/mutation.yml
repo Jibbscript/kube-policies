@@ -1,0 +1,106 @@
+# SDL-WU-30: Mutation testing
+# NIST controls: SA-11 (developer testing), SA-15 (development process/standards)
+# Uses gremlins (https://github.com/go-gremlins/gremlins) — a well-maintained Go
+# mutation testing tool installable via `go install`.
+# Pin: v0.5.0 — confirm the latest stable release before merging.
+#
+# Minimum mutation score guidance:
+#   MIN_MUTATION_SCORE=50  (informational initially; ratchet upward like coverage thresholds)
+#   Gating is intentionally disabled on first adoption to establish a baseline.
+#   Once the team has measured real scores, set `--threshold` in the gremlins invocation
+#   and remove the `|| true` suffix from the run step.
+name: Mutation Testing
+
+on:
+  schedule:
+    # Weekly on Monday at 05:00 UTC — heavier workload, off-peak from nightly fuzz
+    - cron: '0 5 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mutation-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  GO_VERSION: '1.25'
+  GOTOOLCHAIN: local
+  GOFLAGS: -mod=readonly
+  # Informational minimum score (percentage). Enforcement via --threshold is
+  # commented out below; enable once a stable baseline is established.
+  MIN_MUTATION_SCORE: '50'
+  # Pinned gremlins release. Verify against https://github.com/go-gremlins/gremlins/releases
+  # before merging — update if a newer stable tag is available.
+  GREMLINS_VERSION: 'v0.5.0'
+
+jobs:
+  mutation:
+    name: Mutation Testing (gremlins)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+
+      - name: Set up Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff  # v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Install gremlins
+        env:
+          GREMLINS_VER: ${{ env.GREMLINS_VERSION }}
+        run: go install github.com/go-gremlins/gremlins/cmd/gremlins@"${GREMLINS_VER}"
+
+      - name: Run mutation tests
+        # `|| true` keeps the job green while gating is informational.
+        # Remove `|| true` and add `--threshold ${MIN_MUTATION_SCORE}` once a
+        # stable baseline score has been measured (SDL-WU-30 ratchet).
+        run: |
+          gremlins unleash \
+            --output json \
+            --output-file mutation-report.json \
+            ./internal/admission/... \
+            ./internal/policy/... || true
+
+      - name: Report mutation score
+        if: always()
+        env:
+          MIN_SCORE: ${{ env.MIN_MUTATION_SCORE }}
+        run: |
+          if [ -f mutation-report.json ]; then
+            echo "=== Mutation report summary ==="
+            python3 - <<'PYEOF'
+          import json, sys, os
+          try:
+              with open("mutation-report.json") as f:
+                  data = json.load(f)
+              killed   = data.get("killed",      0)
+              survived = data.get("survived",     0)
+              total    = killed + survived
+              score    = (killed / total * 100) if total else 0
+              min_score = int(os.environ.get("MIN_SCORE", "50"))
+              print(f"Killed:   {killed}")
+              print(f"Survived: {survived}")
+              print(f"Total:    {total}")
+              print(f"Score:    {score:.1f}% (minimum informational target: {min_score}%)")
+              if score < min_score:
+                  print(f"::warning::Mutation score {score:.1f}% is below the informational target of {min_score}%. Consider improving test coverage.")
+          except Exception as e:
+              print(f"Could not parse mutation-report.json: {e}", file=sys.stderr)
+          PYEOF
+          else
+            echo "No mutation-report.json found — gremlins may have produced no output."
+          fi
+
+      - name: Upload mutation report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+        with:
+          name: mutation-report-${{ github.run_id }}
+          path: mutation-report.json
+          if-no-files-found: warn
