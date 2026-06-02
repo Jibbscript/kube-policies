@@ -634,7 +634,10 @@ jobs:
   helm-tests:
     name: Helm Chart Tests
     runs-on: ubuntu-latest
-    needs: [build-images]
+    # Self-contained: this job builds + kind-loads its own admission-webhook +
+    # policy-manager images (see "Build and load chart images into Kind"), so it
+    # does not consume the build-images job's GHCR output and intentionally has
+    # no `needs: [build-images]` — letting it start in parallel.
     steps:
     - name: Checkout code
       uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4

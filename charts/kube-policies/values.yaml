@@ -814,6 +814,12 @@ audit:
   #   3. Preferred at scale: enable audit.forwarder (AUD-WU-10) with a
   #      forward backend (Loki/Elasticsearch/Splunk/syslog). The DaemonSet
   #      forwarder ships logs off-pod without requiring shared storage.
+  #
+  #   SCOPE: this PVC backs the ADMISSION-WEBHOOK decision audit only. The
+  #   policy-manager mounts its own emptyDir at the audit path (it cannot
+  #   co-mount this RWO PVC), so its management-plane ConfigurationChange audit
+  #   stream stays pod-local-ephemeral; rely on the forwarder/SIEM path for its
+  #   durable retention.
   persistence:
     enabled: false
     storageClass: ""

@@ -10,7 +10,7 @@
 #                SC-8 (transmission confidentiality), RA-5(5) (vulnerability scan)
 #
 # Usage (against a pre-running stack):
-#   TARGET_API_URL=http://localhost:8080 \
+#   TARGET_API_URL=https://localhost:8080 \
 #   TARGET_BFF_URL=http://localhost:3000 \
 #   TLS_HOST=localhost TLS_PORT=8443 \
 #   scripts/test/dast.sh
@@ -19,7 +19,7 @@
 #   BRING_UP_STACK=true scripts/test/dast.sh
 #
 # Env:
-#   TARGET_API_URL    Policy-manager REST API base URL (default http://localhost:8080)
+#   TARGET_API_URL    Policy-manager REST API base URL (default https://localhost:8080; the API serves TLS)
 #   TARGET_BFF_URL    Dashboard BFF base URL (default http://localhost:3000)
 #   TLS_HOST          Host for TLS checks (default localhost)
 #   TLS_PORT          Port for TLS checks (default 8443)

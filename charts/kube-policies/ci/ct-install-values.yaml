@@ -28,14 +28,14 @@ policyManager:
     tag: citest
     pullPolicy: Never
 
+# Disable kube-policies' own monitoring CRs (PrometheusRule/ServiceMonitor) — the
+# helm-tests install validates core workloads, not monitoring wiring.
 monitoring:
   enabled: false
-  prometheus:
-    enabled: false
-  grafana:
-    enabled: false
 
-# Top-level subchart toggles (the prometheus/grafana dependencies key off these).
+# Disable the prometheus + grafana subcharts. Chart.yaml gates them on these
+# top-level keys (condition: prometheus.enabled / grafana.enabled), so these are
+# the toggles that actually keep the subchart pods out of the install.
 prometheus:
   enabled: false
 grafana:
