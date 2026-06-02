@@ -65,4 +65,4 @@ whenever an interconnection, its sensitivity, or its protection mechanism materi
 
 All residual weaknesses above are tracked in the [POA&M](poam.csv) and mapped to controls in the
 [control matrix](control-matrix.csv); remediation phases reference
-`.omc/plans/PRODUCTION-READINESS-FEDRAMP-CIS.md` (P1–P12).
+`plans/remediation-roadmap.md` (P1–P12).

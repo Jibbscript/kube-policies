@@ -140,7 +140,7 @@ This system is being driven toward **FIPS-199 Moderate** under **NIST SP 800-53 
 - **CIS Kubernetes Benchmark v1.8 / NIST SP 800-190**: the per-control self-assessment crosswalk (DOC-WU-29) is authored at [`docs/compliance/cis-k8s-800-190-mapping.md`](docs/compliance/cis-k8s-800-190-mapping.md). kube-policies covers CIS Section 5 (Policies) via its 30 bundled Rego admission rules; CIS Sections 1–4 (control-plane/etcd/node config) are cluster-operator responsibilities outside the admission-controller boundary. Summary: **20 Covered, 6 Partial, 5 Not-Covered** across CIS Section 5 leaf controls (see the mapping document for per-control status and POA&M entries).
 
 ### Open weaknesses and remediation
-- Known foundational gaps are tracked in the [POA&M](docs/compliance/POAM.md) and remediated across phases **P1–P12** (see `.omc/plans/PRODUCTION-READINESS-FEDRAMP-CIS.md`).
+- Known foundational gaps are tracked in the [POA&M](docs/compliance/POAM.md) and remediated across phases **P1–P12** (see `docs/compliance/plans/remediation-roadmap.md`).
 - Shared, customer, and inherited responsibilities are described in the [Customer Responsibility Matrix (CRM)](docs/compliance/CRM.md).
 
 ## Deployment Options

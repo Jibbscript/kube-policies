@@ -26,7 +26,7 @@ Kube-Policies is presently a **Proof-of-Concept being driven to assessment readi
 **not yet authorized** (**no ATO**) and not in production use. This policy claims **only what
 the shipped code and chart implement**. Per-control status is tracked in the
 [control matrix](../control-matrix.csv) and open weaknesses in the [POA&M](../POAM.md), with
-remediation phases (P0–P12) defined in `.omc/plans/PRODUCTION-READINESS-FEDRAMP-CIS.md`.
+remediation phases (P0–P12) defined in `../plans/remediation-roadmap.md`.
 
 **Annual review.** This policy is reviewed and updated at least **annually**. The last review
 was **2026-06-01**; the **next review is 2027-06-01**. It is also reviewed whenever a

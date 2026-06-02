@@ -29,7 +29,7 @@ infrastructure/IaaS-or-managed-Kubernetes provider) — drives every allocation 
 > **Honesty note.** Kube-Policies is a proof-of-concept being driven to FedRAMP
 > readiness. Most System-Implemented controls are **Planned** or **Partial** and
 > are remediated across phases **P1–P12** (see
-> [`.omc/plans/PRODUCTION-READINESS-FEDRAMP-CIS.md`](../../.omc/plans/PRODUCTION-READINESS-FEDRAMP-CIS.md)).
+> [`plans/remediation-roadmap.md`](plans/remediation-roadmap.md)).
 > Only the bright spots called out in the [system facts](system-facts.md) (webhook
 > TLS 1.3, fail-closed default, read-only dashboard default, distroless non-root
 > dashboard pod, leader election) are claimed as implemented today.

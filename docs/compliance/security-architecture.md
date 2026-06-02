@@ -33,7 +33,7 @@ interconnections materially change.
 > from target posture. Where prior material (notably `PROJECT_SUMMARY.md`) overstated the
 > security architecture, those claims are reconciled and scoped in §5 and are being corrected
 > under work unit **DOC-WU-30**. Open weaknesses are tracked in the [POA&M](poam.csv) and
-> remediated across phases P0–P12 (`.omc/plans/PRODUCTION-READINESS-FEDRAMP-CIS.md`).
+> remediated across phases P0–P12 (`plans/remediation-roadmap.md`).
 
 ## 1 Architectural intent
 
@@ -185,7 +185,7 @@ external planes (`ICX-02`/`ICX-03`/`ICX-04`/`ICX-05`), the absence of mutual aut
 `ICX-01`, the lack of a validated FIPS module, audit durability/integrity, and untrustworthy
 CI. Each is recorded in the [POA&M](poam.csv), mapped to a control in the
 [control matrix](control-matrix.csv), and scheduled in a remediation phase (P1–P12 per
-`.omc/plans/PRODUCTION-READINESS-FEDRAMP-CIS.md`). This document will be updated as those
+`plans/remediation-roadmap.md`). This document will be updated as those
 phases land so that the "current posture" columns above remain accurate.
 
 ## 7 References

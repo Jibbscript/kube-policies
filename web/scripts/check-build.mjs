@@ -17,7 +17,7 @@ let previewProc = null;
 
 function cleanup() {
   if (previewProc) {
-    try { previewProc.kill('SIGTERM'); } catch (_) {}
+    try { previewProc.kill('SIGTERM'); } catch { /* process already exited */ }
     previewProc = null;
   }
 }
@@ -57,7 +57,7 @@ for (let i = 0; i < 60; i++) {
   try {
     const r = await httpGet(BASE_URL, 2000);
     if (r.status === 200) { ready = true; break; }
-  } catch (_) { /* not ready yet */ }
+  } catch { /* not ready yet */ }
 }
 
 if (!ready) {

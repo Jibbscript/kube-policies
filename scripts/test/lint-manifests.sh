@@ -56,6 +56,9 @@ done
 #    --set (the securityContext fields are values-driven; CFG-WU-12).
 # ---------------------------------------------------------------------------
 info "Rendering chart (dashboard on, namespace.create=true, configured ingress)"
+# Resolve gitignored subchart deps (prometheus/grafana) so the render succeeds
+# on a fresh clone / CI runner.
+bash "$(dirname "${BASH_SOURCE[0]}")/../ci/helm-deps.sh"
 helm template kube-policies charts/kube-policies \
   --set dashboard.enabled=true \
   --set namespace.create=true \

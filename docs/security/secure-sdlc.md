@@ -25,7 +25,7 @@ staffed; contacts such as `security@kube-policies.io` are **placeholders** pendi
 role assignment. Per-control status is tracked in the
 [control matrix](../compliance/control-matrix.csv) and open weaknesses in the
 [POA&M](../compliance/POAM.md), with remediation phases (P0–P12) defined in
-`.omc/plans/PRODUCTION-READINESS-FEDRAMP-CIS.md`.
+`../compliance/plans/remediation-roadmap.md`.
 
 **Annual review.** This document is reviewed and updated at least **annually**. The
 last review was **2026-06-02**; the **next review is 2027-06-02**. It is also

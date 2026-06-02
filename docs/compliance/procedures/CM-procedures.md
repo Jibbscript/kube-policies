@@ -23,7 +23,7 @@ Kube-Policies is a **Proof-of-Concept being driven to FedRAMP-Moderate readiness
 authorized** (**no ATO**). These procedures describe what is *actually implemented* in the shipped
 code, Helm chart, and CI and what an assessor or operator can run to verify it. Where a control is
 Partial or has a residual, the procedure says so; open weaknesses are tracked in
-[../poam.csv](../poam.csv) and the phased plan `.omc/plans/PRODUCTION-READINESS-FEDRAMP-CIS.md`.
+[../poam.csv](../poam.csv) and the phased plan `../plans/remediation-roadmap.md`.
 
 **Annual review.** These procedures are reviewed and updated at least **annually** (next review
 **2027-06-01**) and on any significant change to the system, its baseline, its change process, or the

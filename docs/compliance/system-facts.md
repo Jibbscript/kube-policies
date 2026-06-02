@@ -80,4 +80,4 @@
 - Audit backend validated to `file|stdout`.
 - Bright-spot hardening already present: dashboard pod `runAsNonRoot`, `allowPrivilegeEscalation:false`, `readOnlyRootFilesystem` (`charts/.../dashboard-deployment.yaml`); leader election in policy-manager; distroless images.
 
-> Known foundational gaps (no FIPS module, unauthenticated planes, no NetworkPolicy, `spec.template.spec` enforcement blindness, audit on `emptyDir`, untrustworthy CI) are tracked in [POAM.md](POAM.md) and remediated across phases P1–P12 (`.omc/plans/PRODUCTION-READINESS-FEDRAMP-CIS.md`).
+> Known foundational gaps (no FIPS module, unauthenticated planes, no NetworkPolicy, `spec.template.spec` enforcement blindness, audit on `emptyDir`, untrustworthy CI) are tracked in [POAM.md](POAM.md) and remediated across phases P1–P12 (`plans/remediation-roadmap.md`).

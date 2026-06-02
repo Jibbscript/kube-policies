@@ -19,7 +19,7 @@ maintenance of KP components: **MA-2 (Controlled Maintenance)** and **MA-4 (Nonl
 Maintenance)**. It is the MA-family anchor; per-control status is tracked in the
 [control matrix](../control-matrix.csv) and open weaknesses in the [POA&M](../POAM.md), with
 remediation phases (P0–P12) defined in
-`.omc/plans/PRODUCTION-READINESS-FEDRAMP-CIS.md`.
+`../plans/remediation-roadmap.md`.
 
 Kube-Policies is presently a **Proof-of-Concept being driven to assessment readiness**; it is **not
 yet authorized** (**no ATO**) and not in production use. The MA family is **Shared** between the

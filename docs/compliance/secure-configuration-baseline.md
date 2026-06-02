@@ -27,7 +27,7 @@ setting, it is marked **Target (phase Pn)** and cross-referenced to the
 remediating phase and POA&M item. Per-control status is tracked in the
 [control matrix](control-matrix.csv); open weaknesses in the
 [POA&M](poam.csv). Remediation phases (P0–P12) are defined in
-`.omc/plans/PRODUCTION-READINESS-FEDRAMP-CIS.md`.
+`plans/remediation-roadmap.md`.
 
 **Scope.** The configuration items (CIs) under this baseline are: the
 admission-webhook (`AST-WH`), policy-manager (`AST-PM`), dashboard BFF

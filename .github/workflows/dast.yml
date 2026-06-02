@@ -44,7 +44,7 @@ env:
   GO_VERSION: '1.25'
   GOTOOLCHAIN: local
   GOFLAGS: -mod=readonly
-  KUBERNETES_VERSION: 'v1.28.2'
+  KUBERNETES_VERSION: 'v1.28.15'
   KIND_CLUSTER_NAME: 'kube-policies-dast'
   REGISTRY_NAME: 'dast-registry'
   REGISTRY_PORT: '5002'
@@ -74,7 +74,7 @@ jobs:
     # ── Kind cluster install (mirrors e2e-kind in ci.yml) ─────────────────────
     - name: Install Kind
       run: |
-        curl -Lo ./kind https://kind.sigs.k8s.io/dl/v0.20.0/kind-linux-amd64
+        curl -Lo ./kind https://kind.sigs.k8s.io/dl/v0.25.0/kind-linux-amd64
         chmod +x ./kind
         sudo mv ./kind /usr/local/bin/kind
 

@@ -23,7 +23,7 @@ FIPS-199 **Moderate** under the NIST SP 800-53 Rev 5 / FedRAMP Moderate baseline
 > (`.omc/research/fedramp-cis-gap-analysis.json`, 12 dimensions) and its executive summary.
 > Each weakness maps to a NIST 800-53r5 control that exists in the
 > [control matrix](control-matrix.csv) and to a remediating phase (P0–P12) of the
-> [Production Readiness Plan](../../.omc/plans/PRODUCTION-READINESS-FEDRAMP-CIS.md).
+> [Production Readiness Plan](plans/remediation-roadmap.md).
 
 This is a PoC being driven to ATO readiness. The honest posture is that **most controls are
 Planned or Partial**; the POA&M below tracks the open weaknesses that must close before a
@@ -41,7 +41,7 @@ continuous-monitoring cadence described under [How to maintain](#how-to-maintain
 - **risk_rating** — residual risk after accounting for any compensating controls; may differ
   from severity where a partial mitigation exists.
 - **remediation** — the fixing phase and work-unit family from the
-  [Production Readiness Plan](../../.omc/plans/PRODUCTION-READINESS-FEDRAMP-CIS.md) (P0–P12).
+  [Production Readiness Plan](plans/remediation-roadmap.md) (P0–P12).
 - **scheduled_completion** — target close date, planned by remediating phase across 2026.
 - **status** — lifecycle state; all rows remain `Open`. Some carry P4 partial-remediation
   notes (e.g. POAM-004 management-plane TLS, POAM-007 NetworkPolicy, POAM-027 DoS limits) and
@@ -193,5 +193,5 @@ they are formally designated.
   customer / shared).
 - [Component inventory](inventory.csv) · [inventory.md](inventory.md) — `AST-*` assets.
 - [System facts sheet](system-facts.md) — authoritative component, port, and trust-zone IDs.
-- [Production Readiness Plan](../../.omc/plans/PRODUCTION-READINESS-FEDRAMP-CIS.md) — the
+- [Production Readiness Plan](plans/remediation-roadmap.md) — the
   phased remediation (P0–P12) that the `remediation` column references.

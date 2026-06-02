@@ -9,7 +9,7 @@ SR plus PM program controls.
 Status/responsible-party are seeded from the grounded gap analysis
 (.omc/research/fedramp-cis-gap-analysis.json) and the system facts sheet
 (docs/compliance/system-facts.md). Remediating phases P0..P12 come from
-.omc/plans/PRODUCTION-READINESS-FEDRAMP-CIS.md via the coverageMatrix
+docs/compliance/plans/remediation-roadmap.md via the coverageMatrix
 family->phase mapping.
 
 Rules enforced by build():

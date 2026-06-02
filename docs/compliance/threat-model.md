@@ -38,7 +38,7 @@ this document.
 > **Honesty note.** KP is an as-built Proof-of-Concept being driven to assessment readiness.
 > Most threats below are **unmitigated or only partially mitigated today**; each such threat is
 > tied to a [POA&M](poam.csv) item and a remediation phase (P1–P12,
-> `.omc/plans/PRODUCTION-READINESS-FEDRAMP-CIS.md`). A small set of genuine bright spots
+> `plans/remediation-roadmap.md`). A small set of genuine bright spots
 > (TLS 1.3 on `AST-WH:8443`, fail-closed admission default, dashboard read-only-by-default,
 > pod hardening, leader election) are called out where they actually reduce risk. Nothing here
 > should be read as a claim that the system is currently secure.

@@ -29,7 +29,7 @@ control narratives and responsibilities are in the [SSP](../ssp/SSP.md) and the
 > controls are **Planned** or **Partial**; only a small set of bright spots are **Implemented**.
 > This SAP assesses the system as it is, against the Moderate baseline, and is expected to
 > generate findings. Remediation is sequenced across phases **P1–P12**
-> (`.omc/plans/PRODUCTION-READINESS-FEDRAMP-CIS.md`).
+> (`../plans/remediation-roadmap.md`).
 
 **Annual review.** This SAP is reviewed at least **annually** (next review **2027-05-29**) and
 re-baselined upon any significant change to the system, the authorization boundary, or the

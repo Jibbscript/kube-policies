@@ -21,7 +21,7 @@ Kube-Policies is a **Proof-of-Concept being driven to FedRAMP-Moderate readiness
 authorized** (**no ATO**). These procedures describe what is *actually implemented* in the shipped
 code and what an operator or assessor can run to verify it. Where a control is Partial or has a
 residual, the procedure says so; open weaknesses are tracked in [../POAM.md](../POAM.md) and the
-phased plan `.omc/plans/PRODUCTION-READINESS-FEDRAMP-CIS.md`. All `@kube-policies.io` contacts below
+phased plan `../plans/remediation-roadmap.md`. All `@kube-policies.io` contacts below
 are **placeholders** pending role assignment.
 
 **Annual review.** These procedures are reviewed and updated at least **annually** (last review

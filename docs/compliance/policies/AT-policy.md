@@ -19,7 +19,7 @@ controls that govern security literacy and role-based training: **AT-2 (Literacy
 Awareness)** and **AT-3 (Role-Based Training)**. It is the AT-family anchor; per-control status is
 tracked in the [control matrix](../control-matrix.csv) and open weaknesses in the
 [POA&M](../POAM.md), with remediation phases (P0–P12) defined in
-`.omc/plans/PRODUCTION-READINESS-FEDRAMP-CIS.md`.
+`../plans/remediation-roadmap.md`.
 
 Kube-Policies is presently a **Proof-of-Concept being driven to assessment readiness**; it is **not
 yet authorized** (**no ATO**) and not in production use. The AT family is overwhelmingly an

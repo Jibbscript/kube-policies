@@ -38,6 +38,9 @@ fi
 
 cd "${ROOT_DIR}"
 
+# Resolve gitignored subchart deps (prometheus/grafana) before lint/render.
+bash scripts/ci/helm-deps.sh
+
 echo "==> Helm lint"
 helm lint charts/kube-policies
 

@@ -36,7 +36,7 @@ non-enforcing CNI (e.g. kindnet) the objects are inert. Several other boundary p
 the metrics plane) remain **Partial** or **config-gated and off by default**; per-control
 status is tracked in the control matrix (`control-matrix.csv`)
 and open weaknesses in the POA&M (`poam.csv`), with remediation phases (P0–P12) defined
-in `.omc/plans/PRODUCTION-READINESS-FEDRAMP-CIS.md`.
+in `../plans/remediation-roadmap.md`.
 
 **Annual review.** This policy is reviewed and updated at least **annually** (next review
 **2027-05-31**) and whenever a significant change to the system, its boundary, its

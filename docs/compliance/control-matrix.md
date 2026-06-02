@@ -42,7 +42,7 @@ Each CSV row is one Moderate control or enhancement. Columns:
 | `status` | `Implemented` \| `Partial` \| `Planned` \| `Inherited` \| `Customer` \| `Not-Applicable`. |
 | `responsible_party` | `System` \| `CSP` \| `Customer` \| `Shared`. |
 | `implementing_artifact` | A repo path (e.g. `cmd/admission-webhook/main.go`) or a phase pointer (`see P4`). |
-| `remediating_phase` | `P0`–`P12` from [PRODUCTION-READINESS-FEDRAMP-CIS.md](../../.omc/plans/PRODUCTION-READINESS-FEDRAMP-CIS.md). |
+| `remediating_phase` | `P0`–`P12` from [Remediation Roadmap](plans/remediation-roadmap.md). |
 | `poam_id` | Linked open weakness in [`poam.csv`](poam.csv) (e.g. `POAM-001`), or blank. |
 | `notes` | Assessor-facing rationale; cites the bright spot or the gap. |
 
@@ -259,7 +259,7 @@ counts stay consistent:
 - `status` ∈ `{Implemented, Partial, Planned, Inherited, Customer, Not-Applicable}`;
   `responsible_party` ∈ `{System, CSP, Customer, Shared}`.
 - `remediating_phase` ∈ `{P0…P12}`; phases are defined in
-  [PRODUCTION-READINESS-FEDRAMP-CIS.md](../../.omc/plans/PRODUCTION-READINESS-FEDRAMP-CIS.md).
+  [Remediation Roadmap](plans/remediation-roadmap.md).
 - `poam_id` values match `poam_id` in [`poam.csv`](poam.csv) (`POAM-NNN`).
 - Named roles are not yet staffed — use titles (System Owner, ISSO, AO, Independent
   Assessor) with "TBD — assign before assessment".
@@ -271,4 +271,4 @@ counts stay consistent:
 - [Component Inventory](inventory.csv) — `AST-*` assets cited in `implementing_artifact`.
 - [System Facts Sheet](system-facts.md) — canonical IDs, ports, zones, interconnections.
 - [FIPS-199 Categorization](categorization/FIPS-199.md) — Moderate categorization basis.
-- [Production-Readiness Plan (P0–P12)](../../.omc/plans/PRODUCTION-READINESS-FEDRAMP-CIS.md) — remediation phases.
+- [Production-Readiness Plan (P0–P12)](plans/remediation-roadmap.md) — remediation phases.

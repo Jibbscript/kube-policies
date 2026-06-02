@@ -26,7 +26,7 @@ Kube-Policies is presently a **Proof-of-Concept being driven to assessment readi
 assessment and authorization *discipline* the program operates under. It does not claim that
 every CA control is operating or has been assessed. Per-control status is tracked in the
 [control matrix](../control-matrix.csv) and open weaknesses in the [POA&M](../POAM.md), with
-remediation phases (P0–P12) defined in `.omc/plans/PRODUCTION-READINESS-FEDRAMP-CIS.md`.
+remediation phases (P0–P12) defined in `../plans/remediation-roadmap.md`.
 
 **Annual review.** This policy is reviewed and updated at least **annually**. The last review
 was **2026-06-01**; the **next review is 2027-06-01**. It is also reviewed whenever a
@@ -130,7 +130,7 @@ KP shall maintain an active POA&M that:
 
 The POA&M is maintained in machine-readable form at [poam.csv](../poam.csv) and in
 human-readable form at [POAM.md](../POAM.md). The phased remediation plan is in
-`.omc/plans/PRODUCTION-READINESS-FEDRAMP-CIS.md`.
+`../plans/remediation-roadmap.md`.
 
 ## 5 CA-6 — Authorization
 

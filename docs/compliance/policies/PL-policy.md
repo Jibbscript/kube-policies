@@ -23,7 +23,7 @@ controls are **Planned** or **Partial**; this policy documents the planning *dis
 the program will operate under, not a claim that all planning artifacts are final.
 Per-control status is tracked in the [control matrix](../control-matrix.csv) and open
 weaknesses in the [POA&M](../poam.csv); remediation phases (P0–P12) are defined in
-`.omc/plans/PRODUCTION-READINESS-FEDRAMP-CIS.md`.
+`../plans/remediation-roadmap.md`.
 
 **Annual review.** This policy is reviewed and updated at least **annually** (next review
 **2027-05-29**) and whenever a significant change to the system, its boundary, its

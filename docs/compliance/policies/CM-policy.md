@@ -28,7 +28,7 @@ yet authorized** (**no ATO**) and not in production use. This policy documents t
 program operates under and the controls that are *actually implemented* in the shipped code, Helm
 chart, and CI — it is not a claim that every CM control is fully met. Per-control status is tracked in
 the [control matrix](../control-matrix.csv) and open weaknesses in the [POA&M](../poam.csv), with
-remediation phases (P0–P12) defined in `.omc/plans/PRODUCTION-READINESS-FEDRAMP-CIS.md`.
+remediation phases (P0–P12) defined in `../plans/remediation-roadmap.md`.
 
 **Annual review.** This policy is reviewed and updated at least **annually** (next review
 **2027-06-01**) and whenever a significant change to the system, its baseline, its change-control

@@ -30,7 +30,7 @@ artifacts.
 When a GA (`1.x`) line is published, this table will be updated to define the supported
 major/minor lines and their support windows. Container image supply-chain provenance,
 signing, and digest pinning are tracked separately in phases P6/P11 of the
-[Production Readiness Plan](.omc/plans/PRODUCTION-READINESS-FEDRAMP-CIS.md).
+[Production Readiness Plan](docs/compliance/plans/remediation-roadmap.md).
 
 ## Reporting a vulnerability
 
@@ -134,7 +134,7 @@ expedite a fix and advisory.
 Coordinated disclosure is one input to the broader vulnerability-management program
 (NIST **RA-5 / SI-2**, FedRAMP continuous monitoring), which is being established in
 **phase P11** of the
-[Production Readiness Plan](.omc/plans/PRODUCTION-READINESS-FEDRAMP-CIS.md). That program
+[Production Readiness Plan](docs/compliance/plans/remediation-roadmap.md). That program
 adds automated, gating scanning (CodeQL, govulncheck, Trivy, gitleaks, Dependabot,
 `pnpm audit`), a scheduled monthly authenticated scan, severity-to-SLA tracking, and
 SLA-breach alerting. The detailed procedure (scan inventory, cadence, triage workflow,
@@ -154,5 +154,5 @@ Open weaknesses for this disclosure/remediation program are tracked under
 - [Control matrix](docs/compliance/control-matrix.csv) — NIST 800-53 Rev 5 control implementation status.
 - [System Security Plan](docs/compliance/ssp/SSP.md) — system description and control narratives.
 - [System facts sheet](docs/compliance/system-facts.md) — authoritative component, port, and trust-zone IDs.
-- [Production Readiness Plan](.omc/plans/PRODUCTION-READINESS-FEDRAMP-CIS.md) — phased remediation (P0–P12).
+- [Production Readiness Plan](docs/compliance/plans/remediation-roadmap.md) — phased remediation (P0–P12).
 - [Vulnerability Management Procedure](docs/security/vulnerability-management.md) — scan inventory, cadence, triage workflow, suppression registers, and evidence retention (NIST RA-5, SI-2, SI-4, SI-5, CA-5).

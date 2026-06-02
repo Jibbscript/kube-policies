@@ -28,7 +28,7 @@ yet authorized** (**no ATO**) and not in production use. This policy documents t
 pipeline — it is not a claim that every SR control is fully operational. Per-control status is
 tracked in the [control matrix](../control-matrix.csv) and open weaknesses in the
 [POA&M](../POAM.md), with remediation phases (P0–P12) defined in
-`.omc/plans/PRODUCTION-READINESS-FEDRAMP-CIS.md`.
+`../plans/remediation-roadmap.md`.
 
 **Annual review.** This policy is reviewed and updated at least **annually** (next review
 **2027-06-01**) and whenever a significant change to the system, its build pipeline, its
