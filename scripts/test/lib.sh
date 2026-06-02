@@ -294,12 +294,24 @@ EOF
     # on the subcharts' pods (large images, StatefulSet) exhausts --wait's 600s
     # budget on a resource-constrained Kind/k3s node. The app's own /metrics
     # endpoint is unaffected (it is not part of the subchart).
+    #
+    # Disable NetworkPolicy for the functional e2e/DAST deploy: the chart's
+    # egress-apiserver policy is fail-closed until networkPolicy.apiServerCIDRs is
+    # set to the cluster's API-server CIDR(s) (NET-WU-03), and kindnet ENFORCES
+    # NetworkPolicy. An ephemeral Kind/k3s CI cluster has no stable API CIDR to
+    # configure, so leaving the policy on blocks the webhook/policy-manager
+    # controllers' apiserver egress (leader election, TokenReview, CRD watch +
+    # status patch) — the controllers never sync and the e2e suite times out. The
+    # functional suites here exercise admission/policy behaviour, not network
+    # isolation; the NetworkPolicy posture is validated separately by
+    # scripts/test/test-netpol-e2e.sh.
     if ! helm upgrade --install kube-policies charts/kube-policies \
         --namespace kube-policies-system \
         "${helm_values_args[@]}" \
         --set monitoring.enabled=false \
         --set prometheus.enabled=false \
         --set grafana.enabled=false \
+        --set networkPolicy.enabled=false \
         --wait --timeout=600s; then
         # On --wait timeout/failure, dump why the workloads never became ready
         # (the bare "No resources found" diagnostic is uninformative). Captures

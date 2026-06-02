@@ -255,10 +255,16 @@ EOF
 
     # Resolve gitignored subchart deps (prometheus/grafana) before install.
     bash "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/ci/helm-deps.sh"
-    # Install using Helm
+    # Install using Helm. networkPolicy.enabled=false: the chart's egress-apiserver
+    # policy is fail-closed until networkPolicy.apiServerCIDRs is set (NET-WU-03),
+    # and an ephemeral k3s CI cluster has no stable API CIDR to configure — leaving
+    # it on blocks the controllers' apiserver egress so they never sync and the e2e
+    # suite times out. This functional suite tests admission/policy behaviour, not
+    # network isolation (validated separately by test-netpol-e2e.sh).
     helm upgrade --install kube-policies charts/kube-policies \
         --namespace kube-policies-system \
         --values /tmp/k3s-values.yaml \
+        --set networkPolicy.enabled=false \
         --wait --timeout=600s
     
     success "Kube-Policies deployed successfully on k3s"
@@ -290,14 +296,22 @@ run_tests() {
     cd "${PROJECT_ROOT}"
     export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
     
-    # Run unit tests
-    log "Running unit tests..."
-    go test -v ./internal/... ./pkg/... -race -coverprofile=coverage-unit-k3s.out
-    
-    # Run integration tests
-    log "Running integration tests..."
-    go test -v ./test/integration/... -race -coverprofile=coverage-integration-k3s.out
-    
+    # Unit + integration tests are SKIPPED here by default (E2E_ONLY=true): they
+    # have dedicated CI jobs (`unit-tests`, `integration-tests`), and the bundled
+    # integration suite's admission assertions assume default policies are loaded,
+    # which contradicts this deploy's admissionWebhook.disableDefaultPolicies=true.
+    # The cluster e2e job runs only the e2e suite below. Set E2E_ONLY=false to run
+    # them locally (the integration suite additionally needs envtest binaries).
+    if [ "${E2E_ONLY:-true}" != "true" ]; then
+        # Run unit tests
+        log "Running unit tests..."
+        go test -v ./internal/... ./pkg/... -race -coverprofile=coverage-unit-k3s.out
+
+        # Run integration tests
+        log "Running integration tests..."
+        go test -v ./test/integration/... -race -coverprofile=coverage-integration-k3s.out
+    fi
+
     # Run E2E tests
     log "Running E2E tests..."
     go test -v ./test/e2e/... -ginkgo.v -ginkgo.progress -coverprofile=coverage-e2e-k3s.out

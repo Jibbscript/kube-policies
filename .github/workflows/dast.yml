@@ -100,6 +100,10 @@ jobs:
       run: |
         set -euo pipefail
         export CLEANUP=false
+        # DEPLOY_ONLY: stand up the stack and stop once it is Ready — this job
+        # scans the running deployment (port-forward + ZAP below), it does not run
+        # the in-cluster go test suite (that is the e2e-kind/e2e-k3s jobs' role).
+        export DEPLOY_ONLY=true
         ./scripts/test/test-kind.sh
 
     # ── Port-forward services so ZAP and TLS checks can reach them ────────────

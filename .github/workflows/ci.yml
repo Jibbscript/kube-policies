@@ -691,12 +691,15 @@ jobs:
 
     - name: Test Helm charts
       run: |
-        # --timeout is an install-time arg (helm lint rejects it, so it can't live
-        # in the shared ct.yaml). --debug surfaces the helm install/wait detail if
-        # the chart does not reach Ready on the fresh Kind cluster. The image
+        # --all installs every chart regardless of the target-branch diff; like
+        # `ct lint --all` above, the default changed-charts mode needs the 'main'
+        # ref which the shallow CI checkout does not fetch ("targetBranch 'main'
+        # does not exist"). --timeout is an install-time arg (helm lint rejects it,
+        # so it can't live in the shared ct.yaml). --debug surfaces the helm
+        # install/wait detail if the chart does not reach Ready. The image
         # overrides + monitoring-off live in
         # charts/kube-policies/ci/ct-install-values.yaml, which ct loads automatically.
-        ct install --helm-extra-args "--timeout 600s" --debug --config .github/ct.yaml
+        ct install --all --helm-extra-args "--timeout 600s" --debug --config .github/ct.yaml
 
   # Documentation tests
   docs-tests:
