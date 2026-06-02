@@ -215,9 +215,9 @@ spec:
         # NOT the webhook's <fullname>-audit PVC: a single ReadWriteOnce PVC
         # cannot be co-mounted by both the webhook and policy-manager Deployments,
         # and the policy-manager's management-plane ConfigurationChange audit
-        # stream is independent of the webhook's decision audit. Durable retention
-        # comes from the audit forwarder (AUD-WU-10) / SIEM path, not pod-local
-        # storage.
+        # stream is independent of the webhook's decision audit. With the default
+        # config that stream is EPHEMERAL (emptyDir, lost on pod restart); durable
+        # retention requires enabling the audit forwarder (AUD-WU-10) / SIEM path.
         - name: audit-log
           emptyDir: {}
         {{- if .Values.persistence.enabled }}

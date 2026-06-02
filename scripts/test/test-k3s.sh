@@ -277,7 +277,8 @@ EOF
     # and an ephemeral k3s CI cluster has no stable API CIDR to configure — leaving
     # it on blocks the controllers' apiserver egress so they never sync and the e2e
     # suite times out. This functional suite tests admission/policy behaviour, not
-    # network isolation (validated separately by test-netpol-e2e.sh).
+    # network isolation — that is exercised by scripts/test/test-netpol-e2e.sh, a
+    # manual/local script (NOT a gated CI job).
     helm upgrade --install kube-policies charts/kube-policies \
         --namespace kube-policies-system \
         --values /tmp/k3s-values.yaml \

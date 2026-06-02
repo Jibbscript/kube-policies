@@ -312,8 +312,9 @@ EOF
     # controllers' apiserver egress (leader election, TokenReview, CRD watch +
     # status patch) — the controllers never sync and the e2e suite times out. The
     # functional suites here exercise admission/policy behaviour, not network
-    # isolation; the NetworkPolicy posture is validated separately by
-    # scripts/test/test-netpol-e2e.sh.
+    # isolation. The static NetworkPolicy manifests are still gated in CI by the
+    # Network-Posture Gate; NetworkPolicy *enforcement* behaviour is exercised by
+    # scripts/test/test-netpol-e2e.sh — a manual/local script, NOT a gated CI job.
     if ! helm upgrade --install kube-policies charts/kube-policies \
         --namespace kube-policies-system \
         "${helm_values_args[@]}" \

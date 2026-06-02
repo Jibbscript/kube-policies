@@ -118,6 +118,11 @@ bring_up_stack() {
 
     export CLEANUP=false
     export KIND_CLUSTER_NAME="${KIND_CLUSTER_NAME}"
+    # DEPLOY_ONLY: this scan job only needs the stack standing, not the in-cluster
+    # go test suite (mirrors the CI DAST workflow). Without it a local
+    # BRING_UP_STACK run would redundantly execute the full e2e suite before
+    # scanning.
+    export DEPLOY_ONLY=true
     "${SCRIPT_DIR}/test-kind.sh"
 
     # Export kubeconfig so subsequent kubectl calls target this cluster.
