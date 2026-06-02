@@ -82,7 +82,10 @@ jobs:
     # gosec writes the SARIF report and then exits non-zero on a qualifying
     # finding, so the upload step still runs under `if: always()`.
     - name: Check for security issues (gosec — fail on MEDIUM+)
-      uses: securego/gosec@4a3bd8af174872c778439083ded7adbf3747e770  # v2.26.1
+      uses: securego/gosec@9e6a9843d7a4a6e3e9a8539b02612c8a4aa3f889  # v2.27.1
+      # v2.25.0 (the old pin's image) G402-false-positives on TLS MinVersion set
+      # via a variable (our mandated TLS 1.3 floor in internal/config/tls.go);
+      # gosec 2.27.1 resolves it. Verified clean locally with the exact args.
       with:
         # -exclude=G204,G304 mirrors the gosec excludes in .golangci.yml (justified
         # there: subprocess-with-variable in webhook tooling; file-path-as-taint in
