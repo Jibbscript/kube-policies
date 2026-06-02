@@ -484,6 +484,9 @@ jobs:
       uses: github/codeql-action/upload-sarif@03e4368ac7daa2bd82b3e85262f3bf87ee112f57  # v3
       with:
         sarif_file: 'trivy-results.sarif'
+        # Unique category: codeql/upload-sarif allows only one upload per
+        # tool/category per job, and this job uploads multiple Trivy SARIFs.
+        category: trivy-fs
 
     - name: Scan admission webhook image (SARIF)
       uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # v0.36.0
@@ -569,6 +572,8 @@ jobs:
       uses: github/codeql-action/upload-sarif@03e4368ac7daa2bd82b3e85262f3bf87ee112f57  # v3
       with:
         sarif_file: 'trivy-config.sarif'
+        # Distinct category from the fs SARIF upload (same job, same Trivy tool).
+        category: trivy-config
 
     - name: Trivy GATE — config/misconfig (CRITICAL,HIGH; fail build)
       uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # v0.36.0
@@ -646,7 +651,10 @@ jobs:
 
     - name: Lint Helm charts
       run: |
-        ct lint --config .github/ct.yaml
+        # --all lints every chart regardless of the target-branch diff; the
+        # default changed-charts mode needs the 'main' ref which the shallow CI
+        # checkout does not fetch ("targetBranch 'main' does not exist").
+        ct lint --all --config .github/ct.yaml
 
     - name: Install Kind
       run: |
