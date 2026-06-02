@@ -942,6 +942,10 @@ func (e *Engine) preparedQueryFor(ctx context.Context, policy *Policy, rule *Rul
 		rego.Store(e.store),
 	}
 	opts = append(opts, libModuleOptions()...)
+	// Compile/evaluate under the restricted capability set (no http.send,
+	// net.lookup_ip_addr, opa.runtime, etc.) with strict builtin errors so
+	// untrusted rule Rego cannot exfiltrate via SSRF or leak host state.
+	opts = append(opts, restrictedRegoOptions()...)
 	q, err := rego.New(opts...).PrepareForEval(ctx)
 	if err != nil {
 		return rego.PreparedEvalQuery{}, err

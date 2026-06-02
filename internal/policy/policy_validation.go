@@ -46,6 +46,11 @@ func ValidateRuleRego(moduleName, regoBody string) error {
 		rego.Module(moduleName, regoBody),
 	}
 	opts = append(opts, libModuleOptions()...)
+	// Validate under the SAME restricted capability set the engine evaluates
+	// with, so a rule that references a denied builtin (http.send, opa.runtime,
+	// …) is rejected at the compile gate (admission/reconcile time) instead of
+	// failing — or exfiltrating — at evaluation time.
+	opts = append(opts, restrictedRegoOptions()...)
 
 	ctx := context.Background()
 	pq, err := rego.New(opts...).PrepareForEval(ctx)

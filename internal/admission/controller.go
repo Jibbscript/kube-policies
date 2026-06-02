@@ -17,6 +17,13 @@ import (
 	"github.com/Jibbscript/kube-policies/internal/policy"
 )
 
+// admissionEvalTimeout bounds a single policy evaluation on the admission hot
+// path. The apiserver enforces a webhook timeout of <=10s; capping eval well
+// under that lets a slow/looping evaluation be canceled (the engine threads
+// this ctx into OPA's PrepareForEval/Eval) so requests cannot pile up, instead
+// of running unbounded against context.Background() (closes the eval-DoS).
+const admissionEvalTimeout = 2 * time.Second
+
 // Controller handles admission webhook requests
 type Controller struct {
 	policyEngine policy.Evaluator
@@ -98,8 +105,12 @@ func (c *Controller) ValidateHandler(ctx *gin.Context) {
 	// correlation id are populated by the shared helper).
 	auditCtx := c.newAuditContext(ctx, req, startTime)
 
-	// Evaluate policies
-	decision, err := c.policyEngine.Evaluate(context.Background(), &policy.EvaluationRequest{
+	// Evaluate policies under a bounded deadline derived from the inbound
+	// request so a slow evaluation is canceled within the apiserver's webhook
+	// timeout instead of running against an unbounded context.Background().
+	evalCtx, cancel := context.WithTimeout(ctx.Request.Context(), admissionEvalTimeout)
+	defer cancel()
+	decision, err := c.policyEngine.Evaluate(evalCtx, &policy.EvaluationRequest{
 		AdmissionRequest: req,
 		Operation:        "validate",
 	})
@@ -207,8 +218,12 @@ func (c *Controller) MutateHandler(ctx *gin.Context) {
 	// correlation id are populated by the shared helper).
 	auditCtx := c.newAuditContext(ctx, req, startTime)
 
-	// Evaluate policies for mutations
-	decision, err := c.policyEngine.Evaluate(context.Background(), &policy.EvaluationRequest{
+	// Evaluate policies for mutations under a bounded deadline derived from the
+	// inbound request (see admissionEvalTimeout) so a slow evaluation is
+	// canceled within the apiserver's webhook timeout.
+	evalCtx, cancel := context.WithTimeout(ctx.Request.Context(), admissionEvalTimeout)
+	defer cancel()
+	decision, err := c.policyEngine.Evaluate(evalCtx, &policy.EvaluationRequest{
 		AdmissionRequest: req,
 		Operation:        "mutate",
 	})

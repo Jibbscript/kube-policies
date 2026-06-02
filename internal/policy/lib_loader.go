@@ -7,8 +7,60 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/open-policy-agent/opa/ast"
 	"github.com/open-policy-agent/opa/rego"
 )
+
+// deniedBuiltins is the set of OPA builtins stripped from the capability set used
+// to compile and evaluate ALL rule Rego — request-supplied (evaluate/test RPCs),
+// CRD-supplied, and bundled (defense in depth). Untrusted Rego could otherwise
+// exfiltrate via SSRF or leak host/process state through these builtins:
+//
+//   - http.send / net.lookup_ip_addr: outbound network (SSRF, DNS exfil).
+//   - opa.runtime: exposes process env/config to the policy.
+//   - rego.parse_module / trace: dynamic-module construction and trace spam
+//     that legitimate admission deny/allow logic never needs.
+//
+// Legitimate rules only read the input document (object/parameters/userInfo) and
+// the shared library, so none of these are required for normal evaluation.
+var deniedBuiltins = map[string]struct{}{
+	"http.send":          {},
+	"net.lookup_ip_addr": {},
+	"opa.runtime":        {},
+	"rego.parse_module":  {},
+	"trace":              {},
+}
+
+// restrictedCapabilities is the OPA capability set every rule compiles/evaluates
+// against. Built once from CapabilitiesForThisVersion() (the full default set for
+// the linked OPA version) with deniedBuiltins removed, so a rule referencing a
+// denied builtin fails to COMPILE (unknown builtin) rather than executing it.
+var restrictedCapabilities = newRestrictedCapabilities()
+
+func newRestrictedCapabilities() *ast.Capabilities {
+	caps := ast.CapabilitiesForThisVersion()
+	filtered := caps.Builtins[:0:0]
+	for _, b := range caps.Builtins {
+		if _, denied := deniedBuiltins[b.Name]; denied {
+			continue
+		}
+		filtered = append(filtered, b)
+	}
+	caps.Builtins = filtered
+	return caps
+}
+
+// restrictedRegoOptions returns the security options applied to EVERY rego.New
+// build (engine evaluation and the validation/compile gate): the restricted
+// capability set (strips the dangerous builtins above) plus StrictBuiltinErrors
+// so a denied/erroring builtin fails the evaluation instead of returning
+// undefined and silently passing.
+func restrictedRegoOptions() []func(*rego.Rego) {
+	return []func(*rego.Rego){
+		rego.Capabilities(restrictedCapabilities),
+		rego.StrictBuiltinErrors(true),
+	}
+}
 
 // regoLibFS embeds the shared Rego helper modules that every bundled rule is
 // compiled against. Keeping them as real .rego files (rather than Go string

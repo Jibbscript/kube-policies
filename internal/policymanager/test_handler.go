@@ -1,6 +1,7 @@
 package policymanager
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -88,7 +89,9 @@ func (m *Manager) testPolicyImpl(c *gin.Context) {
 		return
 	}
 
-	result, err := engine.Evaluate(c.Request.Context(), &policy.EvaluationRequest{
+	evalCtx, cancel := context.WithTimeout(c.Request.Context(), rpcEvalTimeout)
+	defer cancel()
+	result, err := engine.Evaluate(evalCtx, &policy.EvaluationRequest{
 		AdmissionRequest: req,
 		Operation:        "test",
 	})

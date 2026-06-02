@@ -70,6 +70,72 @@ evaluate := {"message": "x"}`,
 	}
 }
 
+// TestRestrictedCapabilities_DeniesDangerousBuiltins proves the sandbox: a rule
+// whose Rego body references a denied builtin (http.send and friends) must FAIL
+// at the compile/validation gate — i.e. the builtin is not in the capability set
+// the engine compiles against — rather than being executed (SSRF/exfil). The
+// failure surfaces as a compile error ("does not compile") because the restricted
+// capabilities make the builtin unknown to the compiler.
+func TestRestrictedCapabilities_DeniesDangerousBuiltins(t *testing.T) {
+	denied := []struct {
+		name string
+		body string
+	}{
+		{
+			name: "http.send",
+			body: `package kube_policies
+import rego.v1
+default evaluate := {"allowed": true}
+evaluate := {"allowed": false, "message": "x"} if {
+	resp := http.send({"method": "get", "url": "http://169.254.169.254/"})
+	resp.status_code == 200
+}`,
+		},
+		{
+			name: "net.lookup_ip_addr",
+			body: `package kube_policies
+import rego.v1
+default evaluate := {"allowed": true}
+evaluate := {"allowed": false, "message": "x"} if {
+	net.lookup_ip_addr("metadata.internal")
+}`,
+		},
+		{
+			name: "opa.runtime",
+			body: `package kube_policies
+import rego.v1
+default evaluate := {"allowed": true}
+evaluate := {"allowed": false, "message": "x"} if {
+	opa.runtime().env.PATH != ""
+}`,
+		},
+	}
+	for _, tc := range denied {
+		t.Run(tc.name, func(t *testing.T) {
+			err := ValidateRuleRego("sandbox_"+tc.name, tc.body)
+			require.Errorf(t, err, "rule using %s must be rejected, not executed", tc.name)
+			assert.Containsf(t, err.Error(), "does not compile",
+				"%s should fail to compile under the restricted capability set; got: %v", tc.name, err)
+		})
+	}
+}
+
+// TestRestrictedCapabilities_AllowsLegitimateRules guards against an over-broad
+// strip: ordinary deny logic over input (object/parameters) and the shared
+// library must still compile and evaluate unaffected.
+func TestRestrictedCapabilities_AllowsLegitimateRules(t *testing.T) {
+	body := `package kube_policies
+import rego.v1
+import data.kube_policies.lib as lib
+default evaluate := {"allowed": true}
+evaluate := {"allowed": false, "message": "priv", "path": "p"} if {
+	some e in lib.containers_with_paths
+	e.container.securityContext.privileged == true
+}`
+	require.NoError(t, ValidateRuleRego("legit_rule", body),
+		"a normal library-backed deny rule must compile under the restricted capabilities")
+}
+
 // TestAllBundledRulesValidate is a strong invariant: every rule the engine
 // bundles must pass the same compile/contract gate customer policies face. This
 // guards the shared-library wiring (a bundled rule that imports the lib must
