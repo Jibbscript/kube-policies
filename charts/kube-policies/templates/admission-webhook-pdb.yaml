@@ -1,0 +1,26 @@
+{{- if and .Values.admissionWebhook.enabled .Values.admissionWebhook.pdb.enabled }}
+# RES-WU-01 (CP-10/SC-5/CP-2): PodDisruptionBudget for the fail-closed admission
+# webhook. With the default replicaCount: 2, minAvailable: 1 ensures a voluntary
+# disruption (node drain/upgrade) cannot evict both replicas at once, so the
+# gatekeeper keeps serving and admissions are never fail-closed denied during
+# planned maintenance. Set pdb.maxUnavailable instead of pdb.minAvailable for a
+# percentage budget on larger replica counts (set exactly one).
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "kube-policies.fullname" . }}-admission-webhook
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kube-policies.labels" . | nindent 4 }}
+    app.kubernetes.io/component: admission-webhook
+spec:
+  {{- if .Values.admissionWebhook.pdb.maxUnavailable }}
+  maxUnavailable: {{ .Values.admissionWebhook.pdb.maxUnavailable }}
+  {{- else }}
+  minAvailable: {{ .Values.admissionWebhook.pdb.minAvailable | default 1 }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "kube-policies.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: admission-webhook
+{{- end }}

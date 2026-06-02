@@ -79,6 +79,15 @@ var (
 	// <= 0 defers to the policymanager package default (2).
 	maxConcurrentReconciles = flag.Int("max-concurrent-reconciles", 2, "Max concurrent reconciles per CRD reconciler (RES-WU-17 DoS protection)")
 
+	// shutdownDrainDelay is the graceful-drain window (RES-WU-07, CP-10). On
+	// SIGTERM the policy-manager keeps serving for this delay before closing its
+	// listeners so the Service endpoints removal propagates and webhook decision
+	// publishes / dashboard reads are retargeted to surviving replicas instead of
+	// being dropped. Image- and version-independent (distroless images have no
+	// shell for an exec preStop sleep; the native lifecycle sleep is k8s >= 1.29).
+	// 0 disables the drain.
+	shutdownDrainDelay = flag.Duration("shutdown-drain-delay", 5*time.Second, "Graceful-drain delay after SIGTERM before the API/metrics servers stop, to let Service endpoints propagate (RES-WU-07). 0 disables.")
+
 	version = "dev"
 	commit  = "unknown"
 	date    = "unknown"
@@ -448,7 +457,19 @@ func main() {
 				LeaderElectionNamespace: ns,
 				PolicySink:              policyManager,
 				ExceptionSink:           policyManager,
-				// DisableLeaderElection: zero value (false) → election ENABLED.
+				// DisableLeaderElection: zero value (false) → election ENABLED at
+				// the manager level (the Lease stays observable for HA tooling).
+				//
+				// LeaderlessReconcilers=true (RES-WU-03, CP-2/CP-10): the
+				// policy-manager serves /api/v1/policies and /api/v1/exceptions
+				// from a PER-POD in-memory registry, so every replica must
+				// reconcile to answer reads with fresh state — and killing the
+				// lease-holder must not stall reconciliation on the survivors.
+				// This mirrors the admission-webhook's leaderless engine. The
+				// reconcile-audit emission is leader-gated inside StartControllers
+				// (auditWhenLeader) so the duplicate-free AU-2/AU-12 contract from
+				// P7 is preserved while every replica's registry stays current.
+				LeaderlessReconcilers: true,
 				// Bound the reconciler worker pool (RES-WU-17). <= 0 defers to
 				// the package default (2).
 				MaxConcurrentReconciles: *maxConcurrentReconciles,
@@ -474,6 +495,16 @@ func main() {
 	<-quit
 
 	log.Info("Shutting down servers...")
+
+	// RES-WU-07 (CP-10): keep serving for the drain delay so the Service
+	// endpoints removal for this Terminating pod propagates before the listeners
+	// close — webhook decision publishes and dashboard reads retarget to
+	// surviving replicas instead of failing. Distroless/k8s<1.29-safe (no preStop
+	// sleep). The servers are still up during this sleep (Shutdown is below).
+	if *shutdownDrainDelay > 0 {
+		log.Info("draining before shutdown (RES-WU-07)", zap.Duration("delay", *shutdownDrainDelay))
+		time.Sleep(*shutdownDrainDelay)
+	}
 
 	// Graceful shutdown
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 30*time.Second)

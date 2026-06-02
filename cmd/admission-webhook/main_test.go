@@ -15,6 +15,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -196,4 +197,41 @@ func TestSetupWebhookServer_BreakGlassPermissive(t *testing.T) {
 	defer resp.Body.Close()
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 	_, _ = io.Copy(io.Discard, resp.Body)
+}
+
+// TestSetupMetricsServer_ReadyzReflectsTLSReadiness proves RES-WU-06 (CP-10,
+// SC-5): the metrics server's /readyz returns 503 until the webhook's TLS
+// listener is bound (webhookReady flipped true) and then 200, while /healthz
+// (liveness) is always 200. This is the unit-level analogue of "a down TLS
+// listener removes the pod from endpoints": the kubelet readiness probe targets
+// /readyz, so an unbound listener (ready=false) marks the pod NotReady.
+func TestSetupMetricsServer_ReadyzReflectsTLSReadiness(t *testing.T) {
+	ready := &atomic.Bool{}
+	srv := setupMetricsServer(nil, nil, ready)
+
+	get := func(path string) int {
+		rec := httptest.NewRecorder()
+		srv.Handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+		return rec.Code
+	}
+
+	// Before the TLS listener binds, readiness must be 503 (NotReady) so the pod
+	// never joins the Service endpoints while it cannot serve admission.
+	assert.Equal(t, http.StatusServiceUnavailable, get("/readyz"),
+		"/readyz must be 503 before the webhook TLS listener binds")
+	// Liveness is independent of TLS readiness — the process is up.
+	assert.Equal(t, http.StatusOK, get("/healthz"),
+		"/healthz must be 200 regardless of TLS-listener readiness")
+
+	// Once the listener is bound, readiness flips to 200 and the pod joins the
+	// Service endpoints.
+	ready.Store(true)
+	assert.Equal(t, http.StatusOK, get("/readyz"),
+		"/readyz must be 200 after the webhook TLS listener binds")
+
+	// Graceful drain flips readiness back to 503 so the pod is removed from
+	// endpoints before shutdown (RES-WU-07).
+	ready.Store(false)
+	assert.Equal(t, http.StatusServiceUnavailable, get("/readyz"),
+		"/readyz must be 503 again during graceful drain")
 }

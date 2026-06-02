@@ -215,9 +215,57 @@ admissionWebhook:
   # Tolerations
   tolerations: []
   
-  # Affinity
+  # Affinity. RES-WU-04: when EMPTY ({}) the chart renders a default SOFT pod
+  # anti-affinity (one replica per node, kubernetes.io/hostname). Set a value to
+  # fully override the default (e.g. a required anti-affinity for hard HA).
   affinity: {}
-  
+
+  # Topology spread (RES-WU-04). When EMPTY ([]) the chart renders default
+  # constraints spreading replicas across zones + nodes (maxSkew=1,
+  # whenUnsatisfiable=ScheduleAnyway). Set a non-empty list to override — e.g.
+  # whenUnsatisfiable: DoNotSchedule for hard multi-node placement.
+  topologySpreadConstraints: []
+
+  # RES-WU-07 (CP-10/SC-5): graceful drain on rollout/scale-down so the fail-closed
+  # webhook never denies admissions attributable to a terminating pod.
+  terminationGracePeriodSeconds: 30
+  # preStopDrainSeconds keeps the pod serving after SIGTERM: it sets the binary's
+  # --shutdown-drain-delay (works on ALL k8s incl. the distroless image, no shell)
+  # AND renders a native lifecycle `sleep` preStop (k8s >= 1.29; harmlessly pruned
+  # on older clusters). 0 disables both. Keep <= terminationGracePeriodSeconds.
+  preStopDrainSeconds: 5
+  # RES-WU-05 (CP-10): startupProbe bounds cold start (OPA bundle compile) so a
+  # slow start cannot trip livenessProbe. Max startup = periodSeconds*failureThreshold.
+  startupProbe:
+    enabled: true
+    periodSeconds: 5
+    failureThreshold: 30
+    timeoutSeconds: 3
+
+  # RES-WU-01 (CP-10/SC-5/CP-2): PodDisruptionBudget for the webhook. With the
+  # default replicaCount: 2, minAvailable: 1 lets a voluntary disruption (node
+  # drain) evict at most one replica at a time, keeping the gatekeeper serving.
+  # Set maxUnavailable instead of minAvailable for percentage-based budgets on
+  # larger replica counts (set one, leave the other null).
+  pdb:
+    enabled: true
+    minAvailable: 1
+    maxUnavailable: null
+
+  # RES-WU-18 (CP-10/SC-5/CP-2): HorizontalPodAutoscaler for the webhook.
+  # Disabled by default (operators choose whether to autoscale the admission
+  # path). minReplicas must be >= 2 to preserve availability; composes with the
+  # PDB above and the resource requests below.
+  hpa:
+    enabled: false
+    minReplicas: 2
+    maxReplicas: 6
+    targetCPUUtilizationPercentage: 80
+    # Optional memory target; null disables the memory metric.
+    targetMemoryUtilizationPercentage: null
+    # Optional scaleDown/scaleUp behavior passed verbatim to spec.behavior.
+    behavior: {}
+
   # Pod annotations. Scrape the plain-HTTP metrics port (9090); :8443 is the
   # TLS admission listener and does not serve /metrics.
   podAnnotations:
@@ -225,13 +273,49 @@ admissionWebhook:
     prometheus.io/port: "9090"
     prometheus.io/path: "/metrics"
   
-  # Webhook configuration
+  # Webhook configuration (RES-WU-09: the chart is the single source of truth for
+  # both the Validating and Mutating webhook configurations).
   webhook:
+    # Validating webhook fails CLOSED (Fail) to mirror the runtime fail-closed
+    # default — a Policy violation (or an unreachable webhook) blocks admission.
     failurePolicy: Fail
     admissionReviewVersions: ["v1", "v1beta1"]
     timeoutSeconds: 10
     namespaceSelector: {}
     objectSelector: {}
+    # Namespaces excluded from BOTH webhooks (the release namespace is always
+    # appended so the webhook never gates its own control plane → deadlock).
+    excludedNamespaces:
+      - kube-system
+      - kube-public
+      - kube-node-lease
+      - local-path-storage
+    # Validating webhook rules. DEFAULT = Pods, matching the kind the bundled
+    # default policies evaluate. Each kind added here under failurePolicy=Fail
+    # widens the fail-closed blast radius (the webhook is then on the write path
+    # for that kind), so extend deliberately when you load CRD Policies for other
+    # kinds. This is the full rule list rendered into the ValidatingWebhookConfiguration.
+    rules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["pods"]
+        scope: "Namespaced"
+    # Mutating webhook (RES-WU-09). failurePolicy defaults to Ignore: a transient
+    # mutation error must NOT block admission (the fail-closed guarantee is the
+    # validating webhook above). reinvocationPolicy re-runs mutate if a later
+    # webhook in the chain changes the object. Set enabled=false to omit it.
+    mutating:
+      enabled: true
+      failurePolicy: Ignore
+      reinvocationPolicy: IfNeeded
+      timeoutSeconds: 10
+      rules:
+        - apiGroups: [""]
+          apiVersions: ["v1"]
+          operations: ["CREATE", "UPDATE"]
+          resources: ["pods"]
+          scope: "Namespaced"
   
   # TLS configuration
   tls:
@@ -273,7 +357,12 @@ admissionWebhook:
 policyManager:
   enabled: true
   name: policy-manager
-  replicaCount: 1
+  # RES-WU-03 (CP-2/CP-10): default to 2 for HA. The reconcilers run leaderless
+  # (every replica reconciles into its own in-memory registry), so a kubectl-applied
+  # Policy is visible from both replicas and killing the lease-holder does not stall
+  # reconciliation. No ReadWriteOnce PVC blocks scaling — persistence defaults off
+  # (RES-WU-08); the CRDs in etcd are the source of truth, rebuilt on restart.
+  replicaCount: 2
   # IAM-WU-10 (CIS 5.1.5/5.1.6): SA tokens are off by default on the SA; the
   # policy-manager opts back in at pod level because the controller-runtime client +
   # leader election need an apiserver token.
@@ -333,9 +422,37 @@ policyManager:
   # Tolerations
   tolerations: []
   
-  # Affinity
+  # Affinity. RES-WU-04: when EMPTY ({}) the chart renders a default SOFT pod
+  # anti-affinity (one replica per node, kubernetes.io/hostname). Set a value to
+  # fully override the default.
   affinity: {}
-  
+
+  # Topology spread (RES-WU-04). When EMPTY ([]) the chart renders default
+  # constraints spreading replicas across zones + nodes (maxSkew=1,
+  # whenUnsatisfiable=ScheduleAnyway). Set a non-empty list to override.
+  topologySpreadConstraints: []
+
+  # RES-WU-07 (CP-10): graceful drain on rollout/scale-down.
+  terminationGracePeriodSeconds: 30
+  # preStopDrainSeconds sets --shutdown-drain-delay (all k8s) AND renders a native
+  # sleep preStop (k8s >= 1.29). 0 disables both. Keep <= terminationGracePeriodSeconds.
+  preStopDrainSeconds: 5
+  # RES-WU-05 (CP-10): startupProbe bounds cold start (CRD cache sync, lease).
+  startupProbe:
+    enabled: true
+    periodSeconds: 5
+    failureThreshold: 30
+    timeoutSeconds: 3
+
+  # RES-WU-02 (CP-10/SC-5): PodDisruptionBudget for the policy-manager. Only
+  # meaningful with replicaCount > 1 (the HA default is 2, RES-WU-03); at
+  # replicaCount: 1 a minAvailable: 1 PDB blocks voluntary node drains, so reduce
+  # replicas or relax the PDB in single-replica deployments.
+  pdb:
+    enabled: true
+    minAvailable: 1
+    maxUnavailable: null
+
   # Pod annotations. Scrape the plain-HTTP metrics port (9091); :8080 is the
   # TLS 1.3 API listener (CRY-WU-05) and does not serve /metrics.
   podAnnotations:
@@ -655,13 +772,116 @@ audit:
     tolerations: []
     affinity: {}
 
-# Persistence Configuration
+# Persistence Configuration for the policy-manager.
+#
+# RES-WU-08 (CP-2/CP-9/CP-10): DEFAULT DISABLED. The policy-manager keeps all
+# state in memory (internal/policymanager) with the Policy/PolicyException CRDs in
+# etcd as the source of truth, rebuilt on every restart — the mounted PVC at
+# /var/lib/kube-policies is never written. A ReadWriteOnce PVC mounted by a
+# multi-replica Deployment (policyManager.replicaCount: 2, RES-WU-03) blocks
+# scheduling of the second replica, so persistence is off by default and HA works
+# out of the box. See docs/state-model.md.
+#
+# If you enable it (e.g. for a future on-disk cache), EITHER keep
+# policyManager.replicaCount: 1 OR set accessMode: ReadWriteMany with a shared
+# StorageClass — the render fails closed (see _helpers.tpl) if you request a
+# ReadWriteOnce PVC alongside replicaCount > 1.
 persistence:
-  enabled: true
+  enabled: false
   storageClass: ""
   accessMode: ReadWriteOnce
   size: 10Gi
   annotations: {}
+
+# PriorityClass for the kube-policies control-plane components (RES-WU-20,
+# CP-10/CP-2). OPT-IN (default false): a high PriorityClass schedules and
+# preserves the fail-closed gatekeeper (admission-webhook + policy-manager) ahead
+# of lower-priority workloads under node pressure, reducing the chance it is
+# evicted first. When enabled the chart renders a PriorityClass (unless
+# useExisting) and sets priorityClassName on the webhook + policy-manager pods.
+priorityClass:
+  enabled: false
+  # Name of the PriorityClass. Empty defaults to <fullname>-control-plane.
+  name: ""
+  # When true the chart does NOT render the PriorityClass object and only
+  # references the (pre-existing) name above — use when a platform team owns
+  # cluster-scoped PriorityClasses.
+  useExisting: false
+  # Priority value. Kept BELOW system-cluster-critical (2000000000) and
+  # system-node-critical (2000001000) so kube-policies never outranks core
+  # control-plane components, while still beating ordinary workloads.
+  value: 1000000000
+  # MUST stay false — true would make this the default PriorityClass for EVERY
+  # pod in the cluster that does not set one.
+  globalDefault: false
+  description: "Priority for kube-policies control-plane components (admission webhook + policy-manager)."
+
+# Scheduled CRD backup (RES-WU-13, CP-9/CP-9(1)/CP-6). DEFAULT DISABLED. When
+# enabled, a CronJob periodically exports all Policy + PolicyException CRs (an
+# init kubectl container) and uploads them to an off-cluster S3-compatible object
+# store (an aws-cli container) using a least-privilege, read-only ServiceAccount.
+# The CronJob's status.lastSuccessfulTime is the backup-staleness signal (the
+# RES-WU-11 alert in P9 consumes kube_cronjob_status_last_successful_time).
+# Retention is enforced by the bucket lifecycle policy (recommended). A
+# Velero-based alternative is documented in docs/backup-restore.md. The
+# backup→delete→restore equivalence is proven by test/e2e/backup_restore_test.go.
+backup:
+  enabled: false
+  # Cron schedule (UTC). Default every 6 hours.
+  schedule: "0 */6 * * *"
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  # Hard cap on a single backup run.
+  activeDeadlineSeconds: 3600
+  # Documents the retention enforced by the bucket lifecycle policy; the CronJob
+  # itself does not delete objects (least privilege — no S3 delete needed).
+  retentionDays: 30
+  # initContainer image that runs `kubectl get -o yaml` (cluster export).
+  kubectl:
+    image:
+      registry: docker.io
+      repository: bitnami/kubectl
+      tag: "1.30"
+      digest: ""
+      pullPolicy: IfNotPresent
+  # initContainer image that strips server-populated fields + status from the raw
+  # export so the uploaded artifact is RESTORE-READY (re-appliable with kubectl
+  # apply). Pin a digest in production.
+  yq:
+    image:
+      registry: docker.io
+      repository: mikefarah/yq
+      tag: "4.44.3"
+      digest: ""
+      pullPolicy: IfNotPresent
+  # Uploader container + S3-compatible destination.
+  s3:
+    image:
+      registry: docker.io
+      repository: amazon/aws-cli
+      tag: "2.15.0"
+      digest: ""
+      pullPolicy: IfNotPresent
+    # REQUIRED when backup.enabled (the render fails otherwise).
+    bucket: ""
+    region: "us-east-1"
+    prefix: "kube-policies"
+    # S3-compatible endpoint (MinIO/Ceph/etc.); empty targets AWS S3.
+    endpoint: ""
+    # REQUIRED when backup.enabled: an existing Secret with keys
+    # AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY for the uploader. Never embedded
+    # in the chart.
+    existingSecret: ""
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 200m
+      memory: 128Mi
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
 
 # Configuration for external dependencies
 prometheus:
@@ -871,6 +1091,26 @@ dashboard:
   nodeSelector: {}
   tolerations: []
   affinity: {}
+
+  # RES-WU-07 (CP-10): graceful drain. The dashboard is a read-only BFF on a
+  # scratch image (no in-binary drain flag), so preStopDrainSeconds renders ONLY
+  # the native sleep preStop (k8s >= 1.29); on older clusters its own graceful
+  # HTTP shutdown drains within terminationGracePeriodSeconds. 0 disables the hook.
+  terminationGracePeriodSeconds: 30
+  preStopDrainSeconds: 5
+  # RES-WU-05 (CP-10): startupProbe bounds dashboard cold start.
+  startupProbe:
+    enabled: true
+    periodSeconds: 5
+    failureThreshold: 30
+    timeoutSeconds: 3
+  # RES-WU-02 (CP-10): PodDisruptionBudget for the dashboard. DEFAULT OFF — the
+  # dashboard defaults to replicaCount: 1, where a minAvailable: 1 PDB would block
+  # voluntary node drains. Raise dashboard.replicaCount and enable this together.
+  pdb:
+    enabled: false
+    minAvailable: 1
+    maxUnavailable: null
 
   # Override the upstream policy-manager SSE URL. Empty = use the
   # in-cluster policy-manager Service via the default rendered into the

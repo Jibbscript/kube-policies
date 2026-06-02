@@ -6,9 +6,11 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -114,6 +116,16 @@ var (
 	// maxConcurrentReconciles bounds the per-reconciler worker pool (RES-WU-17).
 	// <= 0 defers to the policymanager package default (2).
 	maxConcurrentReconciles = flag.Int("max-concurrent-reconciles", 2, "Max concurrent reconciles per CRD reconciler (RES-WU-17 DoS protection)")
+
+	// shutdownDrainDelay is the graceful-drain window (RES-WU-07, CP-10/SC-5). On
+	// SIGTERM the webhook first marks itself NotReady (so the apiserver stops
+	// routing admission to it) and then KEEPS SERVING for this delay before
+	// closing the listener, so the endpoints/kube-proxy removal propagates and no
+	// in-flight admission call is dropped (fail-closed denied) mid-rollout. This is
+	// the image- and version-independent equivalent of a preStop sleep hook: the
+	// runtime images are distroless (no shell for an exec sleep) and the native
+	// lifecycle `sleep` action only exists on k8s >= 1.29. 0 disables the drain.
+	shutdownDrainDelay = flag.Duration("shutdown-drain-delay", 5*time.Second, "Graceful-drain delay after SIGTERM before the webhook stops serving, to let Service endpoints propagate the NotReady state (RES-WU-07). 0 disables.")
 
 	version = "dev"
 	commit  = "unknown"
@@ -347,7 +359,13 @@ func main() {
 			os.Getenv("POLICY_MANAGER_INTERNAL_TOKEN_PREVIOUS"),
 		)
 	}
-	metricsServer := setupMetricsServer(metricsTLSConf, metricsVerifier)
+	// RES-WU-06 (CP-10, SC-5): TLS-aware readiness. webhookReady is flipped true
+	// only once the :8443 TLS listener is bound (below) and back to false at the
+	// start of graceful shutdown, so /readyz on the metrics server reflects REAL
+	// admission-serving health — a pod whose TLS listener is down is pulled from
+	// the Service endpoints instead of receiving (and fail-closed denying) calls.
+	webhookReady := &atomic.Bool{}
+	metricsServer := setupMetricsServer(metricsTLSConf, metricsVerifier, webhookReady)
 
 	// Start servers
 	go func() {
@@ -363,11 +381,22 @@ func main() {
 		}
 	}()
 
+	// RES-WU-06 (CP-10, SC-5): bind the webhook TLS listener SYNCHRONOUSLY so the
+	// readiness gate reflects real serving health. Only after the socket is bound
+	// do we flip webhookReady=true (the pod then joins the Service endpoints).
+	// A bind failure is fatal — a webhook that cannot serve must never report
+	// Ready. The TLS handshake/cert still come from TLSConfig.GetCertificate, so
+	// ServeTLS is called with empty cert/key paths exactly like before.
+	webhookListener, err := net.Listen("tcp", webhookServer.Addr)
+	if err != nil {
+		log.Fatal("Failed to bind webhook server listener", zap.Int("port", *port), zap.Error(err))
+	}
+	webhookReady.Store(true)
 	go func() {
 		log.Info("Starting webhook server", zap.Int("port", *port))
 		// Empty cert/key paths: the certificate is served via
 		// TLSConfig.GetCertificate (the reloader), not a one-shot file read.
-		if err := webhookServer.ListenAndServeTLS("", ""); err != nil && err != http.ErrServerClosed {
+		if err := webhookServer.ServeTLS(webhookListener, "", ""); err != nil && err != http.ErrServerClosed {
 			log.Fatal("Failed to start webhook server", zap.Error(err))
 		}
 	}()
@@ -442,6 +471,19 @@ func main() {
 	<-quit
 
 	log.Info("Shutting down servers...")
+
+	// RES-WU-06 / RES-WU-07 (CP-10, SC-5): flip readiness false FIRST so the
+	// endpoints controller removes this pod from the Service, then KEEP SERVING
+	// for the drain delay so the apiserver retargets healthy replicas before this
+	// listener closes — avoiding fail-closed denials during a rolling restart /
+	// scale-down. The webhook server is still up during this sleep (Shutdown is
+	// called afterwards), so admission calls that race the endpoints update still
+	// succeed here. Distroless/k8s<1.29-safe (no preStop sleep available).
+	webhookReady.Store(false)
+	if *shutdownDrainDelay > 0 {
+		log.Info("draining before shutdown (RES-WU-07)", zap.Duration("delay", *shutdownDrainDelay))
+		time.Sleep(*shutdownDrainDelay)
+	}
 
 	cancel() // stop CRD controllers
 
@@ -583,10 +625,16 @@ func setupWebhookServer(controller *admission.Controller, tlsCfg *config.TLSConf
 
 // setupMetricsServer builds the :9090 metrics server. When tlsConf is non-nil
 // the server serves TLS and /metrics is wrapped with bearer-token auth
-// (CRY-WU-08); /healthz is always left open so kubelet probes (which send no
-// Authorization header) keep working. A nil tlsConf/verifier yields the legacy
-// plain-HTTP, unauthenticated server.
-func setupMetricsServer(tlsConf *tls.Config, verifier *auth.TokenVerifier) *http.Server {
+// (CRY-WU-08); /healthz and /readyz are always left open so kubelet probes
+// (which send no Authorization header) keep working. A nil tlsConf/verifier
+// yields the legacy plain-HTTP, unauthenticated server.
+//
+// ready (RES-WU-06, CP-10/SC-5) backs the TLS-aware /readyz endpoint: /healthz
+// is liveness (the process is up and the metrics listener answers), while
+// /readyz returns 503 until the webhook's :8443 TLS listener is actually bound
+// and again during graceful drain. A nil ready pointer makes /readyz behave
+// like /healthz (always ready) for callers/tests that do not wire the gate.
+func setupMetricsServer(tlsConf *tls.Config, verifier *auth.TokenVerifier, ready *atomic.Bool) *http.Server {
 	mux := http.NewServeMux()
 	metricsHandler := promhttp.Handler()
 	if verifier != nil {
@@ -596,6 +644,18 @@ func setupMetricsServer(tlsConf *tls.Config, verifier *auth.TokenVerifier) *http
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("OK"))
+	})
+	// RES-WU-06 (CP-10, SC-5): readiness reflects the real :8443 TLS listener.
+	// A down/unbound webhook listener makes this return 503 so the kubelet marks
+	// the pod NotReady and the apiserver stops dialing it for admission.
+	mux.HandleFunc("/readyz", func(w http.ResponseWriter, _ *http.Request) {
+		if ready == nil || ready.Load() {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte("OK"))
+			return
+		}
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_, _ = w.Write([]byte("not ready"))
 	})
 
 	server := &http.Server{

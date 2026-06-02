@@ -9,7 +9,11 @@ metadata:
     {{- include "kube-policies.labels" . | nindent 4 }}
     app.kubernetes.io/component: admission-webhook
 spec:
+  {{- if not .Values.admissionWebhook.hpa.enabled }}
+  # RES-WU-18: omit the static replica count when the HPA owns scaling so a helm
+  # upgrade does not reset replicas and fight the autoscaler.
   replicas: {{ .Values.admissionWebhook.replicaCount }}
+  {{- end }}
   selector:
     matchLabels:
       {{- include "kube-policies.selectorLabels" . | nindent 6 }}
@@ -49,6 +53,14 @@ spec:
       # the token back in here because the controller-runtime client + leader election
       # authenticate to the apiserver with it.
       automountServiceAccountToken: {{ dig "automountServiceAccountToken" true .Values.admissionWebhook }}
+      # RES-WU-07 (CP-10/SC-5): bound the graceful-shutdown window. The binary's
+      # --shutdown-drain-delay (below) plus its 30s server Shutdown fit inside this.
+      terminationGracePeriodSeconds: {{ .Values.admissionWebhook.terminationGracePeriodSeconds | default 30 }}
+      {{- if .Values.priorityClass.enabled }}
+      # RES-WU-20 (CP-10/CP-2): schedule/preserve the fail-closed gatekeeper ahead
+      # of lower-priority workloads under node pressure.
+      priorityClassName: {{ include "kube-policies.priorityClassName" . }}
+      {{- end }}
       securityContext:
         {{- toYaml .Values.admissionWebhook.podSecurityContext | nindent 8 }}
       containers:
@@ -102,6 +114,13 @@ spec:
             # Serve /metrics over TLS 1.3 with bearer-token auth (CRY-WU-08).
             - --metrics-tls
             {{- end }}
+            {{- if gt (int (.Values.admissionWebhook.preStopDrainSeconds | default 5)) 0 }}
+            # RES-WU-07 (CP-10/SC-5): in-binary graceful drain — keep serving for
+            # this delay after SIGTERM so endpoints removal propagates and no
+            # admission call is fail-closed denied mid-rollout. Distroless +
+            # k8s<1.29 safe (no preStop sleep); pairs with the native preStop below.
+            - --shutdown-drain-delay={{ .Values.admissionWebhook.preStopDrainSeconds | default 5 | int }}s
+            {{- end }}
           ports:
             - name: webhook
               containerPort: 8443
@@ -141,20 +160,44 @@ spec:
             periodSeconds: 10
             timeoutSeconds: 5
             failureThreshold: 3
-          # /readyz is not registered on the admission-webhook metrics server
-          # (see cmd/admission-webhook/main.go::setupMetricsServer). Probe the
-          # /healthz endpoint that IS registered. Real readiness lives behind
-          # the TLS webhook server; that requires TLS-aware probing which a
-          # plain httpGet cannot do.
+          # RES-WU-06 (CP-10/SC-5): /readyz on the metrics server now reflects the
+          # REAL :8443 TLS-serving health. The webhook flips it ready only after
+          # the TLS listener binds and back to NotReady during graceful drain, so
+          # a pod whose TLS listener is down (or terminating) is removed from the
+          # Service endpoints and the apiserver stops dialing it for admission —
+          # avoiding fail-closed denials. /healthz (above) stays pure liveness.
           readinessProbe:
             httpGet:
-              path: /healthz
+              path: /readyz
               port: metrics
               scheme: {{ if .Values.metrics.tls.enabled }}HTTPS{{ else }}HTTP{{ end }}
             initialDelaySeconds: 3
             periodSeconds: 5
             timeoutSeconds: 3
             failureThreshold: 3
+          {{- if .Values.admissionWebhook.startupProbe.enabled }}
+          # RES-WU-05 (CP-10): gate liveness/readiness behind startup so a slow
+          # cold start (OPA bundle compile, CRD cache sync) cannot trip the
+          # livenessProbe and crash-loop the pod. Max startup window =
+          # periodSeconds * failureThreshold.
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: metrics
+              scheme: {{ if .Values.metrics.tls.enabled }}HTTPS{{ else }}HTTP{{ end }}
+            periodSeconds: {{ .Values.admissionWebhook.startupProbe.periodSeconds | default 5 }}
+            failureThreshold: {{ .Values.admissionWebhook.startupProbe.failureThreshold | default 30 }}
+            timeoutSeconds: {{ .Values.admissionWebhook.startupProbe.timeoutSeconds | default 3 }}
+          {{- end }}
+          {{- if gt (int (.Values.admissionWebhook.preStopDrainSeconds | default 5)) 0 }}
+          # RES-WU-07 (CP-10/SC-5): native sleep preStop (k8s >= 1.29; silently
+          # pruned on older clusters, where --shutdown-drain-delay still drains).
+          # Holds the pod in Terminating while it leaves the Service endpoints.
+          lifecycle:
+            preStop:
+              sleep:
+                seconds: {{ .Values.admissionWebhook.preStopDrainSeconds | default 5 | int }}
+          {{- end }}
           resources:
             {{- toYaml .Values.admissionWebhook.resources | nindent 12 }}
           volumeMounts:
@@ -276,10 +319,21 @@ spec:
       nodeSelector:
         {{- toYaml . | nindent 8 }}
       {{- end }}
-      {{- with .Values.admissionWebhook.affinity }}
+      # RES-WU-04 (CP-2/CP-6/CP-10): default soft pod anti-affinity (one replica
+      # per node) unless the operator overrides admissionWebhook.affinity.
       affinity:
+        {{- with .Values.admissionWebhook.affinity }}
         {{- toYaml . | nindent 8 }}
-      {{- end }}
+        {{- else }}
+        {{- include "kube-policies.defaultPodAntiAffinity" (dict "ctx" . "component" "admission-webhook") | nindent 8 }}
+        {{- end }}
+      # RES-WU-04: default zone+host topology spread unless overridden.
+      topologySpreadConstraints:
+        {{- with .Values.admissionWebhook.topologySpreadConstraints }}
+        {{- toYaml . | nindent 8 }}
+        {{- else }}
+        {{- include "kube-policies.defaultTopologySpreadConstraints" (dict "ctx" . "component" "admission-webhook") | nindent 8 }}
+        {{- end }}
       {{- with .Values.admissionWebhook.tolerations }}
       tolerations:
         {{- toYaml . | nindent 8 }}

@@ -1,0 +1,183 @@
+{{- if .Values.backup.enabled }}
+{{- if not .Values.backup.s3.bucket }}
+{{- fail "backup.enabled=true requires backup.s3.bucket (the off-cluster object store bucket for CRD backups). RES-WU-13." }}
+{{- end }}
+{{- if not .Values.backup.s3.existingSecret }}
+{{- fail "backup.enabled=true requires backup.s3.existingSecret (a Secret with AWS_ACCESS_KEY_ID + AWS_SECRET_ACCESS_KEY for the uploader). RES-WU-13." }}
+{{- end }}
+# RES-WU-13 (CP-9/CP-9(1)/CP-6): scheduled CRD backup. An initContainer (kubectl)
+# exports all Policy + PolicyException CRs to a shared emptyDir; the main
+# container (aws-cli) uploads them to an off-cluster S3-compatible bucket. The
+# CronJob's status.lastSuccessfulTime is the backup-staleness signal consumed by
+# the RES-WU-11 alert (P9). Retention is enforced by the bucket lifecycle policy
+# (backup.retentionDays documents the intent). A Velero alternative is described
+# in docs/backup-restore.md. Restricted-PSS compliant (nonroot, no caps, RO root).
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ include "kube-policies.fullname" . }}-backup
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kube-policies.labels" . | nindent 4 }}
+    app.kubernetes.io/component: backup
+spec:
+  schedule: {{ .Values.backup.schedule | quote }}
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 300
+  successfulJobsHistoryLimit: {{ .Values.backup.successfulJobsHistoryLimit | default 3 }}
+  failedJobsHistoryLimit: {{ .Values.backup.failedJobsHistoryLimit | default 3 }}
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      # Bound a stuck backup so it cannot pile up (default 1h).
+      activeDeadlineSeconds: {{ .Values.backup.activeDeadlineSeconds | default 3600 }}
+      template:
+        metadata:
+          labels:
+            {{- include "kube-policies.selectorLabels" . | nindent 12 }}
+            app.kubernetes.io/component: backup
+        spec:
+          serviceAccountName: {{ include "kube-policies.fullname" . }}-backup
+          # kubectl authenticates to the apiserver with the SA token.
+          automountServiceAccountToken: true
+          restartPolicy: OnFailure
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65534
+            runAsGroup: 65534
+            fsGroup: 65534
+            seccompProfile:
+              type: RuntimeDefault
+          initContainers:
+            # Export Policy + PolicyException CRs cluster-wide to the shared volume.
+            - name: export
+              image: "{{ include "kube-policies.image" (dict "registry" (.Values.global.imageRegistry | default .Values.backup.kubectl.image.registry) "repository" .Values.backup.kubectl.image.repository "tag" .Values.backup.kubectl.image.tag "digest" .Values.backup.kubectl.image.digest "defaultTag" "1.30") }}"
+              imagePullPolicy: {{ .Values.backup.kubectl.image.pullPolicy | default "IfNotPresent" }}
+              command:
+                - /bin/sh
+                - -c
+                - |
+                  set -eu
+                  ts="$(date -u +%Y%m%dT%H%M%SZ)"
+                  mkdir -p /backup/raw /backup/export
+                  echo "exporting Policy + PolicyException CRs (timestamp ${ts})"
+                  # Raw export (carries server-populated metadata + status); the
+                  # sanitize initContainer strips it into a restore-ready artifact.
+                  kubectl get policies.policies.kube-policies.io -A -o yaml > /backup/raw/policies.yaml
+                  kubectl get policyexceptions.policies.kube-policies.io -A -o yaml > /backup/raw/policyexceptions.yaml
+                  printf '%s' "${ts}" > /backup/TIMESTAMP
+                  echo "export complete"
+              env:
+                - name: HOME
+                  value: /tmp
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                runAsNonRoot: true
+                capabilities:
+                  drop: ["ALL"]
+                seccompProfile:
+                  type: RuntimeDefault
+              resources:
+                {{- toYaml .Values.backup.resources | nindent 16 }}
+              volumeMounts:
+                - name: backup
+                  mountPath: /backup
+                - name: tmp
+                  mountPath: /tmp
+            # Sanitize the raw export into a RESTORE-READY artifact: strip the
+            # server-populated fields (resourceVersion/uid/creationTimestamp/
+            # generation/managedFields) and the status subresource so the uploaded
+            # YAML re-applies cleanly with `kubectl apply -f` during recovery
+            # (RES-WU-13/14). This is the same strip the backup-restore e2e and the
+            # documented restore procedure rely on, so the SHIPPED artifact is the
+            # one proven restorable.
+            - name: sanitize
+              image: "{{ include "kube-policies.image" (dict "registry" (.Values.global.imageRegistry | default .Values.backup.yq.image.registry) "repository" .Values.backup.yq.image.repository "tag" .Values.backup.yq.image.tag "digest" .Values.backup.yq.image.digest "defaultTag" "4.44.3") }}"
+              imagePullPolicy: {{ .Values.backup.yq.image.pullPolicy | default "IfNotPresent" }}
+              command:
+                - /bin/sh
+                - -c
+                - |
+                  set -eu
+                  for k in policies policyexceptions; do
+                    echo "sanitizing ${k} for restore"
+                    yq eval 'del(.items[].metadata.resourceVersion, .items[].metadata.uid, .items[].metadata.creationTimestamp, .items[].metadata.generation, .items[].metadata.managedFields, .items[].status)' "/backup/raw/${k}.yaml" > "/backup/export/${k}.yaml"
+                  done
+                  echo "sanitize complete"
+              env:
+                - name: HOME
+                  value: /tmp
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                runAsNonRoot: true
+                capabilities:
+                  drop: ["ALL"]
+                seccompProfile:
+                  type: RuntimeDefault
+              resources:
+                {{- toYaml .Values.backup.resources | nindent 16 }}
+              volumeMounts:
+                - name: backup
+                  mountPath: /backup
+                - name: tmp
+                  mountPath: /tmp
+          containers:
+            # Upload the exported CRs to the off-cluster S3-compatible bucket.
+            - name: upload
+              image: "{{ include "kube-policies.image" (dict "registry" (.Values.global.imageRegistry | default .Values.backup.s3.image.registry) "repository" .Values.backup.s3.image.repository "tag" .Values.backup.s3.image.tag "digest" .Values.backup.s3.image.digest "defaultTag" "2.15.0") }}"
+              imagePullPolicy: {{ .Values.backup.s3.image.pullPolicy | default "IfNotPresent" }}
+              command:
+                - /bin/sh
+                - -c
+                - |
+                  set -eu
+                  ts="$(cat /backup/TIMESTAMP)"
+                  dest="s3://{{ .Values.backup.s3.bucket }}/{{ .Values.backup.s3.prefix | default "kube-policies" }}/${ts}/"
+                  echo "uploading backup to ${dest}"
+                  aws s3 cp --recursive /backup/export "${dest}" --region "{{ .Values.backup.s3.region | default "us-east-1" }}"{{ if .Values.backup.s3.endpoint }} --endpoint-url "{{ .Values.backup.s3.endpoint }}"{{ end }}
+                  echo "backup upload complete"
+              # AWS credentials (AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY) from the
+              # operator-supplied Secret; never embedded in the chart.
+              envFrom:
+                - secretRef:
+                    name: {{ .Values.backup.s3.existingSecret }}
+              env:
+                - name: HOME
+                  value: /tmp
+                - name: AWS_REGION
+                  value: {{ .Values.backup.s3.region | default "us-east-1" | quote }}
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                runAsNonRoot: true
+                capabilities:
+                  drop: ["ALL"]
+                seccompProfile:
+                  type: RuntimeDefault
+              resources:
+                {{- toYaml .Values.backup.resources | nindent 16 }}
+              volumeMounts:
+                - name: backup
+                  mountPath: /backup
+                - name: tmp
+                  mountPath: /tmp
+          volumes:
+            - name: backup
+              emptyDir: {}
+            - name: tmp
+              emptyDir: {}
+          {{- with .Values.backup.nodeSelector }}
+          nodeSelector:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.backup.tolerations }}
+          tolerations:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.backup.affinity }}
+          affinity:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+{{- end }}

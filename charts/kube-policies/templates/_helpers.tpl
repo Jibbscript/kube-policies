@@ -292,6 +292,19 @@ Validate required values
     {{- end -}}
   {{- end -}}
 {{- end -}}
+{{- /* RES-WU-08 (CP-2/CP-9/CP-10): a ReadWriteOnce policy-manager PVC binds to a
+     single node and cannot be mounted by more than one pod, so it would block HA
+     scaling. The policy-manager is stateless (CRDs in etcd are the source of
+     truth, docs/state-model.md), so persistence defaults off. Refuse to render a
+     RWO persistence PVC alongside replicaCount > 1 — require ReadWriteMany or a
+     single replica — rather than ship a Deployment whose 2nd replica never
+     schedules. */ -}}
+{{- if and .Values.policyManager.enabled .Values.persistence.enabled -}}
+  {{- $pmReplicas := .Values.policyManager.replicaCount | default 1 | int -}}
+  {{- if and (gt $pmReplicas 1) (eq (.Values.persistence.accessMode | default "ReadWriteOnce") "ReadWriteOnce") -}}
+  {{- fail (printf "persistence.enabled=true with persistence.accessMode=ReadWriteOnce cannot be mounted by policyManager.replicaCount=%d: a RWO PVC binds to one node and blocks the other replicas. Set policyManager.replicaCount=1, OR persistence.accessMode=ReadWriteMany with a shared StorageClass, OR keep persistence.enabled=false (default; the policy-manager is stateless — see docs/state-model.md). RES-WU-08." $pmReplicas) -}}
+  {{- end -}}
+{{- end -}}
 {{- if and .Values.admissionWebhook.enabled (not .Values.admissionWebhook.image.repository) -}}
 {{- fail "admissionWebhook.image.repository is required when admissionWebhook is enabled" -}}
 {{- end -}}
@@ -319,6 +332,78 @@ Validate required values
 {{- if and .Values.admissionWebhook.enabled (not .Values.admissionWebhook.tls.autoGenerate) (not (and .Values.admissionWebhook.tls.caCert .Values.admissionWebhook.tls.cert .Values.admissionWebhook.tls.key)) -}}
   {{- /* The render-time fail in admission-webhook-tls.yaml is the actual guard. This is a friendlier pre-render check. */ -}}
 {{- end -}}
+{{- end -}}
+
+{{/*
+Webhook namespaceSelector (RES-WU-09). Shared by the Validating and Mutating
+webhook configurations so their exclusions never drift. Excludes the configured
+admissionWebhook.webhook.excludedNamespaces plus this release's own namespace
+(the webhook must never gate its own control-plane objects → deadlock risk).
+Usage: include "kube-policies.webhookNamespaceSelector" (dict "ctx" .) | nindent N
+*/}}
+{{- define "kube-policies.webhookNamespaceSelector" -}}
+matchExpressions:
+  - key: kubernetes.io/metadata.name
+    operator: NotIn
+    values:
+      {{- range .ctx.Values.admissionWebhook.webhook.excludedNamespaces }}
+      - {{ . }}
+      {{- end }}
+      - {{ .ctx.Release.Namespace }}
+{{- end -}}
+
+{{/*
+PriorityClass name (RES-WU-20). Honors priorityClass.name, else defaults to
+<fullname>-control-plane. Used by the webhook + policy-manager pods and the
+priorityclass.yaml template so the rendered object and the references match.
+*/}}
+{{- define "kube-policies.priorityClassName" -}}
+{{- $pc := .Values.priorityClass | default dict -}}
+{{- default (printf "%s-control-plane" (include "kube-policies.fullname" .)) $pc.name -}}
+{{- end -}}
+
+{{/*
+Default soft pod anti-affinity (RES-WU-04, CP-2/CP-6/CP-10). Prefers scheduling a
+component's replicas onto different nodes (topologyKey hostname) so a single node
+loss never takes out all replicas of the fail-closed gatekeeper. "preferred"
+(soft) so a single-node cluster still schedules.
+Usage: include "kube-policies.defaultPodAntiAffinity" (dict "ctx" . "component" "admission-webhook")
+*/}}
+{{- define "kube-policies.defaultPodAntiAffinity" -}}
+podAntiAffinity:
+  preferredDuringSchedulingIgnoredDuringExecution:
+    - weight: 100
+      podAffinityTerm:
+        labelSelector:
+          matchLabels:
+            {{- include "kube-policies.selectorLabels" .ctx | nindent 12 }}
+            app.kubernetes.io/component: {{ .component }}
+        topologyKey: kubernetes.io/hostname
+{{- end -}}
+
+{{/*
+Default topology spread constraints (RES-WU-04, CP-2/CP-6/CP-10). Spreads a
+component's replicas across zones and nodes with maxSkew=1. whenUnsatisfiable is
+ScheduleAnyway (soft) by default so single-zone / single-node clusters still
+schedule; operators can override with a DoNotSchedule (hard) constraint via
+<component>.topologySpreadConstraints in values.
+Usage: include "kube-policies.defaultTopologySpreadConstraints" (dict "ctx" . "component" "admission-webhook")
+*/}}
+{{- define "kube-policies.defaultTopologySpreadConstraints" -}}
+- maxSkew: 1
+  topologyKey: topology.kubernetes.io/zone
+  whenUnsatisfiable: ScheduleAnyway
+  labelSelector:
+    matchLabels:
+      {{- include "kube-policies.selectorLabels" .ctx | nindent 6 }}
+      app.kubernetes.io/component: {{ .component }}
+- maxSkew: 1
+  topologyKey: kubernetes.io/hostname
+  whenUnsatisfiable: ScheduleAnyway
+  labelSelector:
+    matchLabels:
+      {{- include "kube-policies.selectorLabels" .ctx | nindent 6 }}
+      app.kubernetes.io/component: {{ .component }}
 {{- end -}}
 
 {{/*

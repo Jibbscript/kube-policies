@@ -41,6 +41,10 @@ spec:
       # IAM-WU-10 (CIS 5.1.5/5.1.6): the dashboard never calls the apiserver at runtime,
       # so it does not mount an SA token. Defaults false; an operator can override.
       automountServiceAccountToken: {{ dig "automountServiceAccountToken" false .Values.dashboard }}
+      # RES-WU-07 (CP-10): bound the graceful-shutdown window. The dashboard is a
+      # read-only BFF (scratch image, no in-binary drain flag); the native preStop
+      # sleep below + its own graceful HTTP shutdown drain inside this window.
+      terminationGracePeriodSeconds: {{ .Values.dashboard.terminationGracePeriodSeconds | default 30 }}
       securityContext:
         {{- toYaml .Values.dashboard.podSecurityContext | nindent 8 }}
       containers:
@@ -234,6 +238,25 @@ spec:
             periodSeconds: 10
             timeoutSeconds: 3
             failureThreshold: 3
+          {{- if .Values.dashboard.startupProbe.enabled }}
+          # RES-WU-05 (CP-10): gate liveness/readiness behind startup completion.
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: http
+              scheme: {{ if .Values.dashboard.tls.enabled }}HTTPS{{ else }}HTTP{{ end }}
+            periodSeconds: {{ .Values.dashboard.startupProbe.periodSeconds | default 5 }}
+            failureThreshold: {{ .Values.dashboard.startupProbe.failureThreshold | default 30 }}
+            timeoutSeconds: {{ .Values.dashboard.startupProbe.timeoutSeconds | default 3 }}
+          {{- end }}
+          {{- if gt (int (.Values.dashboard.preStopDrainSeconds | default 5)) 0 }}
+          # RES-WU-07 (CP-10): native sleep preStop (k8s >= 1.29; pruned on older
+          # clusters). Holds the pod in Terminating while it leaves the endpoints.
+          lifecycle:
+            preStop:
+              sleep:
+                seconds: {{ .Values.dashboard.preStopDrainSeconds | default 5 | int }}
+          {{- end }}
           securityContext:
             {{- toYaml .Values.dashboard.securityContext | nindent 12 }}
           resources:

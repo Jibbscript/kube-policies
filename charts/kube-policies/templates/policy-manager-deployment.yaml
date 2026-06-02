@@ -38,6 +38,14 @@ spec:
       # opts the token back in here because the controller-runtime client + leader
       # election authenticate to the apiserver with it.
       automountServiceAccountToken: {{ dig "automountServiceAccountToken" true .Values.policyManager }}
+      # RES-WU-07 (CP-10): bound the graceful-shutdown window; --shutdown-drain-delay
+      # (below) plus the 30s server Shutdown fit inside this.
+      terminationGracePeriodSeconds: {{ .Values.policyManager.terminationGracePeriodSeconds | default 30 }}
+      {{- if .Values.priorityClass.enabled }}
+      # RES-WU-20 (CP-10/CP-2): preserve the policy-manager ahead of lower-priority
+      # workloads under node pressure.
+      priorityClassName: {{ include "kube-policies.priorityClassName" . }}
+      {{- end }}
       securityContext:
         {{- toYaml .Values.policyManager.podSecurityContext | nindent 8 }}
       containers:
@@ -66,6 +74,12 @@ spec:
             # Secret (cert-manager populates it), mounted at /etc/certs.
             - --require-client-cert
             - --client-ca-path=/etc/certs/ca.crt
+            {{- end }}
+            {{- if gt (int (.Values.policyManager.preStopDrainSeconds | default 5)) 0 }}
+            # RES-WU-07 (CP-10): in-binary graceful drain — keep serving for this
+            # delay after SIGTERM so endpoints removal propagates. Distroless +
+            # k8s<1.29 safe; pairs with the native preStop below.
+            - --shutdown-drain-delay={{ .Values.policyManager.preStopDrainSeconds | default 5 | int }}s
             {{- end }}
           ports:
             - name: http
@@ -139,6 +153,28 @@ spec:
             periodSeconds: 5
             timeoutSeconds: 3
             failureThreshold: 3
+          {{- if .Values.policyManager.startupProbe.enabled }}
+          # RES-WU-05 (CP-10): gate liveness/readiness behind startup so a slow
+          # cold start (CRD cache sync, leader-election lease acquisition) cannot
+          # trip the livenessProbe. Max startup window = periodSeconds*failureThreshold.
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: 9091
+              scheme: {{ if .Values.metrics.tls.enabled }}HTTPS{{ else }}HTTP{{ end }}
+            periodSeconds: {{ .Values.policyManager.startupProbe.periodSeconds | default 5 }}
+            failureThreshold: {{ .Values.policyManager.startupProbe.failureThreshold | default 30 }}
+            timeoutSeconds: {{ .Values.policyManager.startupProbe.timeoutSeconds | default 3 }}
+          {{- end }}
+          {{- if gt (int (.Values.policyManager.preStopDrainSeconds | default 5)) 0 }}
+          # RES-WU-07 (CP-10): native sleep preStop (k8s >= 1.29; pruned on older
+          # clusters, where --shutdown-drain-delay drains). Holds the pod in
+          # Terminating while it leaves the Service endpoints.
+          lifecycle:
+            preStop:
+              sleep:
+                seconds: {{ .Values.policyManager.preStopDrainSeconds | default 5 | int }}
+          {{- end }}
           resources:
             {{- toYaml .Values.policyManager.resources | nindent 12 }}
           volumeMounts:
@@ -172,10 +208,21 @@ spec:
       nodeSelector:
         {{- toYaml . | nindent 8 }}
       {{- end }}
-      {{- with .Values.policyManager.affinity }}
+      # RES-WU-04 (CP-2/CP-6/CP-10): default soft pod anti-affinity (one replica
+      # per node) unless the operator overrides policyManager.affinity.
       affinity:
+        {{- with .Values.policyManager.affinity }}
         {{- toYaml . | nindent 8 }}
-      {{- end }}
+        {{- else }}
+        {{- include "kube-policies.defaultPodAntiAffinity" (dict "ctx" . "component" "policy-manager") | nindent 8 }}
+        {{- end }}
+      # RES-WU-04: default zone+host topology spread unless overridden.
+      topologySpreadConstraints:
+        {{- with .Values.policyManager.topologySpreadConstraints }}
+        {{- toYaml . | nindent 8 }}
+        {{- else }}
+        {{- include "kube-policies.defaultTopologySpreadConstraints" (dict "ctx" . "component" "policy-manager") | nindent 8 }}
+        {{- end }}
       {{- with .Values.policyManager.tolerations }}
       tolerations:
         {{- toYaml . | nindent 8 }}

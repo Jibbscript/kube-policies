@@ -3,6 +3,7 @@ package policymanager
 import (
 	"context"
 	"fmt"
+	"sync/atomic"
 	"time"
 
 	"go.uber.org/zap"
@@ -88,14 +89,21 @@ type ControllerOptions struct {
 	// LeaderlessReconcilers makes the embedded Policy/PolicyException
 	// reconcilers run on every pod (NeedLeaderElection=false) while the
 	// manager itself still acquires the leader-election lease. Set this for
-	// embedders whose reconciler's job is to populate a per-pod local cache
-	// — the admission-webhook in particular MUST set this true, otherwise
-	// only the leader's local OPA engine receives Policy CRD updates and
-	// admission requests load-balanced to follower pods bypass policy
-	// enforcement. The status-patch races between replicas are benign:
-	// every replica writes the same Phase/Conditions for the same CRD spec.
-	// Leave false for policy-manager, whose reconciler owns the
-	// cluster-wide registry state and should run on the leader only.
+	// embedders whose reconciler's job is to populate a PER-POD local cache
+	// that the pod serves directly:
+	//   - the admission-webhook MUST set this true — its PolicySink feeds the
+	//     local OPA engine, and an admission request load-balanced to a
+	//     follower pod must see the same policies as the leader.
+	//   - the policy-manager ALSO sets this true (RES-WU-03, CP-2/CP-10): it
+	//     answers /api/v1/policies from an in-memory registry, so every replica
+	//     must reconcile to serve fresh reads and so killing the lease-holder
+	//     never stalls reconciliation on the survivors.
+	// The status-patch races between replicas are benign: every replica writes
+	// the same Phase/Conditions for the same CRD spec (idempotent MergeFrom).
+	// To avoid DUPLICATE reconcile-audit events when several replicas reconcile
+	// the same change, StartControllers gates AuditLogger emission on leadership
+	// (see auditWhenLeader below): every replica updates its registry, but only
+	// the elected leader records the AU-2/AU-12 ConfigurationChange.
 	LeaderlessReconcilers bool
 
 	// MaxConcurrentReconciles bounds the number of concurrent Reconcile calls per
@@ -218,13 +226,31 @@ func StartControllers(ctx context.Context, cfg *rest.Config, log *zap.Logger, op
 		Groups:   []string{"system:serviceaccounts", "system:serviceaccounts:" + controllerNS},
 	}
 
+	// auditWhenLeader gates reconcile-driven audit emission on leadership so that
+	// with LeaderlessReconcilers=true (every replica reconciles into its own
+	// registry) only ONE replica records the AU-2/AU-12 ConfigurationChange —
+	// no duplicate audit events per CRD change (RES-WU-03 preserves the P7
+	// reconcile-audit dedup contract). mgr.Elected() closes when this manager
+	// wins the lease OR when leader election is disabled (controller-runtime
+	// treats "no election" as elected), so single-process/test runs
+	// (DisableLeaderElection=true) audit normally. The brief pre-election window
+	// is the accepted tradeoff: a change reconciled before any leader is elected
+	// is registry-applied on every pod but not audited until the leader emerges
+	// (the human management-plane mutation path is audited independently).
+	auditWhenLeader := &atomic.Bool{}
+	go func() {
+		<-mgr.Elected()
+		auditWhenLeader.Store(true)
+	}()
+
 	policyReconciler := &PolicyReconciler{
-		Client:   mgr.GetClient(),
-		Scheme:   mgr.GetScheme(),
-		Sink:     opts.PolicySink,
-		Log:      log.Named("policy-reconciler"),
-		Audit:    opts.AuditLogger,
-		Identity: controllerIdentity,
+		Client:          mgr.GetClient(),
+		Scheme:          mgr.GetScheme(),
+		Sink:            opts.PolicySink,
+		Log:             log.Named("policy-reconciler"),
+		Audit:           opts.AuditLogger,
+		AuditWhenLeader: auditWhenLeader,
+		Identity:        controllerIdentity,
 	}
 	if err := policyReconciler.SetupWithManager(mgr, opts.LeaderlessReconcilers, maxConcurrent); err != nil {
 		return fmt.Errorf("setup Policy reconciler: %w", err)
@@ -232,12 +258,13 @@ func StartControllers(ctx context.Context, cfg *rest.Config, log *zap.Logger, op
 
 	if opts.ExceptionSink != nil {
 		exceptionReconciler := &PolicyExceptionReconciler{
-			Client:   mgr.GetClient(),
-			Scheme:   mgr.GetScheme(),
-			Sink:     opts.ExceptionSink,
-			Log:      log.Named("exception-reconciler"),
-			Audit:    opts.AuditLogger,
-			Identity: controllerIdentity,
+			Client:          mgr.GetClient(),
+			Scheme:          mgr.GetScheme(),
+			Sink:            opts.ExceptionSink,
+			Log:             log.Named("exception-reconciler"),
+			Audit:           opts.AuditLogger,
+			AuditWhenLeader: auditWhenLeader,
+			Identity:        controllerIdentity,
 		}
 		if err := exceptionReconciler.SetupWithManager(mgr, opts.LeaderlessReconcilers, maxConcurrent); err != nil {
 			return fmt.Errorf("setup PolicyException reconciler: %w", err)
@@ -270,6 +297,12 @@ type PolicyReconciler struct {
 	// makes auditReconcile a no-op so embedders that pass no logger are
 	// unaffected.
 	Audit *audit.Logger
+	// AuditWhenLeader gates audit emission on leadership so leaderless
+	// multi-replica reconcilers (RES-WU-03) do not record DUPLICATE audit
+	// events for the same CRD change. nil disables the gate (audit always
+	// emits) for direct-construction callers/tests; StartControllers always
+	// sets it. Registry upserts are NOT gated — every replica stays current.
+	AuditWhenLeader *atomic.Bool
 	// Identity is the synthesized controller service-account UserInfo recorded
 	// on the audit events emitted by this reconciler.
 	Identity authenticationv1.UserInfo
@@ -344,6 +377,11 @@ func (r *PolicyReconciler) auditReconcile(verb, resource, id string, changes map
 	if r.Audit == nil {
 		return
 	}
+	// Only the leader audits so leaderless multi-replica reconciles (RES-WU-03)
+	// produce one ConfigurationChange per change, not one per replica.
+	if r.AuditWhenLeader != nil && !r.AuditWhenLeader.Load() {
+		return
+	}
 	changes["controller"] = "reconcile"
 	r.Audit.LogConfigChange(r.Identity, verb, resource, id, changes)
 }
@@ -395,6 +433,10 @@ type PolicyExceptionReconciler struct {
 	// PolicyException create/update/delete and a system event when the reconciler
 	// observes an expired exception (AUD-WU-12, AU-2/AU-12). Optional and nil-safe.
 	Audit *audit.Logger
+	// AuditWhenLeader gates audit emission on leadership so leaderless
+	// multi-replica reconcilers (RES-WU-03) do not record DUPLICATE audit events.
+	// nil disables the gate (audit always emits); StartControllers always sets it.
+	AuditWhenLeader *atomic.Bool
 	// Identity is the synthesized controller service-account UserInfo recorded on
 	// the audit events emitted by this reconciler.
 	Identity authenticationv1.UserInfo
@@ -470,6 +512,10 @@ func (r *PolicyExceptionReconciler) auditReconcile(verb, resource, id string, ch
 	if r.Audit == nil {
 		return
 	}
+	// Leader-only audit for leaderless multi-replica reconciles (RES-WU-03).
+	if r.AuditWhenLeader != nil && !r.AuditWhenLeader.Load() {
+		return
+	}
 	changes["controller"] = "reconcile"
 	r.Audit.LogConfigChange(r.Identity, verb, resource, id, changes)
 }
@@ -481,6 +527,10 @@ func (r *PolicyExceptionReconciler) auditReconcile(verb, resource, id string, ch
 // (Manager.checkExpiredExceptions) records the other half.
 func (r *PolicyExceptionReconciler) auditExpiry(id, ns, name, uid string, generation int64, policyID string) {
 	if r.Audit == nil {
+		return
+	}
+	// Leader-only audit for leaderless multi-replica reconciles (RES-WU-03).
+	if r.AuditWhenLeader != nil && !r.AuditWhenLeader.Load() {
 		return
 	}
 	r.Audit.LogSystemEvent("ExceptionExpired",

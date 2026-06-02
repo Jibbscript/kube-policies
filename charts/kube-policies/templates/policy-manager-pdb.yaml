@@ -1,0 +1,23 @@
+{{- if and .Values.policyManager.enabled .Values.policyManager.pdb.enabled }}
+# RES-WU-02 (CP-10/SC-5): PodDisruptionBudget for the policy-manager. Only
+# meaningful at replicaCount > 1 (the HA default is 2, RES-WU-03) — a
+# minAvailable: 1 PDB at replicaCount: 1 would block all voluntary node drains.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "kube-policies.policyManagerName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kube-policies.labels" . | nindent 4 }}
+    app.kubernetes.io/component: policy-manager
+spec:
+  {{- if .Values.policyManager.pdb.maxUnavailable }}
+  maxUnavailable: {{ .Values.policyManager.pdb.maxUnavailable }}
+  {{- else }}
+  minAvailable: {{ .Values.policyManager.pdb.minAvailable | default 1 }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "kube-policies.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: policy-manager
+{{- end }}

@@ -1,0 +1,53 @@
+{{- if .Values.backup.enabled }}
+# RES-WU-13 (CP-9/CP-9(1)/CP-6): least-privilege identity for the scheduled CRD
+# backup. The CronJob exports Policy + PolicyException CRs cluster-wide, so it
+# gets a ClusterRole with READ-ONLY verbs on EXACTLY those two CRD groups — no
+# write, no access to Secrets or any other resource.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "kube-policies.fullname" . }}-backup
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kube-policies.labels" . | nindent 4 }}
+    app.kubernetes.io/component: backup
+  {{- with .Values.rbac.serviceAccount.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+# IAM-WU-10 (CIS 5.1.5/5.1.6): default the token OFF on the SA; the backup
+# CronJob pod opts it back in (automountServiceAccountToken: true) because
+# kubectl authenticates to the apiserver with it.
+automountServiceAccountToken: false
+{{- if .Values.rbac.create }}
+---
+apiVersion: {{ include "kube-policies.rbac.apiVersion" . }}
+kind: ClusterRole
+metadata:
+  name: {{ include "kube-policies.fullname" . }}-backup
+  labels:
+    {{- include "kube-policies.labels" . | nindent 4 }}
+    app.kubernetes.io/component: backup
+rules:
+  # Read-only on the two kube-policies CRD groups ONLY (least privilege).
+  - apiGroups: ["policies.kube-policies.io"]
+    resources: ["policies", "policyexceptions"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: {{ include "kube-policies.rbac.apiVersion" . }}
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "kube-policies.fullname" . }}-backup
+  labels:
+    {{- include "kube-policies.labels" . | nindent 4 }}
+    app.kubernetes.io/component: backup
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "kube-policies.fullname" . }}-backup
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "kube-policies.fullname" . }}-backup
+    namespace: {{ .Release.Namespace }}
+{{- end }}
+{{- end }}

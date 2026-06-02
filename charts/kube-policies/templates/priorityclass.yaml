@@ -1,0 +1,17 @@
+{{- if and .Values.priorityClass.enabled (not .Values.priorityClass.useExisting) }}
+# RES-WU-20 (CP-10/CP-2): cluster-scoped PriorityClass for the kube-policies
+# control plane. PriorityClass is NOT namespaced. The value is kept below the
+# built-in system-cluster-critical (2000000000) and system-node-critical
+# (2000001000) classes so kube-policies preempts ordinary workloads under node
+# pressure WITHOUT outranking core Kubernetes control-plane components.
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: {{ include "kube-policies.priorityClassName" . }}
+  labels:
+    {{- include "kube-policies.labels" . | nindent 4 }}
+value: {{ .Values.priorityClass.value | int }}
+globalDefault: {{ .Values.priorityClass.globalDefault | default false }}
+preemptionPolicy: PreemptLowerPriority
+description: {{ .Values.priorityClass.description | default "kube-policies control-plane priority" | quote }}
+{{- end }}

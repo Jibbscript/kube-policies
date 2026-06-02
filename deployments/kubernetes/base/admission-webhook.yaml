@@ -122,8 +122,12 @@ spec:
         # webhook TLS port (8443) cannot serve a plain-HTTP probe, and once
         # mutual TLS is enforced (client_auth=require + a client CA) an HTTPS
         # probe without a client cert would fail the handshake and kill the pod.
-        # /healthz is registered on the metrics server; /readyz is not, so both
-        # probes use /healthz (matches the Helm chart).
+        # liveness uses /healthz (process up); readiness uses /readyz, which the
+        # binary now gates on the real :8443 TLS listener (RES-WU-06) so a pod
+        # with a down TLS listener is pulled from the Service endpoints.
+        # NOTE: this kustomize base intentionally omits the chart-only resilience
+        # tuning (startupProbe, --shutdown-drain-delay, preStop); the Helm chart is
+        # the recommended, fully-hardened deployment path.
         livenessProbe:
           httpGet:
             path: /healthz
@@ -135,7 +139,7 @@ spec:
           failureThreshold: 3
         readinessProbe:
           httpGet:
-            path: /healthz
+            path: /readyz
             port: metrics
             scheme: HTTP
           initialDelaySeconds: 5
@@ -275,6 +279,15 @@ data:
       type: "memory"
       config: {}
 ---
+# RES-WU-09 (CP-2/CP-10/SC-5): the Helm chart (charts/kube-policies) is the
+# SINGLE SOURCE OF TRUTH for webhook coverage; this kustomize base is kept in
+# sync with it. The rule sets below are aligned to Pods — the kind the bundled
+# default policies actually evaluate (internal/policy). The previous base covered
+# services/configmaps/secrets/workloads/networking/RBAC with no matching default
+# policies, which only widened the fail-closed blast radius without adding
+# enforcement; add kinds back here (and in the chart values) only when you load
+# Policies that target them. namespaceSelector uses the auto-applied
+# kubernetes.io/metadata.name label (not the manual "name" label).
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingWebhookConfiguration
 metadata:
@@ -293,26 +306,16 @@ webhooks:
   - operations: ["CREATE", "UPDATE"]
     apiGroups: [""]
     apiVersions: ["v1"]
-    resources: ["pods", "services", "configmaps", "secrets"]
-  - operations: ["CREATE", "UPDATE"]
-    apiGroups: ["apps"]
-    apiVersions: ["v1"]
-    resources: ["deployments", "replicasets", "daemonsets", "statefulsets"]
-  - operations: ["CREATE", "UPDATE"]
-    apiGroups: ["networking.k8s.io"]
-    apiVersions: ["v1"]
-    resources: ["networkpolicies", "ingresses"]
-  - operations: ["CREATE", "UPDATE"]
-    apiGroups: ["rbac.authorization.k8s.io"]
-    apiVersions: ["v1"]
-    resources: ["roles", "rolebindings", "clusterroles", "clusterrolebindings"]
+    resources: ["pods"]
+    scope: "Namespaced"
   namespaceSelector:
     matchExpressions:
-    - key: name
+    - key: kubernetes.io/metadata.name
       operator: NotIn
       values: ["kube-system", "kube-public", "kube-node-lease", "kube-policies-system"]
-  admissionReviewVersions: ["v1", "v1beta1"]
+  admissionReviewVersions: ["v1"]
   sideEffects: None
+  # Validate fails CLOSED (Fail) — a violation or an unreachable webhook blocks admission.
   failurePolicy: Fail
   timeoutSeconds: 10
 ---
@@ -335,16 +338,16 @@ webhooks:
     apiGroups: [""]
     apiVersions: ["v1"]
     resources: ["pods"]
-  - operations: ["CREATE", "UPDATE"]
-    apiGroups: ["apps"]
-    apiVersions: ["v1"]
-    resources: ["deployments", "replicasets", "daemonsets", "statefulsets"]
+    scope: "Namespaced"
   namespaceSelector:
     matchExpressions:
-    - key: name
+    - key: kubernetes.io/metadata.name
       operator: NotIn
       values: ["kube-system", "kube-public", "kube-node-lease", "kube-policies-system"]
-  admissionReviewVersions: ["v1", "v1beta1"]
+  admissionReviewVersions: ["v1"]
   sideEffects: None
-  failurePolicy: Fail
+  # Mutate fails OPEN (Ignore) per build/docker + chart AGENTS.md guidance: a
+  # transient mutation error must not block admission (validate stays fail-closed).
+  failurePolicy: Ignore
+  reinvocationPolicy: IfNeeded
   timeoutSeconds: 10

@@ -98,22 +98,45 @@ webhooks:
         path: /validate
         port: 8443
       caBundle: {{ $caBundle | quote }}
+    # RES-WU-09: rules are values-driven (admissionWebhook.webhook.rules). The
+    # default covers Pods — the kind the bundled default policies evaluate. Add
+    # kinds here when you load CRD Policies targeting them; each added kind under
+    # failurePolicy=Fail widens the fail-closed blast radius, so scope deliberately.
     rules:
-      - apiGroups: [""]
-        apiVersions: ["v1"]
-        operations: ["CREATE", "UPDATE"]
-        resources: ["pods"]
-        scope: "Namespaced"
+      {{- toYaml .Values.admissionWebhook.webhook.rules | nindent 6 }}
     namespaceSelector:
-      matchExpressions:
-        - key: kubernetes.io/metadata.name
-          operator: NotIn
-          values:
-            - kube-system
-            - kube-public
-            - kube-node-lease
-            - local-path-storage
-            - {{ .Release.Namespace }}
+      {{- include "kube-policies.webhookNamespaceSelector" (dict "ctx" .) | nindent 6 }}
+{{- if .Values.admissionWebhook.webhook.mutating.enabled }}
+---
+# RES-WU-09 (CP-2/CP-10/SC-5): MutatingWebhookConfiguration. failurePolicy
+# defaults to Ignore so a transient mutation error never blocks admission — the
+# fail-closed guarantee lives in the ValidatingWebhookConfiguration above.
+# reinvocationPolicy re-runs this webhook if a later webhook mutates the object.
+apiVersion: admissionregistration.k8s.io/v1
+kind: MutatingWebhookConfiguration
+metadata:
+  name: {{ include "kube-policies.fullname" . }}-mutating-webhook
+  labels:
+    {{- include "kube-policies.labels" . | nindent 4 }}
+webhooks:
+  - name: mutate.kube-policies.io
+    admissionReviewVersions: ["v1"]
+    sideEffects: None
+    failurePolicy: {{ .Values.admissionWebhook.webhook.mutating.failurePolicy | default "Ignore" }}
+    reinvocationPolicy: {{ .Values.admissionWebhook.webhook.mutating.reinvocationPolicy | default "IfNeeded" }}
+    timeoutSeconds: {{ .Values.admissionWebhook.webhook.mutating.timeoutSeconds | default 10 }}
+    clientConfig:
+      service:
+        name: {{ include "kube-policies.fullname" . }}-admission-webhook
+        namespace: {{ .Release.Namespace }}
+        path: /mutate
+        port: 8443
+      caBundle: {{ $caBundle | quote }}
+    rules:
+      {{- toYaml .Values.admissionWebhook.webhook.mutating.rules | nindent 6 }}
+    namespaceSelector:
+      {{- include "kube-policies.webhookNamespaceSelector" (dict "ctx" .) | nindent 6 }}
+{{- end }}
 {{- else -}}
 {{- /* cert-manager ENABLED (CRY-WU-09): no inline Secret and no inline
        caBundle. cert-manager issues the serving cert (see certificate.yaml /
@@ -144,21 +167,43 @@ webhooks:
         path: /validate
         port: 8443
       # caBundle intentionally omitted; cert-manager ca-injector populates it.
+    # RES-WU-09: values-driven rules (default: Pods). See the cert-manager-disabled
+    # branch above for the fail-closed blast-radius note.
     rules:
-      - apiGroups: [""]
-        apiVersions: ["v1"]
-        operations: ["CREATE", "UPDATE"]
-        resources: ["pods"]
-        scope: "Namespaced"
+      {{- toYaml .Values.admissionWebhook.webhook.rules | nindent 6 }}
     namespaceSelector:
-      matchExpressions:
-        - key: kubernetes.io/metadata.name
-          operator: NotIn
-          values:
-            - kube-system
-            - kube-public
-            - kube-node-lease
-            - local-path-storage
-            - {{ .Release.Namespace }}
+      {{- include "kube-policies.webhookNamespaceSelector" (dict "ctx" .) | nindent 6 }}
+{{- if .Values.admissionWebhook.webhook.mutating.enabled }}
+---
+# RES-WU-09 (CP-2/CP-10/SC-5): MutatingWebhookConfiguration (cert-manager path).
+# ca-injector populates caBundle from the same webhook Certificate. failurePolicy
+# defaults to Ignore so a transient mutation error never blocks admission.
+apiVersion: admissionregistration.k8s.io/v1
+kind: MutatingWebhookConfiguration
+metadata:
+  name: {{ include "kube-policies.fullname" . }}-mutating-webhook
+  annotations:
+    cert-manager.io/inject-ca-from: {{ printf "%s/%s-admission-webhook" .Release.Namespace (include "kube-policies.fullname" .) | quote }}
+  labels:
+    {{- include "kube-policies.labels" . | nindent 4 }}
+webhooks:
+  - name: mutate.kube-policies.io
+    admissionReviewVersions: ["v1"]
+    sideEffects: None
+    failurePolicy: {{ .Values.admissionWebhook.webhook.mutating.failurePolicy | default "Ignore" }}
+    reinvocationPolicy: {{ .Values.admissionWebhook.webhook.mutating.reinvocationPolicy | default "IfNeeded" }}
+    timeoutSeconds: {{ .Values.admissionWebhook.webhook.mutating.timeoutSeconds | default 10 }}
+    clientConfig:
+      service:
+        name: {{ include "kube-policies.fullname" . }}-admission-webhook
+        namespace: {{ .Release.Namespace }}
+        path: /mutate
+        port: 8443
+      # caBundle intentionally omitted; cert-manager ca-injector populates it.
+    rules:
+      {{- toYaml .Values.admissionWebhook.webhook.mutating.rules | nindent 6 }}
+    namespaceSelector:
+      {{- include "kube-policies.webhookNamespaceSelector" (dict "ctx" .) | nindent 6 }}
+{{- end }}
 {{- end }}
 {{- end }}

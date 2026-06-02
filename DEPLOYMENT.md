@@ -425,7 +425,30 @@ policyManager:
 
 ### Backup and Recovery
 
-#### Backup Policies
+For the full backup/restore guide see [docs/backup-restore.md](docs/backup-restore.md).
+For the contingency plan (RTO/RPO, failure scenarios, roles) see
+[docs/contingency-plan.md](docs/contingency-plan.md). For step-by-step disaster-recovery
+runbooks (etcd restore, full reinstall, cert rotation, all-replicas recovery) see
+[docs/runbooks/disaster-recovery.md](docs/runbooks/disaster-recovery.md).
+
+#### Scheduled CRD Backup (recommended for managed clusters)
+
+The chart ships an opt-in CronJob that exports Policy and PolicyException CRs to
+S3-compatible object storage on a configurable schedule:
+
+```yaml
+# values.yaml
+backup:
+  enabled: true
+  schedule: "0 2 * * *"   # daily at 02:00 UTC
+  s3Bucket: "my-kube-policies-backups"
+  s3Prefix: "kube-policies/crds"
+```
+
+Enable this for any environment where etcd is provider-managed (EKS/GKE/AKS) and you
+cannot take direct etcd snapshots.
+
+#### Manual CRD Export (quick ad-hoc backup)
 
 ```bash
 # Export all policies
