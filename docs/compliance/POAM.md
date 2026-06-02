@@ -43,21 +43,33 @@ continuous-monitoring cadence described under [How to maintain](#how-to-maintain
 - **remediation** — the fixing phase and work-unit family from the
   [Production Readiness Plan](plans/remediation-roadmap.md) (P0–P12).
 - **scheduled_completion** — target close date, planned by remediating phase across 2026.
-- **status** — lifecycle state; all rows remain `Open`. Some carry P4 partial-remediation
-  notes (e.g. POAM-004 management-plane TLS, POAM-007 NetworkPolicy, POAM-027 DoS limits) and
-  a reduced `risk_rating`, but stay `Open` because residual risk remains (config-gated defaults
-  off, CNI-dependent enforcement, or live e2e proof pending). The CSV `status`/`milestones`
-  cells carry the authoritative residual-risk text.
+- **status** — lifecycle state. Most rows are `Open`; two are closed and retained for audit
+  history (**POAM-024** CM-7 chart hardening, *Completed — Closed P5 2026-06-01*; **POAM-049**
+  the three security/correctness findings remediated in the P12-WU-04 cycle, *Remediated —
+  Closed 2026-06-02*). Some `Open` rows carry P4 partial-remediation notes (e.g. POAM-004
+  management-plane TLS, POAM-007 NetworkPolicy, POAM-027 DoS limits) and a reduced `risk_rating`,
+  but stay `Open` because residual risk remains (config-gated defaults off, CNI-dependent
+  enforcement, or live e2e proof pending). The CSV `status`/`milestones` cells carry the
+  authoritative residual-risk text.
+- **owner** — the role accountable for driving the item to closure. Until **POAM-018** closes,
+  every owner is a **role placeholder** (`Engineering (TBD — assign)`, `ISSO (TBD — assign)`,
+  `System Owner (TBD — assign)`, or `Authorizing Official (TBD — assign)`); no real individuals
+  are recorded. This is the eleventh CSV column, appended after `risk_rating` (the fixed CSV
+  header is updated accordingly — see [How to maintain](#how-to-maintain-this-poam)).
 
 ## Severity rollup (current)
+
+Open items only; the two closed items (POAM-024, POAM-049) are excluded from the open counts.
 
 | Severity | Open items |
 |---|---|
 | Critical | 9 |
-| High | 17 |
-| Moderate | 10 |
-| Low | 2 |
-| **Total** | **38** |
+| High | 18 |
+| Moderate | 24 |
+| Low | 4 |
+| **Total open** | **55** |
+| Closed (retained) | 2 (POAM-024, POAM-049) |
+| **Total register** | **57** |
 
 The nine **Critical** items are the ATO-blockers: no FIPS-validated cryptographic module
 (SC-13), unauthenticated management/enforcement planes (IA-2 / AC-3), plaintext HTTP on the
@@ -77,7 +89,7 @@ audit tamper-evidence on `emptyDir` storage (AU-9), and the untrustworthy CI Go-
 > P8, so it stays Open (Low). The Critical severity labels above are preserved for the original
 > finding; consult the CSV for the current residual-risk text.
 
-> **P5 progress (2026-06-01).** CM-7 hardening (POAM-024) is **Resolved (Closed P5)**:
+> **P5 progress (2026-06-01).** CM-7 hardening (POAM-024) is **Completed (Closed P5, 2026-06-01)**:
 > `seccompProfile=RuntimeDefault` and a non-root `runAsGroup` are now shipped as
 > `values.yaml` **defaults** on all three chart workloads (admission-webhook + policy-manager
 > `runAsGroup` 65534, dashboard 65532), the dashboard `securityContext` is now **values-driven**
@@ -125,7 +137,7 @@ audit tamper-evidence on `emptyDir` storage (AU-9), and the untrustworthy CI Go-
 | POAM-021 | SC-28 | High | Moderate | P2 | 2026-08-15 | No encryption of secrets at rest |
 | POAM-022 | SC-12 | Moderate | Moderate | P2 | 2026-08-15 | No PKI/key-management lifecycle |
 | POAM-023 | CM-2 | High | Moderate | P5 | 2026-11-01 | No digest-pinned images / config baseline (P5: digest-deploy option + baseline/inventory/CM-plan authored; images still tag-pinned by default — Open) |
-| POAM-024 | CM-7 | High | Moderate | P5 | 2026-11-01 | Chart less hardened than base manifest (**Resolved — Closed P5, 2026-06-01**: seccomp+non-root runAsGroup are values.yaml defaults on all 3 workloads incl dashboard, dashboard SC values-driven, SA-token automount off, namespace PSA-restricted; gating restricted.pss + helm-unittest cover control-plane + dashboard + monitoring) |
+| POAM-024 | CM-7 | High | Moderate | P5 | 2026-11-01 | Chart less hardened than base manifest (**Completed — Closed P5, 2026-06-01**: seccomp+non-root runAsGroup are values.yaml defaults on all 3 workloads incl dashboard, dashboard SC values-driven, SA-token automount off, namespace PSA-restricted; gating restricted.pss + helm-unittest cover control-plane + dashboard + monitoring) |
 | POAM-025 | RA-5 | High | Moderate | P11 | 2026-12-31 | Vulnerability scanning does not gate the build |
 | POAM-026 | SI-2 | Moderate | Moderate | P11 | 2026-12-31 | No flaw-remediation program / SLAs |
 | POAM-027 | SC-5 | Moderate | Low | P4 | 2026-10-15 | No DoS / resource-availability protection (P4: app-layer rate-limit/body/concurrency/SSE caps on by default; ResourceQuota/LimitRange ship off; HPA in P8 — Open) |
@@ -140,9 +152,50 @@ audit tamper-evidence on `emptyDir` storage (AU-9), and the untrustworthy CI Go-
 | POAM-036 | AC-12 | Low | Low | P3 | 2026-09-15 | No dashboard session management |
 | POAM-037 | CM-8 | Moderate | Low | P10 | 2026-10-31 | No customer-posture inventory enforcement |
 | POAM-038 | AU-7 | Low | Low | P7 | 2026-11-30 | No audit reduction/report generation (P7: compliance handlers real (not 501) — read-only NDJSON query layer over the audit file with time-range/namespace/decision/policy filters; ListComplianceFrameworks returns cis+nist-800-53; reads only the LOCAL file backend (rotated/forwarded records out of scope) — Open) |
+| POAM-039 | CM-6 | High | High | P12-WU-04 | 2026-07-02 | `failure_mode` is a validated-but-ignored config knob (mutate hardcoded fail-open, validate fail-closed; the documented knob does nothing) — wire it or remove it |
+| POAM-040 | SC-5 | Moderate | Moderate | P12-WU-04 | 2026-08-31 | Engine holds RLock across the full OPA eval → a CRD write can stall admission — snapshot-then-eval-lock-free |
+| POAM-041 | AU-2 | Moderate | Moderate | P12-WU-04 | 2026-08-31 | Decision-publisher drops telemetry events under backpressure with no spool (AU-2 feed, NOT the durable audit log) — confirm telemetry-only + alert on drop metric |
+| POAM-042 | AU-3 | Moderate | Moderate | P12-WU-04 | 2026-08-31 | Audit LogConfigChange/LogSystemEvent synthesize correlation/request IDs from `time.Now().UnixNano()` (collision risk) — use UUID |
+| POAM-043 | CM-6 | Moderate | Moderate | P12-WU-04 | 2026-08-31 | require-image-digest rule uses a substring `@sha256:` check, not an anchored 64-hex digest (opt-in rule) — anchored regex |
+| POAM-044 | AU-3(1) | Moderate | Moderate | P12-WU-04 | 2026-08-31 | Audit redaction key-substring list misses common credential keys (authorization/access_key/connection/dsn/webhook/sas/jwt/pem) — expand the list |
+| POAM-045 | IA-2 | Moderate | Moderate | P12-WU-04 | 2026-08-31 | forward-auth mode trusts client-supplied X-Forwarded-Access-Token/User headers with no in-binary guard — startup gate + NetworkPolicy prerequisite |
+| POAM-046 | SC-5 | Moderate | Moderate | P12-WU-04 | 2026-08-31 | policy-manager evaluate/test handlers `io.ReadAll` the body with no MaxBytesReader floor when the rate-limiter is off — add MaxBytesReader |
+| POAM-047 | SC-8 | Low | Low | P12-WU-04 | 2026-11-29 | SIEM forward backend pins a TLS 1.2 floor (vs 1.3 elsewhere) + insecure-skip-verify opt-in with no prod guard — default 1.3 + refuse in prod |
+| POAM-048 | SA-15 | Low | Low | P12-WU-04 | 2026-11-29 | Code-quality cleanups: vestigial Manager.ctx/cancel; audit Context.Object aliases the live payload across the async flush; RecentDecisions negative-limit relies on a downstream clamp |
+| POAM-049 | SI-10 | High | High | P12-WU-04 | 2026-06-02 | **Remediated — Closed 2026-06-02** (commit 055a8c0): untrusted-Rego capability sandbox + admission eval deadline (2s) + evaluate/test RPC timeout (5s) — three security/correctness findings fixed this cycle |
+| POAM-050 | AT-2 | Moderate | Moderate | P12 | 2026-12-31 | Role-based security training program/records (AT-2/AT-3/AT-4) not established — organizational, human-owned |
+| POAM-051 | MA-2 | Moderate | Moderate | P12 | 2026-12-31 | Operational maintenance (MA-2/MA-4/MA-5) procedural and unstaffed — operator/organizational |
+| POAM-052 | MP-2 | Moderate | Moderate | P12 | 2026-12-31 | Media-handling (MP-2..MP-7) CSP-inherited/operator-owned, not yet confirmed — human-owned |
+| POAM-053 | PE-1 | Moderate | Moderate | P12 | 2026-12-31 | PE-family CSP inheritance not yet confirmed against the specific CSP FedRAMP package — human-owned |
+| POAM-054 | PS-3 | Moderate | Moderate | P12 | 2026-12-31 | Personnel screening/external-personnel security (PS-3/PS-7) unstaffed — HR/program-owned |
+| POAM-055 | PL-2 | Moderate | Moderate | P12 | 2026-12-31 | Privacy PTA/PIA determination not yet made (audit records may embed PII) — human-owned |
+| POAM-056 | AC-2 | Moderate | Moderate | P12 | 2026-12-31 | OIDC IdP selection + AC-2 account lifecycle depend on an out-of-repo IdP — operator-owned |
+| POAM-057 | CA-2 | High | High | P12 | 2026-12-31 | P12 human activities: 3PAO pen-test execution + external independent assessment (CA-2(1)) + AO authorization decision (CA-6/PM-10) — human-owned |
 
 The authoritative, parseable record (full weakness text, remediation detail, milestones, and
 source) is [poam.csv](poam.csv). Where this table and the CSV disagree, **the CSV governs**.
+
+### Newly added entries (P12-WU-02 / P12-WU-04 reconciliation)
+
+- **POAM-039..POAM-048** — open findings from the **internal independent review (P12-WU-04)**
+  (`source = internal independent review (P12-WU-04)`): one **High** (POAM-039, the inert
+  `failure_mode` knob), seven **Moderate** (POAM-040..046), and two **Low** (POAM-047,
+  POAM-048). High/Moderate/Low `scheduled_completion` dates follow the FedRAMP SLA from a
+  **2026-06-02** discovery (High 2026-07-02, Moderate 2026-08-31, Low 2026-11-29).
+- **POAM-049** — the **three security/correctness findings remediated in the same P12-WU-04
+  cycle** (untrusted-Rego capability sandbox; admission eval deadline; evaluate/test RPC
+  timeout). Recorded **Remediated — Closed 2026-06-02** with closure evidence pointing at
+  commit `055a8c0`, so the register reflects them as resolved (no unremediated High from this
+  cycle).
+- **POAM-050..POAM-057** — the **human-owned / out-of-band families** required for ATO that no
+  repository work unit can close (see the
+  [remediation roadmap](plans/remediation-roadmap.md) "Human-owned / out-of-band items"):
+  AT role-based training (POAM-050), MA operational maintenance (POAM-051), MP media handling
+  (POAM-052), PE CSP-inheritance confirmation (POAM-053), PS screening (POAM-054), Privacy
+  PTA/PIA (POAM-055), OIDC IdP + AC-2 account lifecycle (POAM-056), and the P12 assessment
+  activities — 3PAO pen-test execution, external independent assessment, and the AO
+  authorization decision (POAM-057). PS-2 (ATO-role assignment) is already tracked as
+  **POAM-018** and is not duplicated here.
 
 ## How to maintain this POA&M
 
@@ -150,19 +203,28 @@ The CSV at [poam.csv](poam.csv) is the system of record; this Markdown file is a
 summary. To keep the two consistent and assessor-grade:
 
 1. **Header is fixed.** `poam.csv` must keep the exact header
-   `poam_id,weakness,source,control_id,severity,remediation,milestones,scheduled_completion,status,risk_rating`.
-   Do not add, rename, or reorder columns.
-2. **Required cells.** `severity` (one of `Critical|High|Moderate|Low`) and
-   `scheduled_completion` (a real date) must never be blank. `control_id` must reference a row
-   that exists in [control-matrix.csv](control-matrix.csv).
+   `poam_id,weakness,source,control_id,severity,remediation,milestones,scheduled_completion,status,risk_rating,owner`.
+   The `owner` column is the eleventh field, appended after `risk_rating`. Do not rename or
+   reorder columns. Any field whose value contains a comma **must be double-quoted** so the
+   CSV stays well-formed (the validator and `csv` readers split on unquoted commas).
+2. **Required cells.** `severity` (one of `Critical|High|Moderate|Low`),
+   `scheduled_completion` (a real date), and `owner` (a role title or assigned username) must
+   never be blank. Until POAM-018 closes, `owner` is a role placeholder
+   (`Engineering|ISSO|System Owner|Authorizing Official (TBD — assign)`); never invent real
+   names. `control_id` must reference a row that exists in
+   [control-matrix.csv](control-matrix.csv).
 3. **Adding a weakness.** Allocate the next sequential `POAM-NNN` (never reuse a retired id),
    cite the originating analysis in `source`, map it to its primary `control_id` and remediating
    phase (P0–P12), and set a phase-aligned `scheduled_completion`. Then add a matching summary
    row above.
-4. **Closing a weakness.** When remediation is verified, change `status` from `Open` to
-   `Completed` (record the closure evidence in the assessment record), keep the row for audit
-   history, and reflect the closure in the [control matrix](control-matrix.csv) by moving the
-   corresponding control to `Implemented` and clearing or updating its `poam_id`.
+4. **Closing a weakness.** When remediation is verified, change `status` from `Open` to a
+   terminal state (`Completed` for a closed program item, or `Remediated` for a fix released
+   and verified per the [POA&M template](../security/poam-template.md) lifecycle), record the
+   closure evidence in the `status` cell (PR/commit link, patch version, or risk-acceptance
+   rationale), keep the row for audit history, and reflect the closure in the
+   [control matrix](control-matrix.csv) by moving the corresponding control to `Implemented`
+   and clearing or updating its `poam_id`. (Examples: POAM-024 `Completed (Closed P5)`;
+   POAM-049 `Remediated (Closed 2026-06-02)` with evidence commit `055a8c0`.)
 5. **Two-way traceability.** Every `Open` weakness should be reachable from its control's
    `poam_id` cell in [control-matrix.csv](control-matrix.csv); every `Planned`/`Partial`
    control with residual risk should point at a `POAM-NNN` here.
@@ -171,9 +233,16 @@ summary. To keep the two consistent and assessor-grade:
    least **annually** (next review 2027-05-29). FedRAMP remediation timelines —
    Critical/High 30 days, Moderate 90 days, Low 180 days — apply once the SLA-bound
    vulnerability-management program (POAM-025 / POAM-026) is operational.
-7. **Validation.** Before commit, confirm the CSV parses with the required columns and that no
-   `severity` or `scheduled_completion` cell is blank (e.g.,
-   `python3 -c "import csv;rows=list(csv.reader(open('docs/compliance/poam.csv')));assert all(r[4] and r[7] for r in rows[1:])"`).
+7. **Validation.** Before commit, run `python3 scripts/validate/compliance_check.py` (the
+   gating offline validator: non-blank `severity`/`scheduled_completion`, control-matrix
+   columns, inventory<->boundary consistency, and relative-link integrity). As a quick local
+   check, confirm the CSV parses with all eleven required columns and that no `severity`,
+   `scheduled_completion`, or `owner` cell is blank (e.g.,
+   `python3 -c "import csv;rows=list(csv.reader(open('docs/compliance/poam.csv')));assert all(len(r)==11 and r[4] and r[7] and r[10] for r in rows[1:])"`).
+   Confirm every `poam_id` referenced in
+   [control-matrix.csv](control-matrix.csv) exists in `poam.csv` (the vuln-scan ↔ POA&M and
+   matrix ↔ POA&M reconciliation SOP lives in
+   [vulnerability-management.md](../security/vulnerability-management.md) §4.4).
 
 ## Roles and ownership
 
