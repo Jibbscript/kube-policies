@@ -1,6 +1,7 @@
 package audit
 
 import (
+	"context"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
@@ -177,7 +178,7 @@ func (b *ForwardBackend) send(payload []byte) error {
 // goroutine indefinitely while holding b.mu). Caller holds b.mu.
 func (b *ForwardBackend) writeLocked(payload []byte) error {
 	if b.conn == nil {
-		conn, err := tls.DialWithDialer(b.dialer, "tcp", b.address, b.tlsConfig)
+		conn, err := (&tls.Dialer{NetDialer: b.dialer, Config: b.tlsConfig}).DialContext(context.Background(), "tcp", b.address)
 		if err != nil {
 			return err
 		}

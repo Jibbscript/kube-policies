@@ -16,7 +16,7 @@ type Collector struct {
 
 	// Fail-open admissions (IRM-WU-08, NIST SI-4(2)/IR-5): incremented whenever
 	// the webhook admits a request it could NOT evaluate (the engine errored),
-	// i.e. a security control was bypassed. Labelled by operation ("mutate";
+	// i.e. a security control was bypassed. Labeled by operation ("mutate";
 	// "validate" fails closed by contract so it never increments). Any nonzero
 	// rate is alert-worthy — the KubePoliciesFailOpenActive rule pages on it.
 	admissionFailOpen *prometheus.CounterVec
@@ -48,7 +48,7 @@ type Collector struct {
 	certExpiry *prometheus.GaugeVec
 
 	// HTTP rate-limiting / DoS-protection rejections (NET-WU-14/15, RES-WU-17).
-	// Labelled by the handler that rejected the request and the reason it was
+	// Labeled by the handler that rejected the request and the reason it was
 	// rejected ("rate", "concurrency", "body_too_large", "stream_capacity").
 	// Label cardinality is bounded: handler is the small static set of mounted
 	// routes and reason is a four-value enum, so no operator-driven growth.

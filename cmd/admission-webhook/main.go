@@ -387,7 +387,7 @@ func main() {
 	// A bind failure is fatal — a webhook that cannot serve must never report
 	// Ready. The TLS handshake/cert still come from TLSConfig.GetCertificate, so
 	// ServeTLS is called with empty cert/key paths exactly like before.
-	webhookListener, err := net.Listen("tcp", webhookServer.Addr)
+	webhookListener, err := (&net.ListenConfig{}).Listen(ctx, "tcp", webhookServer.Addr)
 	if err != nil {
 		log.Fatal("Failed to bind webhook server listener", zap.Int("port", *port), zap.Error(err))
 	}

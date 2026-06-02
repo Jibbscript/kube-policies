@@ -202,7 +202,7 @@ func TestSetupWebhookServer_BreakGlassPermissive(t *testing.T) {
 // TestSetupMetricsServer_ReadyzReflectsTLSReadiness proves RES-WU-06 (CP-10,
 // SC-5): the metrics server's /readyz returns 503 until the webhook's TLS
 // listener is bound (webhookReady flipped true) and then 200, while /healthz
-// (liveness) is always 200. This is the unit-level analogue of "a down TLS
+// (liveness) is always 200. This is the unit-level analog of "a down TLS
 // listener removes the pod from endpoints": the kubelet readiness probe targets
 // /readyz, so an unbound listener (ready=false) marks the pod NotReady.
 func TestSetupMetricsServer_ReadyzReflectsTLSReadiness(t *testing.T) {

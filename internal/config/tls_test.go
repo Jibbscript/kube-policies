@@ -116,7 +116,8 @@ func TestServedHandshake_MinVersionEnforced(t *testing.T) {
 		t.Fatal("expected *http.Transport from srv.Client()")
 	}
 	tr.TLSClientConfig.MaxVersion = tls.VersionTLS12
-	if _, err := downgrade.Get(srv.URL); err == nil {
+	if resp, err := downgrade.Get(srv.URL); err == nil {
+		resp.Body.Close()
 		t.Fatal("TLS 1.2 client must be refused by a min_version=1.3 listener")
 	}
 }

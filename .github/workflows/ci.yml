@@ -58,9 +58,12 @@ jobs:
         git diff --exit-code -- go.mod go.sum
 
     - name: Run golangci-lint
-      uses: golangci/golangci-lint-action@55c2c1448f86e01eaae002a5a3a9624417608d84  # v6
+      uses: golangci/golangci-lint-action@4afd733a84b1f43292c63897423277bb7f4313a9  # v8.0.0
       with:
-        version: v1.64.8
+        # golangci-lint v2 is required: v1.x is built with go1.24 and refuses to
+        # run against the go1.25 toolchain (SI-2 pin). The repo's .golangci.yml is
+        # already in v2 schema. action v8 installs golangci-lint v2.
+        version: v2.12.2
         args: --timeout=5m
 
     - name: Run go vet
@@ -81,7 +84,15 @@ jobs:
     - name: Check for security issues (gosec — fail on MEDIUM+)
       uses: securego/gosec@4a3bd8af174872c778439083ded7adbf3747e770  # v2.26.1
       with:
-        args: '-severity medium -confidence medium -fmt sarif -out gosec.sarif ./...'
+        # -exclude=G204,G304 mirrors the gosec excludes in .golangci.yml (justified
+        # there: subprocess-with-variable in webhook tooling; file-path-as-taint in
+        # fixture/config readers). G124 is also excluded HERE only: the two flagged
+        # dashboard cookies are justified via line-scoped //nolint:gosec (HttpOnly +
+        # SameSite set; Secure tracks a.secure), which the golangci-lint gosec run
+        # honors — but the standalone gosec binary reads #nosec, not //nolint, so it
+        # would re-flag them. G124 remains enforced everywhere else by the in-lint
+        # gosec run, so no net coverage is lost.
+        args: '-severity medium -confidence medium -exclude=G204,G304,G124 -fmt sarif -out gosec.sarif ./...'
 
     - name: Upload gosec SARIF file
       if: always()
@@ -654,9 +665,25 @@ jobs:
           \( -name "*.yaml" -o -name "*.yml" \) -print \
           | xargs -I {} sh -c 'echo "Validating {}" && python -c "import yaml,sys; list(yaml.safe_load_all(open(sys.argv[1])))" {}'
 
-    - name: Check Helm chart documentation
+    - name: Check Helm chart documentation (helm-docs regenerates README; verify current)
+      env:
+        HELM_DOCS_VERSION: '1.14.2'
+        # sha256 of helm-docs_1.14.2_Linux_x86_64.tar.gz from the release checksums.txt.
+        HELM_DOCS_SHA256: 'a8cf72ada34fad93285ba2a452b38bdc5bd52cc9a571236244ec31022928d6cc'
       run: |
-        helm-docs --check
+        set -euo pipefail
+        # helm-docs has no --check flag; install the pinned binary, regenerate the
+        # chart README, and fail if it differs from the committed copy.
+        asset="helm-docs_${HELM_DOCS_VERSION}_Linux_x86_64.tar.gz"
+        url="https://github.com/norwoodj/helm-docs/releases/download/v${HELM_DOCS_VERSION}/${asset}"
+        curl -fsSL -o "${asset}" "${url}"
+        echo "${HELM_DOCS_SHA256}  ${asset}" | sha256sum -c -
+        tar -xzf "${asset}" helm-docs
+        sudo install -m 0755 helm-docs /usr/local/bin/helm-docs
+        helm-docs --version
+        helm-docs --chart-search-root=charts/kube-policies
+        git diff --exit-code -- charts/kube-policies/README.md \
+          || { echo "::error::charts/kube-policies/README.md is stale — run 'helm-docs --chart-search-root=charts/kube-policies' and commit"; exit 1; }
 
   # Release preparation
   prepare-release:

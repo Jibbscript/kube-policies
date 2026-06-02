@@ -197,7 +197,7 @@ func TestCompliance_DoesNotMutateSourceFile(t *testing.T) {
 		{Decision: "deny"},
 		{PolicyID: "p1"},
 	} {
-		_, err := m.buildComplianceReport(q)
+		_, err = m.buildComplianceReport(q)
 		require.NoError(t, err)
 	}
 

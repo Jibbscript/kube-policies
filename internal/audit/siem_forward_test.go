@@ -80,7 +80,7 @@ func TestSIEMForwarding_AuditEventDeliveredOverTLS(t *testing.T) {
 	})
 
 	// Close drains the buffer to the file backend (AU-9: no silent loss).
-	if err := logger.Close(); err != nil {
+	if err = logger.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
 

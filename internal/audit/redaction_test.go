@@ -98,7 +98,7 @@ func TestFileBackend_RedactionBeforeSeal(t *testing.T) {
 		Decision:  "allow",
 		Object:    rawExt(`{"kind":"Secret","data":{"password":"c2VjcmV0LXZhbHVl"}}`),
 	})
-	if err := l.Close(); err != nil { // flushes
+	if err = l.Close(); err != nil { // flushes
 		t.Fatal(err)
 	}
 

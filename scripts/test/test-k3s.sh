@@ -247,6 +247,8 @@ tolerations:
     effect: NoSchedule
 EOF
 
+    # Resolve gitignored subchart deps (prometheus/grafana) before install.
+    bash "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/ci/helm-deps.sh"
     # Install using Helm
     helm upgrade --install kube-policies charts/kube-policies \
         --namespace kube-policies-system \

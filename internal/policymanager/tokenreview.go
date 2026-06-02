@@ -2,7 +2,6 @@ package policymanager
 
 import (
 	"context"
-	"sync/atomic"
 
 	"go.uber.org/zap"
 	authenticationv1 "k8s.io/api/authentication/v1"
@@ -37,7 +36,6 @@ type InternalTokenAuthenticator struct {
 	audience         string
 	expectedUsername string // empty → subject check disabled (log a one-time warning)
 	logger           *zap.Logger
-	subjectWarnOnce  atomic.Bool // guards the one-time no-subject warning
 }
 
 // NewInternalTokenAuthenticator builds an authenticator over a production

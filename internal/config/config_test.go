@@ -320,7 +320,7 @@ func TestLoadConfig_AuthDisabledLeavesZeroValue(t *testing.T) {
 // only fires when clientCAs==nil, which is the no-bundle startup path).
 func TestLoadConfig_ClientAuthDrivesClientAuthType(t *testing.T) {
 	// A minimal self-signed CA pool so BuildServerTLSConfig sees a non-nil pool
-	// and honours the configured ClientAuth without downgrading.
+	// and honors the configured ClientAuth without downgrading.
 	caPool := x509.NewCertPool()
 
 	cases := []struct {
@@ -411,7 +411,7 @@ func TestLoadConfig_RejectsNonMemoryStorageType(t *testing.T) {
 // What IS machine-verified here is the downstream behavior that must NOT be
 // silently ignored: BuildServerTLSConfig DEGRADES to NoClientCert when
 // clientCAs==nil, even if client_auth=require is configured. This is the
-// documented intentional behaviour (CRY-WU-04 comment in tls.go). The test
+// documented intentional behavior (CRY-WU-04 comment in tls.go). The test
 // makes this explicit so any change to that downgrade path will break this test
 // and force a conscious decision.
 func TestTLSConfig_ClientAuthRequireWithoutCAPath(t *testing.T) {
@@ -434,7 +434,7 @@ func TestTLSConfig_ClientAuthRequireWithoutCAPath(t *testing.T) {
 			wantAuthInTLS: tls.NoClientCert,
 		},
 		{
-			// (b) require + CA pool: both layers honour RequireAndVerifyClientCert.
+			// (b) require + CA pool: both layers honor RequireAndVerifyClientCert.
 			name:          "require_with_ca_pool_enforces_mtls",
 			clientAuth:    "require",
 			caPool:        x509.NewCertPool(),

@@ -122,7 +122,8 @@ func TestBuildClientTLSConfig_MutualRoundTrip(t *testing.T) {
 			t.Fatalf("BuildClientTLSConfig: %v", err)
 		}
 		client := &http.Client{Transport: &http.Transport{TLSClientConfig: cfg}}
-		if _, err := client.Get(srv.URL); err == nil {
+		if resp, err := client.Get(srv.URL); err == nil {
+			resp.Body.Close()
 			t.Fatal("a client presenting no certificate must be rejected by a require-client-cert listener")
 		}
 	})

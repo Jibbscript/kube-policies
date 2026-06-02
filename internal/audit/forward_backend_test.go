@@ -105,8 +105,10 @@ func TestForwardBackend_DeliversOverTLS(t *testing.T) {
 	}
 	defer b.Close()
 
-	ev := &Event{RequestID: "fwd-1", EventType: "PolicyDecision",
-		Kind: metav1.GroupVersionKind{Kind: "Pod"}, Decision: "deny"}
+	ev := &Event{
+		RequestID: "fwd-1", EventType: "PolicyDecision",
+		Kind: metav1.GroupVersionKind{Kind: "Pod"}, Decision: "deny",
+	}
 	if err := b.Write(ev); err != nil {
 		t.Fatalf("Write returned error: %v", err)
 	}
@@ -145,7 +147,7 @@ func TestForwardBackend_SpoolsAndReplays(t *testing.T) {
 	defer b.Close()
 
 	ev := &Event{RequestID: "spooled-1", EventType: "PolicyDecision", Decision: "allow"}
-	if err := b.Write(ev); err != nil {
+	if err = b.Write(ev); err != nil {
 		t.Fatalf("Write (down) returned error: %v", err)
 	}
 

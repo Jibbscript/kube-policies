@@ -102,6 +102,7 @@ func BuildClientTLSConfig(caPath string, getClientCert func(*tls.CertificateRequ
 		return nil, err
 	}
 	if pool == nil && getClientCert == nil {
+		//nolint:nilnil // (nil, nil) is the documented "no custom trust root and no client identity" result: callers (cmd/*/main.go, dashboard/metrics.go) intentionally treat a nil *tls.Config as "fall back to the default transport (system roots, no client cert)" and distinguish it from an error via tlsConf != nil. A sentinel error would force errors.Is guards into three warn-and-fallback paths and invert the err==nil contract the tests assert.
 		return nil, nil
 	}
 	// pool may be nil here (system roots) when only a client identity is set.
@@ -119,6 +120,7 @@ func BuildClientTLSConfig(caPath string, getClientCert func(*tls.CertificateRequ
 // silently reject every client under RequireAndVerifyClientCert.
 func LoadClientCAPool(path string) (*x509.CertPool, error) {
 	if path == "" {
+		//nolint:nilnil // (nil, nil) is the documented "no client-CA configured" result: the fail-closed callers (admission-webhook/policy-manager buildAPITLSConfig) rely on a nil *x509.CertPool to mean "permissive / no client-cert verification" and gate on clientCAs == nil, separate from a load error. Returning a sentinel error would route this absence through their `return nil, fmt.Errorf("load client CA bundle: %w", err)` branch and change the fail-closed behavior.
 		return nil, nil
 	}
 	pem, err := os.ReadFile(path)

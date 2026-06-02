@@ -217,7 +217,7 @@ func TestGovernanceBaseline(t *testing.T) {
 			wantAllowed: false, wantRule: "deny-default-namespace",
 		},
 		{
-			name: "fully labelled app-namespace pod allowed", kind: "Pod",
+			name: "fully labeled app-namespace pod allowed", kind: "Pod",
 			raw:         `{"kind":"Pod","metadata":{"name":"p","namespace":"app","labels":{"app.kubernetes.io/name":"x","owner":"team","data-classification":"low"}},"spec":{"containers":[{"name":"c","image":"nginx:1"}]}}`,
 			wantAllowed: true,
 		},

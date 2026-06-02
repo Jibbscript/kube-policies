@@ -170,7 +170,7 @@ func (r *Reloader) logLoaded(msg string, cert *tls.Certificate) {
 	)
 }
 
-// Start runs the watch loop until ctx is cancelled. It watches the directory
+// Start runs the watch loop until ctx is canceled. It watches the directory
 // containing the cert files (to catch the Kubernetes "..data" symlink swap)
 // and also re-reads on a periodic ticker as a fallback. Start blocks; run it in
 // its own goroutine.

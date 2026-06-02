@@ -349,8 +349,10 @@ func signIDToken(t *testing.T, key *ecdsa.PrivateKey, claims map[string]any) str
 	return compact
 }
 
-const testClientID = "kube-policies-dashboard"
-const testIssuer = "https://issuer.test.example.com"
+const (
+	testClientID = "kube-policies-dashboard"
+	testIssuer   = "https://issuer.test.example.com"
+)
 
 // oidcFlowAuthenticator wires an authenticator whose token endpoint is a local
 // httptest server returning idToken, and whose verifier trusts key's public half.

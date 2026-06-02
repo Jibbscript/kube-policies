@@ -10,10 +10,10 @@ import (
 	"time"
 
 	"go.uber.org/zap"
+	lumberjack "gopkg.in/natefinch/lumberjack.v2"
 	authenticationv1 "k8s.io/api/authentication/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
-	lumberjack "gopkg.in/natefinch/lumberjack.v2"
 
 	"github.com/Jibbscript/kube-policies/internal/config"
 	"github.com/Jibbscript/kube-policies/internal/policy"
@@ -40,11 +40,11 @@ func (NopMetrics) SetAuditBufferSize(float64)    {}
 
 // Logger handles audit logging
 type Logger struct {
-	config  *config.AuditConfig
-	backend Backend
-	buffer  chan *Event
-	ctx     context.Context
-	cancel  context.CancelFunc
+	config    *config.AuditConfig
+	backend   Backend
+	buffer    chan *Event
+	ctx       context.Context
+	cancel    context.CancelFunc
 	logger    *zap.Logger
 	metrics   Metrics
 	wg        sync.WaitGroup
@@ -318,14 +318,14 @@ func (l *Logger) LogConfigChange(userInfo authenticationv1.UserInfo, changeType,
 	}
 
 	event := &Event{
-		Timestamp:     now,
-		RequestID:     fmt.Sprintf("config-%d", now.UnixNano()),
-		EventType:     "ConfigurationChange",
-		UserInfo:      userInfo,
-		Operation:     changeType,
-		Message:       fmt.Sprintf("%s %s %s", changeType, resource, resourceID),
-		SchemaVersion: AuditSchemaVersion,
-		CorrelationID: correlationID,
+		Timestamp:      now,
+		RequestID:      fmt.Sprintf("config-%d", now.UnixNano()),
+		EventType:      "ConfigurationChange",
+		UserInfo:       userInfo,
+		Operation:      changeType,
+		Message:        fmt.Sprintf("%s %s %s", changeType, resource, resourceID),
+		SchemaVersion:  AuditSchemaVersion,
+		CorrelationID:  correlationID,
 		StageTimestamp: func() *time.Time { t := now; return &t }(),
 		Metadata: map[string]interface{}{
 			"resource":    resource,

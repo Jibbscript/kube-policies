@@ -213,7 +213,7 @@ func NewAPIRouter(m *Manager, authCfg config.AuthConfig, rbacCfg config.RBACConf
 // default).
 func NewMetricsRouter(verifier *auth.TokenVerifier) http.Handler {
 	mux := http.NewServeMux()
-	var metricsHandler http.Handler = promhttp.Handler()
+	metricsHandler := promhttp.Handler()
 	if verifier != nil {
 		metricsHandler = auth.RequireBearer(verifier, metricsHandler)
 	}

@@ -358,7 +358,7 @@ func (a *authenticator) callback(c *gin.Context) {
 		return
 	}
 	var tx oauthTx
-	if err := json.Unmarshal(opened, &tx); err != nil {
+	if err = json.Unmarshal(opened, &tx); err != nil {
 		c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": "invalid login transaction"})
 		return
 	}
@@ -372,7 +372,7 @@ func (a *authenticator) callback(c *gin.Context) {
 		return
 	}
 	// CSRF: the returned state must equal the sealed state.
-	if subtleConstEq(c.Query("state"), tx.State) == false {
+	if !subtleConstEq(c.Query("state"), tx.State) {
 		c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "state mismatch"})
 		return
 	}
@@ -395,7 +395,7 @@ func (a *authenticator) callback(c *gin.Context) {
 		return
 	}
 	// CRITICAL: go-oidc's Verify does NOT validate the nonce — the caller must.
-	if subtleConstEq(idt.Nonce, tx.Nonce) == false {
+	if !subtleConstEq(idt.Nonce, tx.Nonce) {
 		c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "nonce mismatch"})
 		return
 	}
@@ -514,6 +514,7 @@ func (a *authenticator) writeSession(c *gin.Context, sess session) bool {
 func (a *authenticator) clearSession(c *gin.Context) { a.clearCookie(c, a.sessionCookieName()) }
 
 func (a *authenticator) writeCookie(c *gin.Context, name, value string, maxAgeSeconds int) {
+	//nolint:gosec // G124 false positive: HttpOnly and SameSite=Lax are set unconditionally; Secure tracks a.secure, which is true by default and only false when an operator explicitly opts into plaintext-dev (SessionCookieInsecure), where the __Host- cookie-name prefix is also dropped (forcing Secure:true here would silently break that documented mode). SameSite=Lax is correct because the OIDC redirect lands as a top-level GET, on which the browser DOES send Lax cookies, so the temp oauth cookie is readable on the callback without needing SameSite=None.
 	http.SetCookie(c.Writer, &http.Cookie{
 		Name:     name,
 		Value:    value,
@@ -526,6 +527,7 @@ func (a *authenticator) writeCookie(c *gin.Context, name, value string, maxAgeSe
 }
 
 func (a *authenticator) clearCookie(c *gin.Context, name string) {
+	//nolint:gosec // G124 false positive: HttpOnly and SameSite=Lax are set unconditionally; Secure tracks a.secure (true by default, false only for the documented plaintext-dev opt-in). This is a deletion (MaxAge:-1, empty value), so the attribute set mirrors writeCookie exactly.
 	http.SetCookie(c.Writer, &http.Cookie{
 		Name:     name,
 		Value:    "",

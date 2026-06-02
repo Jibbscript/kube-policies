@@ -286,6 +286,9 @@ EOF
         log "Applying extra Helm values overlay: ${extra_values}"
         helm_values_args+=(--values "${extra_values}")
     fi
+    # Resolve gitignored subchart deps (prometheus/grafana) so the install
+    # succeeds on a fresh CI runner / clone (used by e2e-kind, e2e-k3s, DAST).
+    bash "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/ci/helm-deps.sh"
     helm upgrade --install kube-policies charts/kube-policies \
         --namespace kube-policies-system \
         "${helm_values_args[@]}" \

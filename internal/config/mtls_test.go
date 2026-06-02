@@ -149,7 +149,8 @@ func TestMTLSHandshake(t *testing.T) {
 		client := &http.Client{Transport: &http.Transport{TLSClientConfig: &tls.Config{
 			RootCAs: serverTrust, MinVersion: tls.VersionTLS13,
 		}}}
-		if _, err := client.Get(srv.URL); err == nil {
+		if resp, err := client.Get(srv.URL); err == nil {
+			resp.Body.Close()
 			t.Fatal("client without a cert must be rejected when client_auth=require + CA pool")
 		}
 	})

@@ -242,9 +242,9 @@ func LoadConfig() (*Config, error) {
 		RateLimitMaxBodyBytes:  int64(envIntOr("DASHBOARD_RATELIMIT_MAX_BODY_BYTES", 3145728)), // 3 MiB
 		MaxSSEConnections:      envIntOr("DASHBOARD_MAX_SSE_CONNECTIONS", 100),
 
-		AuditEnabled:  envBool("DASHBOARD_AUDIT_ENABLED", false),
-		AuditBackend:  envOr("DASHBOARD_AUDIT_BACKEND", "stdout"),
-		AuditFile:     os.Getenv("DASHBOARD_AUDIT_FILE"),
+		AuditEnabled: envBool("DASHBOARD_AUDIT_ENABLED", false),
+		AuditBackend: envOr("DASHBOARD_AUDIT_BACKEND", "stdout"),
+		AuditFile:    os.Getenv("DASHBOARD_AUDIT_FILE"),
 	}
 	if err := cfg.validateAuth(); err != nil {
 		return nil, err
@@ -288,9 +288,7 @@ func (c *Config) validateAuth() error {
 // splitScopes splits a space-separated OIDC scope list, dropping empties.
 func splitScopes(raw string) []string {
 	out := []string{}
-	for _, s := range strings.Fields(raw) {
-		out = append(out, s)
-	}
+	out = append(out, strings.Fields(raw)...)
 	return out
 }
 
