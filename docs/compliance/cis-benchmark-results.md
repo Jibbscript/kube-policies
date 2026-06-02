@@ -28,7 +28,7 @@ produced. It is part of the compliance evidence package
 
 ## How the assessment is produced
 
-`scripts/test/cis-benchmark.sh` runs Aqua `kube-bench` as an in-cluster `Job`
+`scripts/validate/cis-conformance.sh` runs Aqua `kube-bench` as an in-cluster `Job`
 against the `kind` e2e cluster that the CI `e2e-kind` job already stands up, and
 writes `kube-bench-results.json` / `.txt` as a CI artifact (job
 `cis-benchmark`, which `needs: [e2e-kind]`). The script is **non-gating**: many
@@ -39,7 +39,7 @@ the build. The artifact is reviewed during the assessment cadence.
 Run it locally against a live cluster:
 
 ```bash
-KIND_CLUSTER_NAME=kube-policies-test scripts/test/cis-benchmark.sh
+KIND_CLUSTER_NAME=kube-policies-test scripts/validate/cis-conformance.sh
 # -> test-results/cis-benchmark/kube-bench-results.{json,txt}
 ```
 

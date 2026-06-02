@@ -257,7 +257,7 @@ jobs:
         tags: |
           type=ref,event=branch
           type=ref,event=pr
-          type=sha,prefix={{branch}}-
+          type=sha
           type=raw,value=latest,enable={{is_default_branch}}
 
     - name: Build and push admission webhook image
@@ -279,7 +279,7 @@ jobs:
         tags: |
           type=ref,event=branch
           type=ref,event=pr
-          type=sha,prefix={{branch}}-
+          type=sha
           type=raw,value=latest,enable={{is_default_branch}}
 
     - name: Build and push policy manager image
@@ -1243,7 +1243,7 @@ jobs:
         # up for the assessment.
         export CLEANUP=false
         ./scripts/test/test-kind.sh || true
-        KIND_CLUSTER_NAME=kube-policies-test ./scripts/test/cis-benchmark.sh
+        KIND_CLUSTER_NAME=kube-policies-test ./scripts/validate/cis-conformance.sh
 
     - name: Upload CIS benchmark report
       if: always()
