@@ -198,6 +198,12 @@ admissionWebhook:
     limits:
       cpu: 200m
       memory: 256Mi
+  # Disable bundled defaults so the e2e suite's own policies fire in isolation;
+  # otherwise a non-compliant test pod trips multiple bundled rules and the engine
+  # collapses the response to "Multiple policy violations detected (N)", defeating
+  # the per-rule substring assertions in test/e2e/e2e_test.go. Mirrors the Kind
+  # harness (scripts/test/lib.sh kind-values).
+  disableDefaultPolicies: true
 
 policyManager:
   image:
@@ -354,7 +360,10 @@ spec:
     runAsNonRoot: true
   containers:
   - name: test-container
-    image: nginx:1.20
+    # pause (not nginx): must reach Ready as non-root; stock nginx binds
+    # privileged :80 and crash-loops under runAsUser 1000. registry.k8s.io avoids
+    # Docker Hub rate limits.
+    image: registry.k8s.io/pause:3.9
     securityContext:
       runAsUser: 1000
       runAsNonRoot: true
@@ -452,7 +461,10 @@ spec:
     runAsNonRoot: true
   containers:
   - name: test-container
-    image: nginx:1.20
+    # pause (not nginx): must reach Ready as non-root; stock nginx binds
+    # privileged :80 and crash-loops under runAsUser 1000. registry.k8s.io avoids
+    # Docker Hub rate limits.
+    image: registry.k8s.io/pause:3.9
     securityContext:
       runAsUser: 1000
       runAsNonRoot: true

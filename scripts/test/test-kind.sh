@@ -204,7 +204,11 @@ spec:
     runAsNonRoot: true
   containers:
   - name: test-container
-    image: nginx:1.20
+    # pause (not nginx): this pod must reach Ready as a NON-root user
+    # (runAsNonRoot/runAsUser 1000), but stock nginx binds privileged port 80 and
+    # crash-loops under a non-root UID. pause idles, needs no port, runs as any
+    # UID, and is pulled from registry.k8s.io (not Docker-Hub-rate-limited).
+    image: registry.k8s.io/pause:3.9
     securityContext:
       runAsUser: 1000
       runAsNonRoot: true
