@@ -38,7 +38,11 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 
 # ── Configuration ─────────────────────────────────────────────────────────────
-TARGET_API_URL="${TARGET_API_URL:-http://localhost:8080}"
+# The policy-manager :8080 REST API always serves TLS (CRY-WU-05), so the scan
+# target + readiness probe use https. The serving cert is self-signed in the
+# Kind/DAST deployment, so curl uses -k and ZAP (which does not validate TLS
+# certs) scans the endpoint directly.
+TARGET_API_URL="${TARGET_API_URL:-https://localhost:8080}"
 TARGET_BFF_URL="${TARGET_BFF_URL:-http://localhost:3000}"
 TLS_HOST="${TLS_HOST:-localhost}"
 TLS_PORT="${TLS_PORT:-8443}"
@@ -139,7 +143,7 @@ bring_up_stack() {
     log "Waiting for policy-manager API to be reachable..."
     local _i
     for _i in $(seq 1 30); do
-        if curl -sf -o /dev/null -m 2 "${TARGET_API_URL}/healthz" 2>/dev/null; then
+        if curl -sfk -o /dev/null -m 2 "${TARGET_API_URL}/healthz" 2>/dev/null; then
             success "Policy-manager API reachable at ${TARGET_API_URL}"
             break
         fi

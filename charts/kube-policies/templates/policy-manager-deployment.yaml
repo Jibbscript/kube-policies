@@ -188,6 +188,16 @@ spec:
               readOnly: true
             - name: tmp
               mountPath: /tmp
+            # AUD-WU-08 (NIST AU-9/AU-11): writable audit-log directory. The
+            # policy-manager constructs the audit logger unconditionally
+            # (cmd/policy-manager/main.go), and the file backend touches the log
+            # at startup to fail fast on an unwritable mount (internal/audit
+            # NewFileBackend). readOnlyRootFilesystem blocks mkdir on the overlay,
+            # so without this volume the container log.Fatals at boot ("Failed to
+            # initialize audit logger") and crash-loops, hanging helm --wait.
+            # Mirrors the admission-webhook's audit-log mount.
+            - name: audit-log
+              mountPath: /var/log/kube-policies
             {{- if .Values.persistence.enabled }}
             - name: data
               mountPath: /var/lib/kube-policies
@@ -200,6 +210,15 @@ spec:
           configMap:
             name: {{ include "kube-policies.configMapName" . }}
         - name: tmp
+          emptyDir: {}
+        # AUD-WU-08: writable audit-log dir (see the volumeMount note). emptyDir,
+        # NOT the webhook's <fullname>-audit PVC: a single ReadWriteOnce PVC
+        # cannot be co-mounted by both the webhook and policy-manager Deployments,
+        # and the policy-manager's management-plane ConfigurationChange audit
+        # stream is independent of the webhook's decision audit. Durable retention
+        # comes from the audit forwarder (AUD-WU-10) / SIEM path, not pod-local
+        # storage.
+        - name: audit-log
           emptyDir: {}
         {{- if .Values.persistence.enabled }}
         - name: data

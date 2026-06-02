@@ -670,11 +670,29 @@ jobs:
       run: |
         kind create cluster --name chart-testing
 
+    - name: Build and load chart images into Kind
+      run: |
+        # `ct install` deploys the chart with the values in
+        # charts/kube-policies/ci/ct-install-values.yaml, which pin the
+        # admission-webhook + policy-manager images to node-local :citest tags
+        # (registry: "", pullPolicy: Never). The chart's published default images
+        # (docker.io/kube-policies/*:1.0.0) do not exist, so without locally built
+        # + loaded images every pod sits in ImagePullBackOff until `helm --wait`
+        # times out. Build from the same multi-stage Dockerfiles the release uses
+        # (Go lives in the builder stage — no host Go toolchain needed) and load
+        # them onto the chart-testing nodes.
+        docker build -f build/docker/admission-webhook.Dockerfile -t kube-policies/admission-webhook:citest .
+        docker build -f build/docker/policy-manager.Dockerfile -t kube-policies/policy-manager:citest .
+        kind load docker-image kube-policies/admission-webhook:citest --name chart-testing
+        kind load docker-image kube-policies/policy-manager:citest --name chart-testing
+
     - name: Test Helm charts
       run: |
         # --timeout is an install-time arg (helm lint rejects it, so it can't live
         # in the shared ct.yaml). --debug surfaces the helm install/wait detail if
-        # the chart does not reach Ready on the fresh Kind cluster.
+        # the chart does not reach Ready on the fresh Kind cluster. The image
+        # overrides + monitoring-off live in
+        # charts/kube-policies/ci/ct-install-values.yaml, which ct loads automatically.
         ct install --helm-extra-args "--timeout 600s" --debug --config .github/ct.yaml
 
   # Documentation tests
