@@ -294,13 +294,31 @@ EOF
     # on the subcharts' pods (large images, StatefulSet) exhausts --wait's 600s
     # budget on a resource-constrained Kind/k3s node. The app's own /metrics
     # endpoint is unaffected (it is not part of the subchart).
-    helm upgrade --install kube-policies charts/kube-policies \
+    if ! helm upgrade --install kube-policies charts/kube-policies \
         --namespace kube-policies-system \
         "${helm_values_args[@]}" \
         --set monitoring.enabled=false \
         --set prometheus.enabled=false \
         --set grafana.enabled=false \
-        --wait --timeout=600s
+        --wait --timeout=600s; then
+        # On --wait timeout/failure, dump why the workloads never became ready
+        # (the bare "No resources found" diagnostic is uninformative). Captures
+        # helm state, pod status/events, and cert-manager issuance status.
+        error "helm upgrade --install failed or timed out; capturing diagnostics"
+        helm status kube-policies -n kube-policies-system 2>&1 | tail -40 || true
+        helm history kube-policies -n kube-policies-system 2>&1 | tail -20 || true
+        echo "--- resources in kube-policies-system ---"
+        kubectl get all -n kube-policies-system -o wide 2>&1 || true
+        echo "--- pod descriptions ---"
+        kubectl describe pods -n kube-policies-system 2>&1 | tail -150 || true
+        echo "--- namespace events ---"
+        kubectl get events -n kube-policies-system --sort-by=.lastTimestamp 2>&1 | tail -60 || true
+        echo "--- cert-manager Certificates/Issuers ---"
+        kubectl get certificates,issuers,clusterissuers -A 2>&1 || true
+        echo "--- cluster Warning events ---"
+        kubectl get events -A --field-selector type=Warning --sort-by=.lastTimestamp 2>&1 | tail -40 || true
+        return 1
+    fi
 
     success "Kube-Policies deployed successfully"
 }

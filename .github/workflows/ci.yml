@@ -672,7 +672,10 @@ jobs:
 
     - name: Test Helm charts
       run: |
-        ct install --config .github/ct.yaml
+        # --timeout is an install-time arg (helm lint rejects it, so it can't live
+        # in the shared ct.yaml). --debug surfaces the helm install/wait detail if
+        # the chart does not reach Ready on the fresh Kind cluster.
+        ct install --helm-extra-args "--timeout 600s" --debug --config .github/ct.yaml
 
   # Documentation tests
   docs-tests:

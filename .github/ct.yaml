@@ -7,7 +7,9 @@ chart-dirs:
 chart-repos:
   - prometheus-community=https://prometheus-community.github.io/helm-charts
   - grafana=https://grafana.github.io/helm-charts
-helm-extra-args: --timeout 600s
+# NOTE: do NOT set `helm-extra-args` here — ct applies the shared config to BOTH
+# `ct lint` and `ct install`, and `helm lint` rejects `--timeout` ("unknown flag").
+# The install timeout is passed to `ct install` on the command line instead.
 validate-maintainers: false
 check-version-increment: true
 # Chart.yaml schema for lint validation (ct cannot find a default one in the
