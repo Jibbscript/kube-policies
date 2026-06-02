@@ -391,6 +391,13 @@ EOF
     
     # Test 3: Local path provisioner (k3s default)
     log "Test 3: Testing storage with local-path provisioner"
+    # k3s's local-path StorageClass uses volumeBindingMode: WaitForFirstConsumer,
+    # so a PVC with NO consumer stays Pending by design — waiting on the bare PVC
+    # for "Bound" hangs until the timeout (the job then exits 124). Create a
+    # consumer pod alongside the PVC so the provisioner binds it, and wait on the
+    # POD: Ready implies the local-path PV was provisioned, the PVC bound, and the
+    # volume mounted. The consumer is fully compliant (non-root, dropped caps,
+    # resource limits) so it is admitted under any test policy.
     kubectl apply -f - <<EOF
 apiVersion: v1
 kind: PersistentVolumeClaim
@@ -404,11 +411,44 @@ spec:
     requests:
       storage: 1Gi
   storageClassName: local-path
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: test-pvc-consumer
+  namespace: default
+spec:
+  securityContext:
+    runAsUser: 1000
+    runAsNonRoot: true
+  containers:
+  - name: test-container
+    image: registry.k8s.io/pause:3.9
+    securityContext:
+      runAsUser: 1000
+      runAsNonRoot: true
+      allowPrivilegeEscalation: false
+      capabilities:
+        drop: ["ALL"]
+    resources:
+      limits:
+        cpu: 50m
+        memory: 64Mi
+      requests:
+        cpu: 25m
+        memory: 32Mi
+    volumeMounts:
+    - name: data
+      mountPath: /data
+  volumes:
+  - name: data
+    persistentVolumeClaim:
+      claimName: test-pvc
 EOF
-    
-    # Wait for PVC to be bound
-    timeout 60 bash -c 'until kubectl get pvc test-pvc -n default -o jsonpath="{.status.phase}" | grep -q Bound; do sleep 5; done'
-    success "PVC with local-path storage created successfully"
+
+    kubectl wait --for=condition=ready --timeout=120s pod/test-pvc-consumer -n default
+    kubectl get pvc test-pvc -n default -o jsonpath="{.status.phase}" | grep -q Bound
+    success "PVC with local-path storage created and bound successfully"
     
     # Test 4: k3s networking
     log "Test 4: Testing k3s networking"
