@@ -302,9 +302,11 @@ Initial / first-cycle (pre-ATO).
   ~26 previously attributable to the `go 1.25.0` pin). RA-5/SI-2 gaps remain tracked under
   **POAM-025 / POAM-026**.
 - **POA&M aging.** Reviewed the [poam-aging.yml](../../../.github/workflows/poam-aging.yml)
-  workflow and the current [POAM.md](../POAM.md) register (38 open items: 9 Critical, 17
-  High, 10 Moderate, 2 Low). No live `vuln`-labelled issues have aged yet — the automated
-  aging report has no production history at this date.
+  workflow and the current [POAM.md](../POAM.md) register. Per its
+  [Severity rollup](../POAM.md#severity-rollup-current), the register holds **55 open items
+  (9 Critical, 18 High, 24 Moderate, 4 Low)** plus 2 closed (POAM-024, POAM-049) — 57 total.
+  No live `vuln`-labelled issues have aged yet — the automated aging report has no production
+  history at this date.
 - **SLO / error-budget review.** Reviewed the SLO objectives and burn-rate rules in
   [docs/observability/slo.md](../../observability/slo.md) and
   [slo.yaml](../../../charts/kube-policies/files/slo/slo.yaml). No live burn data exists (no

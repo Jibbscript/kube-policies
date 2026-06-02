@@ -24,10 +24,9 @@ next_review: "2027-06-02"
 > and is therefore **separate** from — but **not independent of** — the development team in
 > the FedRAMP CA-8(1) sense. Named roles below are placeholders ("TBD — assign"); do not
 > infer individuals. Findings recorded here are **tracked in the POA&M**
-> ([POA&M](../POAM.md), authoritative CSV [`poam.csv`](../poam.csv)); this report does not
-> assign new POA&M identifiers (they are being assigned concurrently) and does not change
-> per-control status, which remains authoritative in the
-> [control matrix](../control-matrix.csv).
+> ([POA&M](../POAM.md), authoritative CSV [`poam.csv`](../poam.csv)) under their assigned
+> `POAM-NNN` ids (cited per-finding in § 3); this report does not change per-control status,
+> which remains authoritative in the [control matrix](../control-matrix.csv).
 
 This report records the findings of the **code-review lane** of the internal P12-WU-04
 pre-assessment. It is one of two complementary internal lanes; the security/pen-test-style
@@ -78,8 +77,9 @@ authorization decision.
 ## 3. Findings
 
 Findings are severity-sorted. Each carries an affected component, an impact, a remediation,
-and a status. Open findings are **tracked in the POA&M** ([POA&M](../POAM.md)); POA&M
-identifiers are assigned concurrently and are intentionally not hard-coded here.
+and a status. Findings are **tracked in the POA&M** ([POA&M](../POAM.md)) under the assigned
+`POAM-NNN` id cited on each finding; the remediated-this-cycle weakness is recorded under the
+single closed entry **POAM-049 (SI-10)**.
 
 ### 3.1 High
 
@@ -87,6 +87,8 @@ identifiers are assigned concurrently and are intentionally not hard-coded here.
 
 - **Severity:** High
 - **Status:** **Resolved** — remediated this cycle (evidence: P12-WU-04 remediation commit).
+- **POA&M:** **POAM-049** (SI-10, Closed) — finding (2) admission eval deadline of the closed
+  remediated-this-cycle entry.
 - **Component:** [`internal/admission/controller.go`](../../../internal/admission/controller.go)
 - **Impact:** Admission evaluation was launched with `context.Background()` and no deadline,
   while the kube-apiserver enforces an admission webhook timeout of **≤ 10 s**. A slow or
@@ -100,7 +102,7 @@ identifiers are assigned concurrently and are intentionally not hard-coded here.
 #### CR-H2 — `PolicyConfig.FailureMode` is a validated-but-ignored knob (OPEN)
 
 - **Severity:** High
-- **Status:** Open — **tracked in the POA&M**.
+- **Status:** Open — **tracked in the POA&M as POAM-039** (CM-6).
 - **Component:** [`internal/config/config.go`](../../../internal/config/config.go) vs.
   [`internal/admission/controller.go`](../../../internal/admission/controller.go)
 - **Impact:** `PolicyConfig.FailureMode` is parsed and validated at config load, but the
@@ -117,7 +119,7 @@ identifiers are assigned concurrently and are intentionally not hard-coded here.
 #### CR-M1 — Engine holds the read lock across the full multi-policy OPA evaluation (OPEN)
 
 - **Severity:** Medium
-- **Status:** Open — **tracked in the POA&M**.
+- **Status:** Open — **tracked in the POA&M as POAM-040** (SC-5).
 - **Component:** [`internal/policy/engine.go`](../../../internal/policy/engine.go)
 - **Impact:** The engine holds an `RLock` for the entire multi-policy OPA evaluation. A CRD
   write (which needs the write lock) can be made to wait behind a long evaluation, and a
@@ -128,7 +130,7 @@ identifiers are assigned concurrently and are intentionally not hard-coded here.
 #### CR-M2 — Decision publisher drops events under backpressure with no spool (OPEN)
 
 - **Severity:** Medium
-- **Status:** Open — **tracked in the POA&M**.
+- **Status:** Open — **tracked in the POA&M as POAM-041** (AU-2).
 - **Component:** [`internal/admission/decision_publisher.go`](../../../internal/admission/decision_publisher.go)
 - **Impact:** Under backpressure the decision publisher drops events with no on-disk spool.
   This is **telemetry-only** — the durable, integrity-chained audit log is a separate path
@@ -140,7 +142,7 @@ identifiers are assigned concurrently and are intentionally not hard-coded here.
 #### CR-M3 — Audit correlation/request IDs synthesized from a nanosecond clock (OPEN)
 
 - **Severity:** Medium
-- **Status:** Open — **tracked in the POA&M**.
+- **Status:** Open — **tracked in the POA&M as POAM-042** (AU-3).
 - **Component:** [`internal/audit/logger.go`](../../../internal/audit/logger.go)
   (`LogConfigChange` / `LogSystemEvent`)
 - **Impact:** `LogConfigChange` and `LogSystemEvent` synthesize correlation/request IDs from
@@ -151,7 +153,7 @@ identifiers are assigned concurrently and are intentionally not hard-coded here.
 #### CR-M4 — `require-image-digest` uses a substring match, not an anchored digest (OPEN)
 
 - **Severity:** Medium
-- **Status:** Open — **tracked in the POA&M**.
+- **Status:** Open — **tracked in the POA&M as POAM-043** (CM-6).
 - **Component:** [`internal/policy/engine.go`](../../../internal/policy/engine.go)
 - **Impact:** The `require-image-digest` rule matches the substring `@sha256:` rather than an
   anchored 64-hex-character digest. A crafted reference containing the substring but not a
@@ -164,7 +166,7 @@ identifiers are assigned concurrently and are intentionally not hard-coded here.
 #### CR-L1 — Vestigial `Manager.ctx`/`cancel`
 
 - **Severity:** Low
-- **Status:** Open — **tracked in the POA&M**.
+- **Status:** Open — **tracked in the POA&M as POAM-048** (SA-15, sub-finding (a)).
 - **Impact:** A `Manager.ctx`/`cancel` pair is carried but unused — dead state that invites
   future misuse. No current functional impact.
 - **Remediation:** Remove the vestigial fields.
@@ -172,7 +174,7 @@ identifiers are assigned concurrently and are intentionally not hard-coded here.
 #### CR-L2 — Audit `Context.Object` aliases the live request payload across the async flush boundary
 
 - **Severity:** Low
-- **Status:** Open — **tracked in the POA&M**.
+- **Status:** Open — **tracked in the POA&M as POAM-048** (SA-15, sub-finding (b)).
 - **Component:** [`internal/audit/logger.go`](../../../internal/audit/logger.go)
 - **Impact:** The audit `Context.Object` aliases the live request payload across the
   asynchronous flush boundary — a **latent** data-race/mutation hazard that is currently
@@ -184,7 +186,7 @@ identifiers are assigned concurrently and are intentionally not hard-coded here.
 #### CR-L3 — `RecentDecisions` negative-limit handling relies on a downstream clamp
 
 - **Severity:** Low
-- **Status:** Open — **tracked in the POA&M**.
+- **Status:** Open — **tracked in the POA&M as POAM-048** (SA-15, sub-finding (c)).
 - **Impact:** `RecentDecisions` accepts a negative limit and relies on a **downstream clamp**
   to avoid misbehavior, rather than validating the input at the boundary. Robust today,
   fragile to refactor.

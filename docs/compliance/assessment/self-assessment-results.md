@@ -93,35 +93,38 @@ are Planned or Partial**, with foundational ATO-blockers still open (see §3).
 ## 3. Failing / Other-Than-Satisfied controls → POA&M cross-reference
 
 Every Critical/High foundational weakness is recorded as a POA&M item. The
-[POA&M](../POAM.md) / [poam.csv](../poam.csv) register holds **38** open weaknesses, each
-mapped (via the poam.csv `control_id` column) to a **primary** NIST 800-53r5 control that
-exists as a row in the matrix. All 38 POA&M `control_id` values resolve to a matrix row
-(no orphans); the 9 Critical items are the ATO-blockers (SC-13, IA-2, AC-3, SC-8, AC-6,
-SC-7, CM-6, AU-9, SA-11).
+[POA&M](../POAM.md) / [poam.csv](../poam.csv) register holds **57** entries (IDs
+POAM-001..057) — **55 open** weaknesses (**9 Critical, 18 High, 24 Moderate, 4 Low**) plus
+**2 closed** (POAM-024 CM-7, POAM-049 SI-10), per the
+[POA&M Severity rollup](../POAM.md#severity-rollup-current). Each is mapped (via the
+poam.csv `control_id` column) to a **primary** NIST 800-53r5 control that exists as a row in
+the matrix. All POA&M `control_id` values resolve to a matrix row (no orphans); the 9
+Critical items are the ATO-blockers (SC-13, IA-2, AC-3, SC-8, AC-6, SC-7, CM-6, AU-9,
+SA-11). Entries POAM-039..057 were added by the P12-WU-02 / P12-WU-04 reconciliation (the
+internal independent code review and pen-test lane plus the human-owned ATO families).
 
-**Traceability honesty note (important).** The matrix `poam_id` *column is currently blank
-for all 227 Partial/Planned rows*. Two-way traceability today therefore runs **POA&M →
-control** (poam.csv `control_id` → matrix row), not matrix `poam_id` → POA&M. In the
-per-control table (§4) the **POA&M / Remediation** cell is populated as follows, *derived*
-(not invented):
+**Traceability note (bidirectional linkage).** Two-way traceability is in place. The
+forward direction runs **POA&M → control** (poam.csv `control_id` → matrix row). The reverse
+direction is **populated**: the matrix `poam_id` back-reference column carries **61 non-blank
+rows** referencing **13 distinct** `POAM-NNN` ids, and **every** referenced id resolves to a
+row in [poam.csv](../poam.csv) (**0 dangling references**). In the per-control table (§4) the
+**POA&M / Remediation** cell is populated as follows, *derived* (not invented):
 
 - If the control is the **primary** control of a poam.csv row, the cell shows that
-  `POAM-NNN` and the remediating phase (e.g. `POAM-002 (P3)`). **34** Partial/Planned
-  controls have such a direct POA&M match.
-- Otherwise the cell shows the matrix `remediating_phase` (e.g. `phase P3`). **193**
+  `POAM-NNN` and the remediating phase (e.g. `POAM-002 (P3)`). **54** Partial/Planned
+  controls have such a direct POA&M match (the matrix carries a `poam_id` for them).
+- Otherwise the cell shows the matrix `remediating_phase` (e.g. `phase P3`). **173**
   Partial/Planned controls **roll up** to a remediating phase and to the representative
   family-level POA&M for that weakness class, rather than carrying a dedicated POA&M row.
 
-**Gap to close before 3PAO / authorization (recorded as a finding of this self-assessment):**
-the matrix `poam_id` back-reference column should be **populated** so every Partial/Planned
-control with residual risk points at a `POAM-NNN`, per the two-way-traceability rule in
-[POA&M §How to maintain](../POAM.md). Until that reconciliation lands, the 193 rollup
-controls are *covered by phase* but not by a per-control `poam_id` cell. Reconciling the
-control matrix to FedRAMP/OSCAL — including this back-reference — is itself tracked as
-**POAM-019 (CA-2, P12)**. No new POA&M entry is required beyond POAM-019 to capture this
-documentation gap; the substantive weaknesses are already enumerated across POAM-001..038.
+The matrix `poam_id` back-reference is dedicated to the controls that carry a distinct,
+named weakness; the 173 rollup controls remain *covered by phase* under the representative
+family-level POA&M for their weakness class. Completing the FedRAMP/OSCAL reconciliation of
+the control matrix (including any further per-control back-references) is tracked as
+**POAM-019 (CA-2, P12)**; the substantive weaknesses are enumerated across POAM-001..057.
 
-The 38 primary-control → POA&M mappings (severity from poam.csv):
+The primary-control → POA&M mappings for the foundational tracked weaknesses (POAM-001..038;
+severity from poam.csv):
 
 | POA&M | Primary control | Severity | Phase |
 |---|---|---|---|
@@ -164,9 +167,24 @@ The 38 primary-control → POA&M mappings (severity from poam.csv):
 | POAM-037 | CM-8 | Moderate | P5 |
 | POAM-038 | AU-7 | Low | P7 |
 
-> Note: POAM-024 (CM-7) is recorded **Resolved — Closed P5** in the POA&M, and CM-7 is
-> `Implemented` (**Satisfied**) in the matrix; it is listed here for register completeness.
-> All other 37 weaknesses remain **Open**.
+> Note: POAM-024 (CM-7) is recorded **Closed (P5)** in the POA&M, and CM-7 is `Implemented`
+> (**Satisfied**) in the matrix; it is listed here for register completeness. Of POAM-001..038,
+> POAM-024 is the only closed item — the other 37 remain **Open**.
+
+The reconciliation entries **POAM-039..057** extend the register to its current 57-entry /
+55-open state and are recorded in the [POA&M Summary table](../POAM.md#summary-table):
+
+- **POAM-039..049** — the internal independent code-review and pen-test findings (P12-WU-04).
+  POAM-039 (CM-6, High) is the `failure_mode` validated-but-ignored knob; POAM-040 (SC-5),
+  POAM-041 (AU-2), POAM-042 (AU-3), POAM-043 (CM-6), POAM-044 (AU-3(1)), POAM-045 (IA-2), and
+  POAM-046 (SC-5) are the open Moderate findings; POAM-047 (SC-8) and POAM-048 (SA-15) are the
+  open Low findings; **POAM-049 (SI-10, High) is Closed** — it records the three
+  remediated-this-cycle weaknesses (caller-supplied Rego sandbox, admission eval deadline, and
+  RPC eval timeout). See [`independent-code-review.md`](./independent-code-review.md) and
+  [`pentest-report.md`](./pentest-report.md) for the per-finding detail and the POA&M ids.
+- **POAM-050..057** — the human-owned / out-of-band ATO families (AT-2 training, MA-2
+  maintenance, MP-2 media, PE-1 physical, PS-3 personnel, PL-2 privacy, AC-2 IdP/account
+  lifecycle, CA-2 P12 human assessment activities).
 
 ## 4. Per-control assessment results
 
