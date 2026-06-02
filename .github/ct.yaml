@@ -13,3 +13,5 @@ check-version-increment: true
 # Chart.yaml schema for lint validation (ct cannot find a default one in the
 # pinned binary install). See .github/chart_schema.yaml.
 chart-yaml-schema: .github/chart_schema.yaml
+# yamllint config for `ct lint` (also not found by default in the binary install).
+lint-conf: .github/lintconf.yaml

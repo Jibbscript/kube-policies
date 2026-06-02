@@ -289,9 +289,17 @@ EOF
     # Resolve gitignored subchart deps (prometheus/grafana) so the install
     # succeeds on a fresh CI runner / clone (used by e2e-kind, e2e-k3s, DAST).
     bash "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/ci/helm-deps.sh"
+    # Disable the prometheus/grafana monitoring subcharts for e2e: the e2e suites
+    # validate admission/policy enforcement, not the monitoring stack, and waiting
+    # on the subcharts' pods (large images, StatefulSet) exhausts --wait's 600s
+    # budget on a resource-constrained Kind/k3s node. The app's own /metrics
+    # endpoint is unaffected (it is not part of the subchart).
     helm upgrade --install kube-policies charts/kube-policies \
         --namespace kube-policies-system \
         "${helm_values_args[@]}" \
+        --set monitoring.enabled=false \
+        --set prometheus.enabled=false \
+        --set grafana.enabled=false \
         --wait --timeout=600s
 
     success "Kube-Policies deployed successfully"

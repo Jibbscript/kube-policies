@@ -172,6 +172,9 @@ deploy_kube_policies() {
     cat <<EOF > /tmp/k3s-values.yaml
 admissionWebhook:
   image:
+    # registry must be empty when repository is a fully-qualified host:port path,
+    # else the chart's image-assembly guard fails (registry defaults to docker.io).
+    registry: ""
     repository: localhost:${REGISTRY_PORT}/kube-policies/admission-webhook
     tag: k3s
   service:
@@ -187,6 +190,7 @@ admissionWebhook:
 
 policyManager:
   image:
+    registry: ""
     repository: localhost:${REGISTRY_PORT}/kube-policies/policy-manager
     tag: k3s
   service:
