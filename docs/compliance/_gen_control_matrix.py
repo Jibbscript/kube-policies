@@ -56,21 +56,27 @@ def see_phase(fam):
 
 # rows: list of (control_id, title, status, responsible_party,
 #                implementing_artifact, remediating_phase_override_or_None,
-#                poam_id, notes)
+#                poam_id, notes, evidence)
 # When override phase is None the family default phase is used.
+# `evidence` cites the concrete test file(s) / CI gate job / WU id that proves a
+# system-implemented control works; it is REQUIRED (non-blank) for every
+# system-implemented control (see build()), and left blank for
+# Planned/Inherited/Not-Applicable/Customer rows.
 R = []
 
-def add(cid, title, status, rp=None, art=None, phase=None, poam="", notes=""):
-    R.append((cid, title, status, rp, art, phase, poam, notes))
+def add(cid, title, status, rp=None, art=None, phase=None, poam="", notes="", evidence=""):
+    R.append((cid, title, status, rp, art, phase, poam, notes, evidence))
 
 
 # ---------------------------------------------------------------------------
 # AC - Access Control
 # ---------------------------------------------------------------------------
 add("AC-1", "Policy and Procedures", "Implemented", "System", "docs/compliance/policies/AC-policy.md", "P12", "POAM-010",
-    "AC-1 access-control policy + procedures authored (AC-policy.md/AC-procedures.md); annual-review cadence set.")
+    "AC-1 access-control policy + procedures authored (AC-policy.md/AC-procedures.md); annual-review cadence set.",
+    evidence="scripts/validate/compliance_check.py (doc link/structure gate) + docs-tests markdown-link-check (CA-WU-01)")
 add("AC-2", "Account Management", "Partial", "System", "internal/policymanager/authz.go", "P3", "POAM-001",
-    "Group->role model (viewer/editor/admin) maps OIDC groups via RoleBindings, but enforcement is config-gated (security.authentication.enabled; chart default false=UNAUTHENTICATED dev-gap). Automated account lifecycle still IdP/P3.")
+    "Group->role model (viewer/editor/admin) maps OIDC groups via RoleBindings, but enforcement is config-gated (security.authentication.enabled; chart default false=UNAUTHENTICATED dev-gap). Automated account lifecycle still IdP/P3.",
+    evidence="internal/policymanager/authz_test.go + internal/policymanager/router_authn_test.go (IAM-WU-01)")
 add("AC-2(1)", "Account Management | Automated System Account Management", "Planned",
     "System", "see P3", "P3", "POAM-001", "Automated account mgmt depends on P3 IdP integration.")
 add("AC-2(2)", "Account Management | Automated Temporary and Emergency Account Management",
@@ -86,19 +92,23 @@ add("AC-2(12)", "Account Management | Account Monitoring for Atypical Usage", "P
 add("AC-2(13)", "Account Management | Disable Accounts for High-Risk Individuals", "Planned",
     "CSP", "see P12", "P12", "", "Procedural; depends on CSP HR/IdP process.")
 add("AC-3", "Access Enforcement", "Partial", "System", "internal/policymanager/authz.go", "P3", "POAM-001",
-    "Deny-by-default RBAC (requiredRoles + RBACMiddleware) on mgmt plane is config-gated (chart default auth.enabled=false=UNAUTHENTICATED dev-gap); decision plane (/decisions/*) authed unconditionally via TokenReview (Inc7). See iam-control-narrative.md.")
+    "Deny-by-default RBAC (requiredRoles + RBACMiddleware) on mgmt plane is config-gated (chart default auth.enabled=false=UNAUTHENTICATED dev-gap); decision plane (/decisions/*) authed unconditionally via TokenReview (Inc7). See iam-control-narrative.md.",
+    evidence="internal/policymanager/authz_test.go + internal/policymanager/decisions_read_auth_test.go + router_authn_test.go (IAM-WU-01)")
 add("AC-4", "Information Flow Enforcement", "Planned", "System",
     "charts/kube-policies/templates/ (NetworkPolicy, P4)", "P4", "POAM-004",
     "No NetworkPolicy exists; default-deny + scoped flows in P4.")
 add("AC-5", "Separation of Duties", "Partial", "System", "charts/kube-policies/templates/rbac.yaml", "P3", "",
-    "Workload split is enforced unconditionally (3 distinct SAs / 3 ClusterRoles; TokenReview grant on PM only); app-layer viewer/editor/admin separation is config-gated. See iam-control-narrative.md.")
+    "Workload split is enforced unconditionally (3 distinct SAs / 3 ClusterRoles; TokenReview grant on PM only); app-layer viewer/editor/admin separation is config-gated. See iam-control-narrative.md.",
+    evidence="rbac-sa-gate (test/policy/rbac_leastprivilege.rego + sa_token.rego conftest, both modes) (IAM-WU-17)")
 add("AC-6", "Least Privilege", "Partial", "System", "charts/kube-policies/templates/rbac.yaml", "P3",
-    "POAM-001", "Per-plane least-privilege RBAC enforced (CRD get/list/watch + status patch only; TokenReview create on PM only; dashboard Role read-only on 2 Services). App-layer least-priv (requiredRoles) config-gated. See iam-control-narrative.md.")
+    "POAM-001", "Per-plane least-privilege RBAC enforced (CRD get/list/watch + status patch only; TokenReview create on PM only; dashboard Role read-only on 2 Services). App-layer least-priv (requiredRoles) config-gated. See iam-control-narrative.md.",
+    evidence="rbac-sa-gate (test/policy/rbac_leastprivilege.rego conftest; fail-fixture self-test denies wildcard/cluster-Secrets grants) (IAM-WU-17)")
 add("AC-6(1)", "Least Privilege | Authorize Access to Security Functions", "Planned",
     "System", "charts/kube-policies/templates/rbac.yaml", "P3", "", "Security-function authZ refined in P3 RBAC split.")
 add("AC-6(2)", "Least Privilege | Non-Privileged Access for Nonsecurity Functions", "Partial",
     "System", "charts/kube-policies/values.yaml", "P5", "",
-    "Bright spot: containers run non-root, no privilege escalation; formalized in P5.")
+    "Bright spot: containers run non-root, no privilege escalation; formalized in P5.",
+    evidence="manifest-hardening-gate (test/policy/restricted-pss.rego conftest) + charts/kube-policies/tests/hardening_test.yaml (CFG-WU-12)")
 add("AC-6(5)", "Least Privilege | Privileged Accounts", "Planned", "System", "see P3", "P3", "",
     "Privileged-account restriction handled by RBAC least-priv in P3.")
 add("AC-6(7)", "Least Privilege | Review of User Privileges", "Planned", "CSP", "see P12", "P12", "",
@@ -121,7 +131,8 @@ add("AC-14", "Permitted Actions Without Identification or Authentication", "Plan
     "System", "cmd/dashboard/proxy.go", "P3", "",
     "Define unauthenticated-allowed actions (healthz/readyz); rest gated in P3.")
 add("AC-17", "Remote Access", "Partial", "System", "internal/policymanager/auth_middleware.go", "P3", "POAM-003",
-    "No general remote-access service; reachable planes served TLS 1.3, mgmt plane adds OIDC bearer (config-gated, chart default off=dev-gap) + optional mTLS (IAM-WU-03). Remote-access monitoring (AC-17(1)) in P9.")
+    "No general remote-access service; reachable planes served TLS 1.3, mgmt plane adds OIDC bearer (config-gated, chart default off=dev-gap) + optional mTLS (IAM-WU-03). Remote-access monitoring (AC-17(1)) in P9.",
+    evidence="internal/policymanager/auth_middleware_test.go + internal/config/tls_test.go + internal/config/mtls_test.go (IAM-WU-03)")
 add("AC-17(1)", "Remote Access | Monitoring and Control", "Planned", "Shared", "see P9", "P9", "",
     "Remote-access monitoring via ConMon/SIEM in P9.")
 add("AC-17(2)", "Remote Access | Protection of Confidentiality and Integrity Using Encryption",
@@ -164,9 +175,11 @@ add("AT-4", "Training Records", "Planned", "CSP", "see P12", "P12", "", "Trainin
 # ---------------------------------------------------------------------------
 add("AU-1", "Policy and Procedures", "Planned", "CSP", "see P12", "P12", "POAM-010", "AU -1 policy authored in P12.")
 add("AU-2", "Event Logging", "Partial", "System", "internal/audit/logger.go", "P7", "POAM-002",
-    "Bright spot: webhook logs every allow/deny decision; mgmt-plane events + event-list completeness in P7.")
+    "Bright spot: webhook logs every allow/deny decision; mgmt-plane events + event-list completeness in P7.",
+    evidence="internal/audit/logger_test.go + internal/audit/logger_p7_test.go + internal/audit/public_event_test.go (AUD-WU-01)")
 add("AU-3", "Content of Audit Records", "Partial", "System", "internal/audit/logger.go", "P7", "POAM-002",
-    "Event struct captures who/what/when/decision; missing src IP/UA/req-URI added in P7.")
+    "Event struct captures who/what/when/decision; missing src IP/UA/req-URI added in P7.",
+    evidence="internal/audit/logger_p7_test.go + internal/audit/logger_test.go (AUD-WU-03)")
 add("AU-3(1)", "Content of Audit Records | Additional Audit Information", "Planned", "System",
     "internal/audit/logger.go", "P7", "POAM-002", "Add source IP, user-agent, request-URI, apiserver-id in P7.")
 add("AU-4", "Audit Log Storage Capacity", "Planned", "System",
@@ -185,7 +198,8 @@ add("AU-7", "Audit Record Reduction and Report Generation", "Planned", "Shared",
 add("AU-7(1)", "Audit Record Reduction | Automatic Processing", "Planned", "Shared", "see P9", "P9", "",
     "Automatic query/processing in SIEM (P9).")
 add("AU-8", "Time Stamps", "Partial", "System", "internal/audit/logger.go", "P7", "",
-    "Records carry timestamps; dual-UTC + authoritative time source formalized in P7.")
+    "Records carry timestamps; dual-UTC + authoritative time source formalized in P7.",
+    evidence="internal/audit/logger_p7_test.go + internal/audit/logger_test.go (AUD-WU-05)")
 add("AU-9", "Protection of Audit Information", "Planned", "System", "internal/audit/logger.go", "P7", "POAM-002",
     "No tamper protection today; HMAC signing + access restriction in P7.")
 add("AU-9(2)", "Protection of Audit Information | Store on Separate Physical Systems or Components",
@@ -197,7 +211,8 @@ add("AU-9(4)", "Protection of Audit Information | Access by Subset of Privileged
 add("AU-11", "Audit Record Retention", "Planned", "Shared", "see P7", "P7", "",
     "Retention policy (FedRAMP) set in P7; long-term in SIEM (P9).")
 add("AU-12", "Audit Record Generation", "Partial", "System", "internal/admission/controller.go", "P7", "",
-    "Webhook generates decision records; mgmt-plane API audit generation added in P7.")
+    "Webhook generates decision records; mgmt-plane API audit generation added in P7.",
+    evidence="internal/admission/audit_context_test.go + internal/admission/controller_test.go + internal/policymanager/manager_audit_test.go (AUD-WU-02)")
 add("AU-12(1)", "Audit Record Generation | System-Wide and Time-Correlated Audit Trail", "Planned",
     "System", "see P7", "P7", "", "System-wide correlated trail across components in P7/P9.")
 
@@ -214,7 +229,8 @@ add("CA-2(3)", "Control Assessments | Leveraging Results from External Organizat
     "CSP", "see P12", "P12", "", "Leverage CSP/3PAO results in P12.")
 add("CA-3", "Information Exchange", "Partial", "System",
     "docs/compliance/interconnections.md (ICX-01..06); docs/compliance/network-architecture.md", "P4", "",
-    "P4: scoped allowed-flow record (every flow F1..F11 mapped to its NetworkPolicy template) in network-architecture.md, complementing the ICX-01..06 register. Formal interconnection security agreements remain to be signed (TBD - assign).")
+    "P4: scoped allowed-flow record (every flow F1..F11 mapped to its NetworkPolicy template) in network-architecture.md, complementing the ICX-01..06 register. Formal interconnection security agreements remain to be signed (TBD - assign).",
+    evidence="network-posture-gate (test/policy/network_posture.rego conftest over rendered NetworkPolicies) + scripts/validate/compliance_check.py (doc link gate) (NET-WU-17)")
 add("CA-5", "Plan of Action and Milestones", "Partial", "CSP", "docs/compliance/poam.csv", "P0", "",
     "POA&M established (poam.csv); driven to closure across P1-P12.")
 add("CA-6", "Authorization", "Planned", "CSP", "see P12", "P12", "", "AO (TBD - assign) authorization decision in P12.")
@@ -223,7 +239,8 @@ add("CA-7(1)", "Continuous Monitoring | Independent Assessment", "Planned", "CSP
     "Independent ConMon assessment in P12.")
 add("CA-7(4)", "Continuous Monitoring | Risk Monitoring", "Planned", "Shared", "see P9", "P9", "",
     "Risk monitoring integrated with ConMon (P9).")
-add("CA-8", "Penetration Testing", "Planned", "CSP", "see P12", "P12", "", "Independent pen test in P12.")
+add("CA-8", "Penetration Testing", "Partial", "CSP", ".github/workflows/dast.yml", "P12", "",
+    "DAST (ZAP baseline scan) added in P11 (.github/workflows/dast.yml); independent pen test remains P12.")
 add("CA-9", "Internal System Connections", "Planned", "System", "docs/compliance/system-facts.md (ICX-02,04,06)", "P4", "",
     "Internal connections (ICX-02/04/06) documented; mTLS/TLS in P4.")
 
@@ -232,46 +249,54 @@ add("CA-9", "Internal System Connections", "Planned", "System", "docs/compliance
 # ---------------------------------------------------------------------------
 add("CM-1", "Policy and Procedures", "Implemented", "System",
     "docs/compliance/policies/CM-policy.md; docs/compliance/procedures/CM-procedures.md", "P5", "",
-    "P5: CM policy + procedures authored (annual review, designated ISSO official); CM family -1 satisfied. Program-wide -1 rollup remains in POAM-010.")
+    "P5: CM policy + procedures authored (annual review, designated ISSO official); CM family -1 satisfied. Program-wide -1 rollup remains in POAM-010.",
+    evidence="scripts/validate/compliance_check.py (doc link/structure gate) + docs-tests markdown-link-check (CFG-WU-01)")
 add("CM-2", "Baseline Configuration", "Partial", "System",
     "docs/compliance/secure-configuration-baseline.md; charts/kube-policies/values.yaml; scripts/ops/drift-detect.sh", "P5", "POAM-023",
-    "P5: secure-configuration baseline (CM-2/CM-6) formalized + versioned; component/image inventory carries digest support; image helper accepts a digest-pinned ref (repo:tag@sha256). RESIDUAL: shipped values still use floating tags (operator must pin); POAM-023 Open until images are digest-pinned by default.")
+    "P5: secure-configuration baseline (CM-2/CM-6) formalized + versioned; component/image inventory carries digest support; image helper accepts a digest-pinned ref (repo:tag@sha256). RESIDUAL: shipped values still use floating tags (operator must pin); POAM-023 Open until images are digest-pinned by default.",
+    evidence="charts/kube-policies/tests/hardening_test.yaml (helm-unittest baseline assertions) + manifest-hardening-gate (CFG-WU-12)")
 add("CM-2(2)", "Baseline Configuration | Automation Support for Accuracy and Currency", "Planned",
     "System", "charts/kube-policies/", "P5", "", "Helm-rendered baseline + CI drift checks in P5.")
 add("CM-2(3)", "Baseline Configuration | Retention of Previous Configurations", "Planned", "System",
     "git history", "P5", "", "Config retained in VCS; formalized in P5.")
 add("CM-3", "Configuration Change Control", "Partial", "System",
     "docs/compliance/plans/configuration-management-plan.md; .github/pull_request_template.md; .github/workflows/ci.yml", "P5", "",
-    "P5: change control via PR review + CM-3 PR-template checklist (baseline/inventory updated, gates green, digest pinned) enforced by the now-gating CI jobs (rbac-sa-gate, manifest-hardening-gate, network-posture-gate, helm-unittest, trivy gate). Formal CCB membership + signed-commit/branch-protection enforcement remain TBD.")
+    "P5: change control via PR review + CM-3 PR-template checklist (baseline/inventory updated, gates green, digest pinned) enforced by the now-gating CI jobs (rbac-sa-gate, manifest-hardening-gate, network-posture-gate, helm-unittest, trivy gate). Formal CCB membership + signed-commit/branch-protection enforcement remain TBD.",
+    evidence="ci-gate aggregation job (.github/workflows/ci.yml needs: rbac-sa-gate, manifest-hardening-gate, network-posture-gate, helm-unittest, security-scan) (CFG-WU-13)")
 add("CM-3(2)", "Configuration Change Control | Testing, Validation, and Documentation of Changes",
     "Planned", "System", "see P11", "P11", "", "Change testing via CI quality gates in P11.")
 add("CM-4", "Impact Analyses", "Planned", "System", "see P11", "P11", "", "Security-impact analysis in PR process (P11).")
 add("CM-5", "Access Restrictions for Change", "Planned", "System", "see P1", "P1", "",
     "Branch protection + CODEOWNERS + signed commits in P1.")
 add("CM-6", "Configuration Settings", "Partial", "System", "internal/config/config.go", "P5", "",
-    "Config validation enforces TLS1.3/failure-mode; P5 (2026-06-01) shipped the CIS-restricted securityContext settings (seccompProfile=RuntimeDefault + non-root runAsGroup) as values.yaml defaults on all three chart workloads, gated by restricted.pss + helm-unittest. RESIDUAL: the policy engine does not yet traverse spec.template.spec (workload-controller settings unenforced) — POAM-008 (P10).")
+    "Config validation enforces TLS1.3/failure-mode; P5 (2026-06-01) shipped the CIS-restricted securityContext settings (seccompProfile=RuntimeDefault + non-root runAsGroup) as values.yaml defaults on all three chart workloads, gated by restricted.pss + helm-unittest. RESIDUAL: the policy engine does not yet traverse spec.template.spec (workload-controller settings unenforced) — POAM-008 (P10).",
+    evidence="internal/config/config_test.go + manifest-hardening-gate (test/policy/restricted-pss.rego) + charts/kube-policies/tests/hardening_test.yaml (CFG-WU-12)")
 add("CM-6(1)", "Configuration Settings | Automated Management, Application, and Verification", "Planned",
     "System", "charts/kube-policies/", "P5", "", "CI renders + verifies settings (helm template gate) in P5.")
 add("CM-7", "Least Functionality", "Implemented", "System",
     "charts/kube-policies/values.yaml; docs/compliance/ssp/ports-protocols-services.md", "P5", "POAM-024",
-    "P5 (closed 2026-06-01): distroless images, dropped caps, readOnlyRootFilesystem; PPS register justifies each listening port (least functionality); namespace ships PSA enforce/audit/warn=restricted (operator-conditional: chart labels the namespace when namespace.create=true, default false, else operator labels it / uses --create-namespace); restricted-PSS gated on the rendered chart (manifest-hardening-gate conftest restricted.pss + helm-unittest). seccompProfile=RuntimeDefault + non-root runAsGroup are now values.yaml DEFAULTS on all three workloads (admission-webhook/policy-manager runAsGroup 65534, dashboard 65532); the dashboard securityContext is values-driven via toYaml; the gating restricted.pss + helm-unittest cover the dashboard and the bundled monitoring workloads; automountServiceAccountToken disabled per-SA. POAM-024 Resolved. NOTE: the example monitoring manifests remain demo-grade (emptyDir, no persistence) — an availability concern tracked under AU durability (P7), not a CM-7 least-functionality gap.")
+    "P5 (closed 2026-06-01): distroless images, dropped caps, readOnlyRootFilesystem; PPS register justifies each listening port (least functionality); namespace ships PSA enforce/audit/warn=restricted (operator-conditional: chart labels the namespace when namespace.create=true, default false, else operator labels it / uses --create-namespace); restricted-PSS gated on the rendered chart (manifest-hardening-gate conftest restricted.pss + helm-unittest). seccompProfile=RuntimeDefault + non-root runAsGroup are now values.yaml DEFAULTS on all three workloads (admission-webhook/policy-manager runAsGroup 65534, dashboard 65532); the dashboard securityContext is values-driven via toYaml; the gating restricted.pss + helm-unittest cover the dashboard and the bundled monitoring workloads; automountServiceAccountToken disabled per-SA. POAM-024 Resolved. NOTE: the example monitoring manifests remain demo-grade (emptyDir, no persistence) — an availability concern tracked under AU durability (P7), not a CM-7 least-functionality gap.",
+    evidence="manifest-hardening-gate (test/policy/restricted-pss.rego conftest, fail-fixture self-test) + charts/kube-policies/tests/hardening_test.yaml (CFG-WU-12)")
 add("CM-7(1)", "Least Functionality | Periodic Review", "Partial", "System",
     "docs/compliance/procedures/CM-procedures.md", "P5", "",
-    "P5: periodic least-functionality / enabled-port review procedure defined in CM-procedures.md (annual + per significant change); first independent review executed at assessment (P12).")
+    "P5: periodic least-functionality / enabled-port review procedure defined in CM-procedures.md (annual + per significant change); first independent review executed at assessment (P12).",
+    evidence="scripts/validate/compliance_check.py (doc link/structure gate) + docs-tests markdown-link-check (CFG-WU-01)")
 add("CM-7(2)", "Least Functionality | Prevent Program Execution", "Planned", "System",
     "internal/policy/engine.go", "P10", "", "Image/exec policy enforcement extended in P10.")
 add("CM-7(5)", "Least Functionality | Authorized Software - Allow-by-Exception", "Planned", "System",
     "see P6", "P6", "", "Image-signature/allowlist admission in P6/P10.")
 add("CM-8", "System Component Inventory", "Partial", "System",
     "docs/compliance/inventory.csv; docs/compliance/inventory.md", "P5", "",
-    "P5: inventory documents per-component images with a digest column / digest-pinned ref support (repo:tag@sha256) and the CM-8 review cadence. RESIDUAL: SBOM-driven auto-update + unauthorized-component detection are P6 (CM-8(1)/CM-8(3)).")
+    "P5: inventory documents per-component images with a digest column / digest-pinned ref support (repo:tag@sha256) and the CM-8 review cadence. RESIDUAL: SBOM-driven auto-update + unauthorized-component detection are P6 (CM-8(1)/CM-8(3)).",
+    evidence="scripts/validate/compliance_check.py (inventory.csv asset_id non-blank/unique + inventory<->authorization-boundary consistency gate) (CFG-WU-11)")
 add("CM-8(1)", "System Component Inventory | Updates During Installation and Removal", "Planned",
     "System", "docs/compliance/inventory.csv", "P6", "", "Inventory auto-updated from SBOM in P6.")
 add("CM-8(3)", "System Component Inventory | Automated Unauthorized Component Detection", "Planned",
     "System", "see P6", "P6", "", "SBOM/scan-driven detection in P6.")
 add("CM-9", "Configuration Management Plan", "Implemented", "System",
     "docs/compliance/plans/configuration-management-plan.md", "P5", "",
-    "P5: Configuration Management Plan authored (CM-1/CM-3/CM-9): baseline scope, change control via the .github/workflows CI gates + PR-template checklist, Helm/CRD change process, CCB/approval roles, annual review statement. Named CCB members remain TBD - assign before assessment.")
+    "P5: Configuration Management Plan authored (CM-1/CM-3/CM-9): baseline scope, change control via the .github/workflows CI gates + PR-template checklist, Helm/CRD change process, CCB/approval roles, annual review statement. Named CCB members remain TBD - assign before assessment.",
+    evidence="scripts/validate/compliance_check.py (doc link/structure gate) + docs-tests markdown-link-check (CFG-WU-13)")
 add("CM-10", "Software Usage Restrictions", "Planned", "CSP", "see P12", "P12", "", "Software-usage policy in P12.")
 add("CM-11", "User-Installed Software", "Planned", "System", "charts/kube-policies/values.yaml", "P5", "",
     "Immutable distroless images + readOnlyRootFilesystem restrict installs; formalized P5.")
@@ -290,7 +315,8 @@ add("CP-2(1)", "Contingency Plan | Coordinate with Related Plans", "Planned", "C
 add("CP-2(3)", "Contingency Plan | Resume Mission and Business Functions", "Planned", "Shared", "see P8", "P8", "",
     "Resumption objectives defined in P8.")
 add("CP-2(8)", "Contingency Plan | Identify Critical Assets", "Partial", "System", "docs/compliance/inventory.csv", "P8", "",
-    "Critical assets (AST-WH gatekeeper) identified in inventory; RTO/RPO in P8.")
+    "Critical assets (AST-WH gatekeeper) identified in inventory; RTO/RPO in P8.",
+    evidence="scripts/validate/compliance_check.py (inventory.csv + inventory<->authorization-boundary consistency gate) (RES-WU-01)")
 add("CP-3", "Contingency Training", "Planned", "CSP", "see P12", "P12", "", "Contingency training in P12.")
 add("CP-4", "Contingency Plan Testing", "Planned", "Shared", "see P8", "P8", "", "DR/restore testing in P8.")
 add("CP-4(1)", "Contingency Plan Testing | Coordinate with Related Plans", "Planned", "CSP", "see P12", "P12", "",
@@ -320,7 +346,8 @@ add("CP-9", "System Backup", "Planned", "Shared", "charts/kube-policies/template
 add("CP-9(1)", "System Backup | Testing for Reliability and Integrity", "Planned", "Shared", "see P8", "P8", "POAM-007",
     "Backup-restore reliability testing in P8.")
 add("CP-10", "System Recovery and Reconstitution", "Partial", "System", "cmd/admission-webhook/main.go (leader election)", "P8", "",
-    "Leader election + replicas aid recovery; full reconstitution/RTO-RPO in P8.")
+    "Leader election + replicas aid recovery; full reconstitution/RTO-RPO in P8.",
+    evidence="test/integration/leader_election_test.go + test/e2e/state_recovery_test.go + test/e2e/backup_restore_test.go (RES-WU-02)")
 add("CP-10(2)", "System Recovery and Reconstitution | Transaction Recovery", "Planned", "System", "see P8", "P8", "",
     "Decision/transaction recovery semantics defined in P8.")
 
@@ -329,7 +356,8 @@ add("CP-10(2)", "System Recovery and Reconstitution | Transaction Recovery", "Pl
 # ---------------------------------------------------------------------------
 add("IA-1", "Policy and Procedures", "Planned", "CSP", "see P12", "P12", "POAM-010", "IA -1 policy authored in P12.")
 add("IA-2", "Identification and Authentication (Organizational Users)", "Partial", "System", "internal/policymanager/auth_middleware.go", "P3", "POAM-001",
-    "OIDC ID-token bearer authN (issuer/JWKS/FIPS-alg allow-list/audience) on mgmt API is config-gated (security.authentication.enabled; chart default false=UNAUTHENTICATED dev-gap). MFA/PIV/replay (IA-2 enh) inherited from IdP.")
+    "OIDC ID-token bearer authN (issuer/JWKS/FIPS-alg allow-list/audience) on mgmt API is config-gated (security.authentication.enabled; chart default false=UNAUTHENTICATED dev-gap). MFA/PIV/replay (IA-2 enh) inherited from IdP.",
+    evidence="internal/policymanager/auth_middleware_test.go + internal/policymanager/router_authn_test.go (IAM-WU-01)")
 add("IA-2(1)", "IA (Organizational Users) | MFA to Privileged Accounts", "Planned", "Shared", "see P3", "P3", "",
     "MFA enforced by federated IdP; integrated in P3.")
 add("IA-2(2)", "IA (Organizational Users) | MFA to Non-Privileged Accounts", "Planned", "Shared", "see P3", "P3", "",
@@ -339,10 +367,12 @@ add("IA-2(8)", "IA (Organizational Users) | Access to Accounts - Replay Resistan
 add("IA-2(12)", "IA (Organizational Users) | Acceptance of PIV Credentials", "Planned", "Shared", "see P3", "P3", "",
     "PIV acceptance via IdP federation; verified in P3.")
 add("IA-3", "Device Identification and Authentication", "Partial", "System", "internal/policymanager/tokenreview.go", "P3", "POAM-003",
-    "Service identity enforced: audience+subject-bound projected SA tokens via TokenReview (tokenreview mode is chart default) + optional mTLS client certs. Static shared-secret fallback is demo/non-cluster only.")
+    "Service identity enforced: audience+subject-bound projected SA tokens via TokenReview (tokenreview mode is chart default) + optional mTLS client certs. Static shared-secret fallback is demo/non-cluster only.",
+    evidence="internal/policymanager/tokenreview_test.go + internal/config/client_mtls_test.go (IAM-WU-04)")
 add("IA-4", "Identifier Management", "Planned", "Shared", "see P3", "P3", "", "Identifier mgmt via IdP; service identities in P3.")
 add("IA-5", "Authenticator Management", "Partial", "System", "internal/auth/token.go", "P2", "POAM-003",
-    "Bearer-token (FIPS CSPRNG gen, constant-time verify, 2-token rotation window) + cert (cert-manager ECDSA P-256, hot reload) lifecycles implemented; remaining Helm chart-side CSPRNG token generation is a tracked gap. See IA-policy.md.")
+    "Bearer-token (FIPS CSPRNG gen, constant-time verify, 2-token rotation window) + cert (cert-manager ECDSA P-256, hot reload) lifecycles implemented; remaining Helm chart-side CSPRNG token generation is a tracked gap. See IA-policy.md.",
+    evidence="internal/auth/token_test.go + internal/tlsreload/reloader_test.go (CRY-WU-12)")
 add("IA-5(1)", "Authenticator Management | Password-Based Authentication", "Inherited", "Customer", "Inherited from IdP", "P3", "",
     "Password policy inherited from federated IdP.")
 add("IA-5(2)", "Authenticator Management | Public Key-Based Authentication", "Planned", "System", "see P2", "P2", "",
@@ -453,7 +483,8 @@ add("PL-4", "Rules of Behavior", "Planned", "CSP", "see P12", "P12", "", "Rules 
 add("PL-4(1)", "Rules of Behavior | Social Media and External Site/Application Usage Restrictions", "Planned",
     "CSP", "see P12", "P12", "", "Authored in P12.")
 add("PL-8", "Security and Privacy Architectures", "Partial", "System", "docs/compliance/system-facts.md", "P0", "",
-    "Architecture/trust-zones (ZONE-EXT/ZONE-SYS) documented in facts + boundary; finalized in SSP P12.")
+    "Architecture/trust-zones (ZONE-EXT/ZONE-SYS) documented in facts + boundary; finalized in SSP P12.",
+    evidence="scripts/validate/compliance_check.py (inventory<->authorization-boundary consistency + doc link gate) (CA-WU-01)")
 add("PL-10", "Baseline Selection", "Implemented", "CSP", "docs/compliance/control-matrix.csv", "P0", "",
     "FedRAMP Moderate baseline selected (this matrix); reconcile vs official OSCAL profile - POAM-009.")
 add("PL-11", "Baseline Tailoring", "Partial", "CSP", "docs/compliance/control-matrix.md", "P0", "POAM-009",
@@ -483,22 +514,31 @@ add("RA-3", "Risk Assessment", "Partial", "CSP", ".omc/research/fedramp-cis-gap-
     "Grounded 12-dimension gap analysis serves as initial risk assessment; formal RA in P12.")
 add("RA-3(1)", "Risk Assessment | Supply Chain Risk Assessment", "Planned", "System", "see P6", "P6", "",
     "Supply-chain risk assessment (SBOM/provenance) in P6.")
-add("RA-5", "Vulnerability Monitoring and Scanning", "Partial", "System", ".github/workflows/ci.yml (trivy)", "P6", "POAM-008",
-    "P5: Trivy fs + image scans are now GATING (fixable CRITICAL,HIGH -> exit 1, fails the build) in addition to the non-gating SARIF upload to the Security tab. NOTE: ignore-unfixed=true, so CVEs with no upstream fix are reported via SARIF but do not block. RESIDUAL: authenticated/credentialed scanning, scanner-DB cadence, and a formal remediation SLA remain P6/P11 (POAM-008).")
-add("RA-5(2)", "Vulnerability Monitoring and Scanning | Update Vulnerabilities to Be Scanned", "Planned",
-    "System", "see P6", "P6", "", "Scanner DB auto-update + cadence in P6/P11.")
-add("RA-5(5)", "Vulnerability Monitoring and Scanning | Privileged Access", "Planned", "System", "see P11", "P11", "",
-    "Authenticated/credentialed scanning configured in P11.")
+add("RA-5", "Vulnerability Monitoring and Scanning", "Partial", "System",
+    ".github/workflows/ci.yml, .github/workflows/monthly-vuln-scan.yml, docs/security/vulnerability-management.md", "P11", "POAM-008",
+    "Trivy fs/image/config (security-scan job) + govulncheck (govulncheck job) CONFIGURED/authored in P11 and aggregated by ci-gate; gitleaks (secrets-scan.yml) and pnpm audit (ui.yml) are independent workflows also listed as required status checks in branch protection; monthly scan + POA&M aging configured; vuln-mgmt procedure authored in docs/security/vulnerability-management.md. Execution/enforcement evidence pending first CI run + branch-protection enablement (no ATO). Partial until evidenced.",
+    evidence="security-scan job (Trivy fs/image GATE, CRITICAL/HIGH -> build fail) + govulncheck job, aggregated by ci-gate (.github/workflows/ci.yml) (SDL-WU-12)")
+add("RA-5(2)", "Vulnerability Monitoring and Scanning | Update Vulnerabilities to Be Scanned", "Partial",
+    "System", ".github/workflows/ci.yml, .github/workflows/monthly-vuln-scan.yml, docs/security/vulnerability-management.md", "P11", "",
+    "Trivy DB auto-update on each CI/monthly scan run CONFIGURED/authored in P11; update cadence documented in docs/security/vulnerability-management.md. Execution/enforcement evidence pending first CI run + branch-protection enablement (no ATO). Partial until evidenced.",
+    evidence="security-scan job (Trivy GATE, DB refreshed per run) + .github/workflows/monthly-vuln-scan.yml (SDL-WU-12)")
+add("RA-5(5)", "Vulnerability Monitoring and Scanning | Privileged Access", "Partial", "System",
+    ".github/workflows/dast.yml, .github/workflows/monthly-vuln-scan.yml", "P11", "",
+    "Authenticated/credentialed DAST + coverage evidence CONFIGURED in P11; not yet executed (no live CI run — pending first branch push). Keeping Partial honestly.",
+    evidence=".github/workflows/dast.yml (ZAP scan) + .github/workflows/monthly-vuln-scan.yml (SDL-WU-13)")
 add("RA-7", "Risk Response", "Partial", "CSP", "docs/compliance/poam.csv", "P0", "",
     "Risk response tracked via POA&M; closure across P1-P12.")
 
 # ---------------------------------------------------------------------------
 # SA - System and Services Acquisition
 # ---------------------------------------------------------------------------
-add("SA-1", "Policy and Procedures", "Planned", "CSP", "see P12", "P12", "POAM-010", "SA -1 policy authored in P12.")
+add("SA-1", "Policy and Procedures", "Implemented", "System", "docs/compliance/policies/SA-policy.md", "P11", "POAM-010",
+    "SA-1 policy + SA procedures authored in P11 (docs/compliance/procedures/SA-procedures.md).",
+    evidence="scripts/validate/compliance_check.py (doc link/structure gate) + docs-tests markdown-link-check (SDL-WU-29)")
 add("SA-2", "Allocation of Resources", "Planned", "CSP", "see P12", "P12", "", "Resource allocation for security in P12.")
-add("SA-3", "System Development Life Cycle", "Partial", "CSP", "CONTRIBUTING.md", "P11", "",
-    "SDLC scaffold exists (CI, PR review); secure-SDLC formalized in P11.")
+add("SA-3", "System Development Life Cycle", "Partial", "System", "docs/security/secure-sdlc.md", "P11", "",
+    "Secure-SDLC document + SSDF crosswalk CONFIGURED/authored in P11 (docs/security/secure-sdlc.md); CI gate jobs and branch-protection settings documented. Execution/enforcement evidence pending first CI run + branch-protection enablement (no ATO). Partial until evidenced.",
+    evidence="ci-gate aggregation job (.github/workflows/ci.yml) + scripts/validate/compliance_check.py (doc link gate) (SDL-WU-28)")
 add("SA-4", "Acquisition Process", "Planned", "CSP", "see P12", "P12", "", "Acquisition/security-requirements language in P12.")
 add("SA-4(1)", "Acquisition Process | Functional Properties of Controls", "Planned", "CSP", "see P12", "P12", "",
     "Functional-property requirements in P12.")
@@ -506,65 +546,90 @@ add("SA-4(2)", "Acquisition Process | Design and Implementation Information for 
     "see P12", "P12", "", "Design/impl documentation in P12.")
 add("SA-4(9)", "Acquisition Process | Functions, Ports, Protocols, and Services in Use", "Partial", "System",
     "docs/compliance/system-facts.md (ports table)", "P0", "",
-    "Ports/protocols/services documented in facts sheet; finalized in SSP P12.")
+    "Ports/protocols/services documented in facts sheet; finalized in SSP P12.",
+    evidence="scripts/validate/compliance_check.py (doc link/structure gate over docs/compliance) + docs-tests markdown-link-check (CA-WU-01)")
 add("SA-4(10)", "Acquisition Process | Use of Approved PIV Products", "Planned", "Shared", "see P3", "P3", "",
     "PIV product use via IdP federation (P3).")
-add("SA-5", "System Documentation", "Partial", "System", "README.md", "P11", "",
-    "Engineering docs exist; admin/security documentation completed in P11/P12.")
+add("SA-5", "System Documentation", "Partial", "System",
+    "README.md, docs/security/secure-sdlc.md, docs/testing.md, docs/security/vulnerability-management.md", "P11", "",
+    "Engineering docs exist; docs/security/secure-sdlc.md + docs/testing.md + docs/security/vulnerability-management.md added in P11; full admin/security documentation completed P12.",
+    evidence="scripts/validate/compliance_check.py (doc link gate over docs/security + docs/compliance) + docs-tests markdown-link-check (SDL-WU-30)")
 add("SA-8", "Security and Privacy Engineering Principles", "Partial", "System", "docs/compliance/system-facts.md", "P0", "",
-    "Trust-zone/fail-closed design principles applied; documented across P0-P12.")
+    "Trust-zone/fail-closed design principles applied; documented across P0-P12.",
+    evidence="internal/admission/controller_behavior_test.go (fail-closed validate path) + internal/policymanager/router_authn_test.go (deny-by-default) + scripts/validate/compliance_check.py (CA-WU-01)")
 add("SA-9", "External System Services", "Planned", "CSP", "see P12", "P12", "", "External-service agreements (CSP/IdP) in P12.")
 add("SA-9(2)", "External System Services | Identification of Functions, Ports, Protocols, and Services", "Partial",
     "System", "docs/compliance/system-facts.md (ICX-01..06)", "P4", "",
-    "External connections ICX-01..06 enumerated; agreements in P12.")
+    "External connections ICX-01..06 enumerated; agreements in P12.",
+    evidence="scripts/validate/compliance_check.py (doc link/structure gate over docs/compliance) + docs-tests markdown-link-check (CA-WU-01)")
 add("SA-10", "Developer Configuration Management", "Partial", "System", ".github/workflows/release.yml", "P6", "",
-    "Versioned build via CI/Helm; provenance/SBOM integrity in P6.")
+    "Versioned build via CI/Helm; provenance/SBOM integrity in P6.",
+    evidence="reproducible-build job (.github/workflows/ci.yml) + .github/workflows/release.yml (SLSA provenance/SBOM) (SDL-WU-18)")
 add("SA-11", "Developer Testing and Evaluation", "Partial", "System", ".github/workflows/ci.yml", "P11", "",
-    "Unit tests + trivy/scan exist (non-gating); enforced SAST/DAST/coverage gates in P11.")
-add("SA-11(1)", "Developer Testing and Evaluation | Static Code Analysis", "Planned", "System", "see P11", "P11", "POAM-008",
-    "CodeQL/gosec gating SAST added in P11.")
-add("SA-11(8)", "Developer Testing and Evaluation | Dynamic Code Analysis", "Planned", "System", "see P11", "P11", "",
-    "DAST/fuzz harness added in P11.")
-add("SA-15", "Development Process, Standards, and Tools", "Partial", "System", "Makefile", "P11", "",
-    "Toolchain/Make targets exist; documented secure dev process + tool baseline in P11.")
-add("SA-15(3)", "Development Process | Criticality Analysis", "Planned", "System", "see P11", "P11", "",
-    "Criticality analysis integrated in P11.")
-add("SA-22", "Unsupported System Components", "Planned", "System", "see P1", "P1", "",
-    "Go 1.25 toolchain alignment + EOL removal in P1; ongoing in P6/P11.")
+    "Unit-coverage floor (cover-gate.sh), SAST (gosec MEDIUM+ via lint job), fuzz-smoke, govulncheck, Trivy (security-scan job) CONFIGURED/authored in P11 and aggregated by ci-gate; tiers documented in docs/testing.md. Execution/enforcement evidence pending first CI run + branch-protection enablement (no ATO). Partial until evidenced.",
+    evidence="unit-tests job (scripts/test/cover-gate.sh coverage floor) + lint (gosec MEDIUM+) + fuzz-smoke + govulncheck jobs, aggregated by ci-gate (.github/workflows/ci.yml) (SDL-WU-04)")
+add("SA-11(1)", "Developer Testing and Evaluation | Static Code Analysis", "Partial", "System",
+    ".github/workflows/codeql.yml, .github/workflows/ci.yml", "P11", "POAM-008",
+    "gosec MEDIUM+ gate CONFIGURED/authored in P11 (runs inside lint job; aggregated by ci-gate). CodeQL security-extended (go+js/ts) CONFIGURED in codeql.yml; it is a separate workflow (NOT in ci-gate needs) — listed as independent required status check in branch protection; uploads SARIF/informational, does not fail build on findings by default. Execution/enforcement evidence pending first CI run + branch-protection enablement (no ATO). Partial until evidenced.",
+    evidence="lint job (gosec -severity medium -confidence medium, fail on MEDIUM+) aggregated by ci-gate + .github/workflows/codeql.yml (SDL-WU-06)")
+add("SA-11(8)", "Developer Testing and Evaluation | Dynamic Code Analysis", "Partial", "System",
+    "internal/admission/controller_fuzz_test.go, internal/policy/engine_fuzz_test.go, .github/workflows/dast.yml", "P11", "",
+    "Go native fuzz targets (admission parser + Rego evaluator; 0 crashers locally) + fuzz-smoke job (ci-gate) + fuzz-nightly.yml CONFIGURED/authored in P11. DAST (dast.yml) is a separate scheduled workflow (nightly + dispatch + PRs touching web/cmd/dashboard only — NOT a blanket PR gate). Execution/enforcement evidence pending first CI run + branch-protection enablement (no ATO). Partial until evidenced.",
+    evidence="internal/admission/controller_fuzz_test.go + internal/policy/engine_fuzz_test.go via fuzz-smoke job (ci-gate) (SDL-WU-05)")
+add("SA-15", "Development Process, Standards, and Tools", "Partial", "System",
+    "docs/security/secure-sdlc.md, .github/CODEOWNERS, .github/pull_request_template.md", "P11", "",
+    "Pinned tools, CODEOWNERS, PR template, secure-sdlc.md, and branch-protection policy (docs/security/branch-protection.md + .github/settings.yml) CONFIGURED/authored in P11. Branch protection enablement and first CI run pending repo admin action (no ATO). Partial until evidenced.",
+    evidence="actionlint job (pinned-action lint) + reproducible-build job + scripts/validate/compliance_check.py (doc link gate) (SDL-WU-28)")
+add("SA-15(3)", "Development Process | Criticality Analysis", "Partial", "System", "docs/compliance/policies/SA-policy.md", "P11", "",
+    "Criticality analysis section authored in SA-policy.md (P11); formal third-party criticality assessment remains P12.",
+    evidence="scripts/validate/compliance_check.py (doc link/structure gate) + docs-tests markdown-link-check (SDL-WU-29)")
+add("SA-22", "Unsupported System Components", "Implemented", "System", "go.mod, .github/workflows/ci.yml", "P11", "",
+    "P11: toolchain pinned to go1.25.10 in go.mod; govulncheck gate confirms 0 reachable stdlib CVEs (previous ~26 CVEs from go1.25.0 remediated). No EOL/unsupported stdlib in use.",
+    evidence="govulncheck job (0 reachable vulns gate, .github/workflows/ci.yml) + go.mod toolchain pin (SDL-WU-19)")
 
 # ---------------------------------------------------------------------------
 # SC - System and Communications Protection
 # ---------------------------------------------------------------------------
 add("SC-1", "Policy and Procedures", "Planned", "CSP", "see P12", "P12", "POAM-010", "SC -1 policy authored in P12.")
 add("SC-2", "Separation of System and User Functionality", "Partial", "System", "cmd/dashboard/proxy.go", "P3", "",
-    "Dashboard BFF separates UI from API; management/enforcement plane split formalized in P3/P4.")
+    "Dashboard BFF separates UI from API; management/enforcement plane split formalized in P3/P4.",
+    evidence="cmd/dashboard/proxy_audit_test.go + cmd/dashboard/auth_test.go (IAM-WU-01)")
 add("SC-4", "Information in Shared System Resources", "Planned", "System", "charts/kube-policies/values.yaml", "P5", "",
     "readOnlyRootFilesystem + non-root reduce residual data; formalized in P5.")
 add("SC-5", "Denial-of-Service Protection", "Partial", "System", "internal/middleware/ratelimit.go", "P4", "POAM-027",
-    "P4 delivered: per-replica rate limiting (50 rps/burst 100), max-in-flight + SSE caps (429), 3 MiB body cap (413), kube_policies_http_rate_limited_total metric, bounded MaxConcurrentReconciles. ResourceQuota/LimitRange ship OFF by default. See network-architecture.md sec 5.")
+    "P4 delivered: per-replica rate limiting (50 rps/burst 100), max-in-flight + SSE caps (429), 3 MiB body cap (413), kube_policies_http_rate_limited_total metric, bounded MaxConcurrentReconciles. ResourceQuota/LimitRange ship OFF by default. See network-architecture.md sec 5.",
+    evidence="internal/middleware/ratelimit_test.go + internal/policymanager/router_ratelimit_test.go (NET-WU-19)")
 add("SC-6", "Resource Availability", "Partial", "System", "cmd/admission-webhook/main.go (leader election)", "P8", "",
-    "Replicas + leader election aid availability; PDB/anti-affinity/limits in P8.")
+    "Replicas + leader election aid availability; PDB/anti-affinity/limits in P8.",
+    evidence="test/integration/leader_election_test.go + test/e2e/state_recovery_test.go (RES-WU-03)")
 add("SC-7", "Boundary Protection", "Implemented (Helm) - requires enforcing CNI", "System",
     "charts/kube-policies/templates/networkpolicy-*.yaml; deployments/kubernetes/base/networkpolicy.yaml; docs/compliance/network-architecture.md", "P4", "POAM-007",
-    "P4: default-deny + least-privilege allow-list NetworkPolicies ship (chart + static base). REQUIRES a NetworkPolicy-enforcing CNI (Calico/Cilium/Antrea); inert on kindnet. Live e2e enforcement proof designed, not yet run. Every allowed flow mapped to its template in network-architecture.md (CA-3).")
+    "P4: default-deny + least-privilege allow-list NetworkPolicies ship (chart + static base). REQUIRES a NetworkPolicy-enforcing CNI (Calico/Cilium/Antrea); inert on kindnet. Live e2e enforcement proof designed, not yet run. Every allowed flow mapped to its template in network-architecture.md (CA-3).",
+    evidence="network-posture-gate (test/policy/network_posture.rego conftest over rendered chart; default-deny-removal keystone regression proof) (NET-WU-17)")
 add("SC-7(3)", "Boundary Protection | Access Points", "Implemented (Helm) - requires enforcing CNI", "System",
     "charts/kube-policies/templates/networkpolicy-ingress-*.yaml", "P4", "POAM-007",
-    "P4: per-port managed access points (apiserver->:8443, scraper->metrics, ingress->:8090, webhook/dashboard->:8080), scoped via NetworkPolicy. Requires enforcing CNI.")
+    "P4: per-port managed access points (apiserver->:8443, scraper->metrics, ingress->:8090, webhook/dashboard->:8080), scoped via NetworkPolicy. Requires enforcing CNI.",
+    evidence="network-posture-gate (test/policy/network_posture.rego conftest, per-port ingress assertions) (NET-WU-18)")
 add("SC-7(4)", "Boundary Protection | External Telecommunications Services", "Implemented (Helm) - requires enforcing CNI", "System",
     "charts/kube-policies/templates/networkpolicy-egress-*.yaml", "P4", "",
-    "P4: scoped deny-by-default egress (kube-dns:53 + operator-set apiserver CIDRs + in-namespace hops only; no 0.0.0.0/0). Requires enforcing CNI. CA-3 flows in network-architecture.md.")
+    "P4: scoped deny-by-default egress (kube-dns:53 + operator-set apiserver CIDRs + in-namespace hops only; no 0.0.0.0/0). Requires enforcing CNI. CA-3 flows in network-architecture.md.",
+    evidence="network-posture-gate (test/policy/network_posture.rego conftest, egress allow-list + no-0.0.0.0/0 assertions) (NET-WU-18)")
 add("SC-7(5)", "Boundary Protection | Deny by Default - Allow by Exception", "Implemented (Helm) - requires enforcing CNI", "System",
     "charts/kube-policies/templates/networkpolicy-default-deny.yaml", "P4", "POAM-007",
-    "P4: podSelector:{} default-deny ingress+egress baseline + explicit allow-list. Apiserver-egress/webhook-ingress render fail-closed when CIDRs empty. Requires enforcing CNI.")
+    "P4: podSelector:{} default-deny ingress+egress baseline + explicit allow-list. Apiserver-egress/webhook-ingress render fail-closed when CIDRs empty. Requires enforcing CNI.",
+    evidence="network-posture-gate (test/policy/network_posture.rego conftest; default-deny-removal keystone regression must re-fail) (NET-WU-17)")
 add("SC-7(7)", "Boundary Protection | Split Tunneling for Remote Devices", "Implemented (Helm) - requires enforcing CNI", "System",
     "charts/kube-policies/templates/networkpolicy-egress-*.yaml", "P4", "",
-    "P4: enumerated egress (no 0.0.0.0/0) prevents split-tunnel/exfil to arbitrary destinations. Requires enforcing CNI.")
+    "P4: enumerated egress (no 0.0.0.0/0) prevents split-tunnel/exfil to arbitrary destinations. Requires enforcing CNI.",
+    evidence="network-posture-gate (test/policy/network_posture.rego conftest, no-0.0.0.0/0 egress assertion) (NET-WU-18)")
 add("SC-8", "Transmission Confidentiality and Integrity", "Partial", "System",
     "cmd/admission-webhook/main.go; internal/config/tls.go; internal/admission/decision_publisher.go", "P4", "POAM-004",
-    "Webhook TLS 1.3 (ICX-01); P2/P3 added TLS 1.3 on policy-manager API and verified HTTPS (RootCAs, no InsecureSkipVerify) for webhook->PM decisions channel. Dashboard in-pod TLS + metrics-plane authn remain config-gated/off by default (POAM-004 residual).")
+    "Webhook TLS 1.3 (ICX-01); P2/P3 added TLS 1.3 on policy-manager API and verified HTTPS (RootCAs, no InsecureSkipVerify) for webhook->PM decisions channel. Dashboard in-pod TLS + metrics-plane authn remain config-gated/off by default (POAM-004 residual).",
+    evidence="internal/config/tls_test.go + internal/config/tls_conformance_test.go + internal/admission/decision_publisher_test.go (CRY-WU-12)")
 add("SC-8(1)", "Transmission Confidentiality and Integrity | Cryptographic Protection", "Partial", "System",
     "cmd/admission-webhook/main.go; internal/config/tls.go", "P4", "POAM-003",
-    "Webhook TLS 1.3 cryptographic protection (ICX-01) with optional apiserver mTLS (--require-client-cert default true at binary; chart default false for dev). policy-manager optional API mTLS. Config-gated items off by default.")
+    "Webhook TLS 1.3 cryptographic protection (ICX-01) with optional apiserver mTLS (--require-client-cert default true at binary; chart default false for dev). policy-manager optional API mTLS. Config-gated items off by default.",
+    evidence="internal/config/tls_test.go + internal/config/mtls_test.go + internal/config/client_mtls_test.go (CRY-WU-12)")
 add("SC-10", "Network Disconnect", "Planned", "System", "see P3", "P3", "", "Session/idle disconnect on management plane in P3.")
 add("SC-12", "Cryptographic Key Establishment and Management", "Planned", "System", "charts/kube-policies/templates/admission-webhook-tls.yaml", "P2", "POAM-005",
     "Cert/secret material exists but no lifecycle; PKI key mgmt + rotation in P2.")
@@ -593,20 +658,25 @@ add("SC-28", "Protection of Information at Rest", "Planned", "System", "see P2",
 add("SC-28(1)", "Protection of Information at Rest | Cryptographic Protection", "Planned", "Shared", "see P2", "P2", "POAM-005",
     "Encryption-at-rest via CSP/etcd KMS + FIPS module; verified in P2.")
 add("SC-39", "Process Isolation", "Partial", "System", "charts/kube-policies/values.yaml", "P5", "",
-    "Container isolation (distroless, non-root, dropped caps); restricted PSS in P5.")
+    "Container isolation (distroless, non-root, dropped caps); restricted PSS in P5.",
+    evidence="manifest-hardening-gate (test/policy/restricted-pss.rego conftest) + charts/kube-policies/tests/hardening_test.yaml (CFG-WU-12)")
 
 # ---------------------------------------------------------------------------
 # SI - System and Information Integrity
 # ---------------------------------------------------------------------------
 add("SI-1", "Policy and Procedures", "Planned", "CSP", "see P12", "P12", "POAM-010", "SI -1 policy authored in P12.")
-add("SI-2", "Flaw Remediation", "Partial", "System", ".github/workflows/ci.yml", "P6", "POAM-008",
-    "P5: the gating Trivy scan (fixable CRITICAL,HIGH -> build fail; ignore-unfixed=true so unfixed CVEs are reported via SARIF but do not block) blocks merge of newly-introduced flaws, giving a build-time remediation forcing function. RESIDUAL: a documented remediation-SLA / patch cadence and automated remediation-status tracking remain P6/P11 (POAM-008).")
-add("SI-2(2)", "Flaw Remediation | Automated Flaw Remediation Status", "Planned", "System", "see P6", "P6", "POAM-008",
-    "Automated remediation-status tracking via scan + POA&M in P6/P11.")
+add("SI-2", "Flaw Remediation", "Implemented", "System",
+    ".github/workflows/ci.yml, go.mod, .github/dependabot.yml, .github/workflows/base-image-refresh.yml", "P11", "POAM-008",
+    "Reachable stdlib CVEs remediated by pinning toolchain to go1.25.10 (govulncheck 0 reachable vulns, verified locally); remediation SLA 30/90/180 days documented in SECURITY.md. Implemented status is scoped to this evidenced local remediation. The govulncheck CI gate, Dependabot, and base-image-refresh automation are CONFIGURED/authored in P11; the broader SLA-tracked remediation program's operation is pending first CI run + branch-protection enablement (no ATO) and tracked under SA-11/RA-5.",
+    evidence="govulncheck job (0 reachable vulns gate) + security-scan (Trivy GATE) in .github/workflows/ci.yml (SDL-WU-19)")
+add("SI-2(2)", "Flaw Remediation | Automated Flaw Remediation Status", "Partial", "System", ".github/workflows/poam-aging.yml", "P11", "POAM-008",
+    "Automated POA&M aging/SLA-breach tracking + alerting CONFIGURED/authored in P11 (.github/workflows/poam-aging.yml). Execution/enforcement evidence pending first CI run + branch-protection enablement (no ATO). Partial until evidenced.",
+    evidence=".github/workflows/poam-aging.yml (SLA-breach gate over poam.csv) + scripts/validate/compliance_check.py (poam.csv non-blank severity/scheduled_completion gate) (SDL-WU-22)")
 add("SI-3", "Malicious Code Protection", "Planned", "System", "see P6", "P6", "",
     "Image scanning (trivy) + signature verification admission in P6/P10.")
 add("SI-4", "System Monitoring", "Partial", "System", "internal/metrics/collector.go", "P9", "",
-    "Prometheus collector + Alertmanager exist (PoC); IDS-grade detection/SIEM in P9.")
+    "Prometheus collector + Alertmanager exist (PoC); IDS-grade detection/SIEM in P9.",
+    evidence="internal/metrics/collector_test.go + monitoring-rules job (promtool check/test over alert rules) (IRM-WU-14)")
 add("SI-4(2)", "System Monitoring | Automated Tools and Mechanisms for Real-Time Analysis", "Planned",
     "Shared", "see P9", "P9", "", "Real-time SIEM analysis in P9.")
 add("SI-4(4)", "System Monitoring | Inbound and Outbound Communications Traffic", "Planned", "Shared", "see P9", "P9", "",
@@ -623,14 +693,18 @@ add("SI-7(1)", "Software, Firmware, and Information Integrity | Integrity Checks
     "Integrity checks at admission (cosign verify) in P6/P10.")
 add("SI-8", "Spam Protection", "Not-Applicable", "System", "N/A - no email/messaging in boundary", None, "",
     "System has no email/messaging components.")
-add("SI-10", "Information Input Validation", "Partial", "System", "internal/config/config.go", "P3", "",
-    "Config + admission input validation present; API request validation hardened in P3/P11.")
+add("SI-10", "Information Input Validation", "Implemented", "System",
+    "internal/config/config.go, internal/admission/controller_validation_test.go, internal/admission/controller_fuzz_test.go, internal/policy/engine_fuzz_test.go", "P11", "",
+    "Config + admission input validation present; adversarial input corpus (controller_validation_test.go) + Go native fuzz tests (admission parser + Rego evaluator) added in P11; fail-closed behaviour locked by tests.",
+    evidence="internal/admission/controller_validation_test.go + controller_fuzz_test.go + internal/policy/engine_fuzz_test.go via fuzz-smoke job (SDL-WU-05)")
 add("SI-11", "Error Handling", "Partial", "System", "internal/policymanager/router.go", "P11", "",
-    "gin.Recovery() handles panics; structured error handling/no-leak review in P11.")
+    "gin.Recovery() handles panics; structured error handling/no-leak review in P11.",
+    evidence="internal/admission/controller_behavior_test.go (TestValidateHandler_FailSafeOnEngineError: deny + no panic on engine error) + internal/policymanager/auth_middleware_test.go (error paths) (SDL-WU-07)")
 add("SI-12", "Information Management and Retention", "Planned", "Shared", "see P7", "P7", "",
     "Audit/data retention policy defined in P7; long-term in P9.")
 add("SI-16", "Memory Protection", "Partial", "System", "charts/kube-policies/values.yaml", "P5", "",
-    "Go memory safety + non-root/read-only FS; seccomp RuntimeDefault in P5.")
+    "Go memory safety + non-root/read-only FS; seccomp RuntimeDefault in P5.",
+    evidence="manifest-hardening-gate (test/policy/restricted-pss.rego: readOnlyRootFilesystem + seccompProfile RuntimeDefault) + charts/kube-policies/tests/hardening_test.yaml (CFG-WU-12)")
 
 # ---------------------------------------------------------------------------
 # SR - Supply Chain Risk Management
@@ -640,7 +714,8 @@ add("SR-2", "Supply Chain Risk Management Plan", "Planned", "CSP", "see P6", "P6
 add("SR-2(1)", "Supply Chain Risk Management Plan | Establish SCRM Team", "Planned", "CSP", "see P12", "P12", "",
     "SCRM team designation in P12.")
 add("SR-3", "Supply Chain Controls and Processes", "Partial", "System", ".github/workflows/release.yml", "P6", "POAM-006",
-    "SBOM generation exists but unverified at consumption; provenance + verification controls in P6.")
+    "SBOM generation exists but unverified at consumption; provenance + verification controls in P6.",
+    evidence="reproducible-build job (.github/workflows/ci.yml) + .github/workflows/release.yml (SBOM/SLSA provenance) + internal/policy/image_provenance_test.go (admission-time provenance rule) (SDL-WU-18)")
 add("SR-4", "Provenance", "Planned", "System", ".github/workflows/release.yml", "P6", "POAM-006",
     "SLSA provenance attestation (build-by-digest) added in P6.")
 add("SR-5", "Acquisition Strategies, Tools, and Methods", "Planned", "System", "see P6", "P6", "",
@@ -678,7 +753,7 @@ add("PM-11", "Mission and Business Process Definition", "Planned", "CSP", "see P
 
 
 def resolve(row):
-    cid, title, status, rp, art, phase, poam, notes = row
+    cid, title, status, rp, art, phase, poam, notes, evidence = row
     fam = cid.split("-")[0]
     if rp is None:
         rp = FAMILY_RP[fam]
@@ -697,7 +772,30 @@ def resolve(row):
         "remediating_phase": phase,
         "poam_id": poam,
         "notes": notes,
+        "evidence": evidence,
     }
+
+
+# Statuses that count as "system-implemented" for the evidence requirement.
+SYSTEM_IMPLEMENTED_STATUS = {
+    "Implemented",
+    "Implemented (Helm) - requires enforcing CNI",
+    "Partial",
+}
+# Responsible parties whose implemented controls the system itself evidences.
+SYSTEM_IMPLEMENTED_RP = {"System", "Shared"}
+
+
+def is_system_implemented(row) -> bool:
+    """A control the SYSTEM implements and must therefore evidence with a test/gate.
+
+    Defined as status in {Implemented, "Implemented (Helm) - requires enforcing
+    CNI", Partial} AND responsible_party in {System, Shared}.
+    """
+    return (
+        row["status"] in SYSTEM_IMPLEMENTED_STATUS
+        and row["responsible_party"] in SYSTEM_IMPLEMENTED_RP
+    )
 
 
 def build():
@@ -719,9 +817,20 @@ def build():
         assert r["responsible_party"] in valid_rp, f"bad rp {r['control_id']}={r['responsible_party']}"
         assert r["status"].strip(), f"blank status {r['control_id']}"
         assert r["responsible_party"].strip(), f"blank rp {r['control_id']}"
+        # Exit-gate enforcement: every system-implemented control (status in
+        # {Implemented, "Implemented (Helm) - requires enforcing CNI", Partial}
+        # AND responsible_party in {System, Shared}) MUST cite test-enforced
+        # evidence. This is the test that backs the P12 exit gate "control matrix
+        # has zero blank-evidence cells for system-implemented controls".
+        if is_system_implemented(r):
+            assert r["evidence"].strip(), (
+                f"missing evidence for system-implemented control "
+                f"{r['control_id']} (status={r['status']}, "
+                f"responsible_party={r['responsible_party']})"
+            )
     header = ["control_id", "title", "family", "baseline", "status",
               "responsible_party", "implementing_artifact", "remediating_phase",
-              "poam_id", "notes"]
+              "poam_id", "notes", "evidence"]
     out = "docs/compliance/control-matrix.csv"
     with open(out, "w", newline="") as fh:
         w = csv.DictWriter(fh, fieldnames=header)
