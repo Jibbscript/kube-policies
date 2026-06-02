@@ -55,7 +55,7 @@ Enterprise-grade Kubernetes policy enforcement system providing comprehensive se
 | admissionWebhook.podSecurityContext.runAsNonRoot | bool | `true` |  |
 | admissionWebhook.podSecurityContext.runAsUser | int | `65534` |  |
 | admissionWebhook.podSecurityContext.seccompProfile.type | string | `"RuntimeDefault"` |  |
-| admissionWebhook.preStopDrainSeconds | int | `5` | shutdown-drain-delay (works on ALL k8s incl. the distroless image, no shell) AND renders a native lifecycle `sleep` preStop (k8s >= 1.29; harmlessly pruned on older clusters). 0 disables both. Keep <= terminationGracePeriodSeconds. |
+| admissionWebhook.preStopDrainSeconds | int | `5` | shutdown-drain-delay (works on ALL k8s incl. the distroless image, no shell) AND renders a native lifecycle `sleep` preStop ONLY on k8s >= 1.29 (gated on .Capabilities.KubeVersion; k8s < 1.29 rejects an empty preStop handler, so the chart omits it there and relies on --shutdown-drain-delay). 0 disables both. Keep <= terminationGracePeriodSeconds. |
 | admissionWebhook.replicaCount | int | `2` |  |
 | admissionWebhook.resources.limits.cpu | string | `"500m"` |  |
 | admissionWebhook.resources.limits.memory | string | `"512Mi"` |  |
