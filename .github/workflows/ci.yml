@@ -1095,7 +1095,7 @@ jobs:
   # verified). `go install` is intentionally NOT used: the prometheus go.mod
   # carries replace directives that make `go install .../cmd/promtool` fail.
   monitoring-rules:
-    name: Monitoring Rules (promtool)
+    name: Monitoring Rules & Alertmanager (promtool/amtool)
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -1105,9 +1105,22 @@ jobs:
       # published sha256sums.txt of the pinned LTS release. Verified with
       # sha256sum -c against the upstream checksum file.
       PROMETHEUS_SHA256: '456eb31530484d181e860e329fa0c6628e79eb388fac670cdeb4fa5d57c74ed9'
+      ALERTMANAGER_VERSION: '0.27.0'
     steps:
     - name: Checkout code
       uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+
+    - name: Install Helm
+      uses: azure/setup-helm@dda3372f752e03dde6b3237bc9431cdc2f7a02a2  # v5.0.0
+
+    - name: Install yq (pinned)
+      run: |
+        set -euo pipefail
+        YQ_VERSION=v4.45.1
+        sudo curl -fsSL -o /usr/local/bin/yq \
+          "https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/yq_linux_amd64"
+        sudo chmod +x /usr/local/bin/yq
+        yq --version
 
     - name: Install promtool (pinned, checksum-verified)
       run: |
@@ -1120,27 +1133,88 @@ jobs:
         sudo install -m 0755 "prometheus-${PROMETHEUS_VERSION}.linux-amd64/promtool" /usr/local/bin/promtool
         promtool --version
 
-    - name: Promtool — check rules (all standalone rule files)
+    - name: Install amtool (pinned, checksum-verified against upstream sha256sums)
       run: |
         set -euo pipefail
-        # Exclude *_test.yml — those are promtool unit-test files (rule_files/tests
-        # schema), not rule definitions, so `check rules` would reject them.
-        if [ "$(find monitoring/prometheus/rules -name '*.yml' ! -name '*_test.yml' | wc -l)" -eq 0 ]; then
-          echo "::error::no Prometheus rule files found under monitoring/prometheus/rules"
+        asset="alertmanager-${ALERTMANAGER_VERSION}.linux-amd64.tar.gz"
+        base="https://github.com/prometheus/alertmanager/releases/download/v${ALERTMANAGER_VERSION}"
+        curl -fsSL -o "${asset}" "${base}/${asset}"
+        curl -fsSL -o sha256sums.txt "${base}/sha256sums.txt"
+        grep "  ${asset}\$" sha256sums.txt | sha256sum -c -
+        tar -xzf "${asset}" "alertmanager-${ALERTMANAGER_VERSION}.linux-amd64/amtool"
+        sudo install -m 0755 "alertmanager-${ALERTMANAGER_VERSION}.linux-amd64/amtool" /usr/local/bin/amtool
+        amtool --version
+
+    # IRM-WU-14/15: charts/kube-policies/files/{alerts,slo}/*.yaml is the SINGLE SOURCE.
+    - name: Promtool — check rules (chart single source)
+      run: |
+        set -euo pipefail
+        if [ "$(find charts/kube-policies/files/alerts charts/kube-policies/files/slo -name '*.yaml' | wc -l)" -eq 0 ]; then
+          echo "::error::no chart rule files found under charts/kube-policies/files/{alerts,slo}"
           exit 1
         fi
-        find monitoring/prometheus/rules -name '*.yml' ! -name '*_test.yml' -print0 \
+        find charts/kube-policies/files/alerts charts/kube-policies/files/slo -name '*.yaml' -print0 \
           | sort -z | xargs -0 promtool check rules
 
-    - name: Promtool — run unit tests
+    - name: Promtool — render chart PrometheusRule and check it
       run: |
         set -euo pipefail
-        if [ "$(find monitoring/prometheus/rules -name '*_test.yml' | wc -l)" -eq 0 ]; then
-          echo "::error::no promtool unit-test files (*_test.yml) found under monitoring/prometheus/rules"
+        helm template kp charts/kube-policies \
+          --set monitoring.prometheusRule.enabled=true \
+          --show-only templates/prometheusrule.yaml \
+          --show-only templates/slo-prometheusrule.yaml \
+          | yq ea '[.] | {"groups": [.[] | select(.kind=="PrometheusRule") | .spec.groups[]]}' \
+          > rendered-rules.yaml
+        promtool check rules rendered-rules.yaml
+
+    - name: Promtool — run unit tests (tests/monitoring)
+      run: |
+        set -euo pipefail
+        if [ "$(find tests/monitoring -name '*_test.yaml' | wc -l)" -eq 0 ]; then
+          echo "::error::no promtool unit-test files (*_test.yaml) found under tests/monitoring"
           exit 1
         fi
-        find monitoring/prometheus/rules -name '*_test.yml' -print0 \
+        find tests/monitoring -name '*_test.yaml' -print0 \
           | sort -z | xargs -0 promtool test rules
+
+    - name: Metric-name drift check (rules reference only metrics collector.go emits)
+      run: |
+        set -euo pipefail
+        find charts/kube-policies/files/alerts charts/kube-policies/files/slo -name '*.yaml' -print0 \
+          | sort -z | xargs -0 ./scripts/validate/metric-name-drift.sh
+
+    - name: Falco ruleset copies in sync (chart vs canonical)
+      run: |
+        set -euo pipefail
+        diff -q monitoring/falco/kube-policies-rules.yaml \
+          charts/kube-policies/files/falco/kube-policies-rules.yaml \
+          || { echo "::error::Falco rule copies diverged — sync monitoring/falco/ and charts/kube-policies/files/falco/"; exit 1; }
+
+    - name: Standalone rules freshness (generated file == chart single source)
+      run: |
+        set -euo pipefail
+        git ls-files --error-unmatch monitoring/prometheus/rules/kube-policies.rules.yml >/dev/null 2>&1 \
+          || { echo "::error::monitoring/prometheus/rules/kube-policies.rules.yml is untracked — git add it"; exit 1; }
+        make gen-monitoring-rules
+        git diff --exit-code -- monitoring/prometheus/rules/kube-policies.rules.yml \
+          || { echo "::error::monitoring/prometheus/rules/kube-policies.rules.yml is stale — run 'make gen-monitoring-rules' and commit"; exit 1; }
+
+    - name: Amtool — check Alertmanager config (standalone + chart-rendered)
+      run: |
+        set -euo pipefail
+        amtool check-config monitoring/alertmanager/alertmanager.yaml
+        helm template kp charts/kube-policies \
+          --set monitoring.alertmanager.config.enabled=true \
+          --set monitoring.alertmanager.config.existingSecret=am-secrets \
+          --set monitoring.alertmanager.config.receivers.pagerduty.enabled=true \
+          --set monitoring.alertmanager.config.receivers.slack.enabled=true \
+          --set monitoring.alertmanager.config.receivers.email.enabled=true \
+          --set monitoring.alertmanager.config.receivers.email.to=secops@example.com \
+          --set monitoring.alertmanager.config.receivers.email.smarthost=smtp.example.com:587 \
+          --set monitoring.alertmanager.config.heartbeat.enabled=true \
+          --show-only templates/alertmanager-config.yaml \
+          | yq ea 'select(.kind=="Secret") | .stringData."alertmanager.yml"' > rendered-am.yml
+        amtool check-config rendered-am.yml
 
   # GAP 2: actionlint workflow linter — gates on actionlint's own native rules.
   # shellcheck is intentionally disabled (-shellcheck=) because GitHub-hosted

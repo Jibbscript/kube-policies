@@ -1,0 +1,108 @@
+{{- /*
+IRM-WU-14 (NIST CA-7, SI-4): ServiceMonitors for the webhook (:9090) and
+policy-manager (:9091) `metrics` ports so the Prometheus Operator scrapes
+kube-policies from in-cluster service discovery. Requires the operator
+(monitoring.coreos.com/v1).
+
+The `relabelings` PIN the `job` label to a release-independent name. Without it
+the operator defaults `job` to the (release-prefixed) Service name, and the
+availability alerts (up{job="kube-policies-admission-webhook"}) would never match
+for a release not literally named "kube-policies" — a silent monitoring gap.
+
+When metrics.tls.enabled the endpoints serve TLS + a bearer token; the
+ServiceMonitor scrapes over https with operator-supplied tlsConfig
+(monitoring.serviceMonitor.tlsConfig). Gated OFF by default.
+*/ -}}
+{{- if .Values.monitoring.serviceMonitor.enabled }}
+{{- $tls := .Values.metrics.tls.enabled }}
+{{- $tlsCfg := .Values.monitoring.serviceMonitor.tlsConfig }}
+{{- if .Values.admissionWebhook.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "kube-policies.webhookServiceName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kube-policies.labels" . | nindent 4 }}
+    app.kubernetes.io/component: admission-webhook
+    {{- with .Values.monitoring.serviceMonitor.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  namespaceSelector:
+    matchNames:
+      - {{ .Release.Namespace }}
+  selector:
+    matchLabels:
+      {{- include "kube-policies.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: admission-webhook
+  endpoints:
+    - port: metrics
+      path: /metrics
+      interval: {{ .Values.monitoring.serviceMonitor.interval }}
+      scrapeTimeout: {{ .Values.monitoring.serviceMonitor.scrapeTimeout }}
+      honorLabels: {{ .Values.monitoring.serviceMonitor.honorLabels }}
+      scheme: {{ if $tls }}https{{ else }}http{{ end }}
+      # Pin job so up{job="kube-policies-admission-webhook"} alerts match
+      # regardless of the Helm release name.
+      relabelings:
+        - targetLabel: job
+          replacement: kube-policies-admission-webhook
+          action: replace
+      {{- if $tls }}
+      tlsConfig:
+        insecureSkipVerify: {{ $tlsCfg.insecureSkipVerify }}
+        {{- with $tlsCfg.serverName }}
+        serverName: {{ . | quote }}
+        {{- end }}
+        {{- with $tlsCfg.caFile }}
+        caFile: {{ . | quote }}
+        {{- end }}
+      {{- end }}
+{{- end }}
+{{- if .Values.policyManager.enabled }}
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "kube-policies.policyManagerName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kube-policies.labels" . | nindent 4 }}
+    app.kubernetes.io/component: policy-manager
+    {{- with .Values.monitoring.serviceMonitor.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  namespaceSelector:
+    matchNames:
+      - {{ .Release.Namespace }}
+  selector:
+    matchLabels:
+      {{- include "kube-policies.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: policy-manager
+  endpoints:
+    - port: metrics
+      path: /metrics
+      interval: {{ .Values.monitoring.serviceMonitor.interval }}
+      scrapeTimeout: {{ .Values.monitoring.serviceMonitor.scrapeTimeout }}
+      honorLabels: {{ .Values.monitoring.serviceMonitor.honorLabels }}
+      scheme: {{ if $tls }}https{{ else }}http{{ end }}
+      # Pin job so up{job="kube-policies-policy-manager"} alerts match
+      # regardless of the Helm release name.
+      relabelings:
+        - targetLabel: job
+          replacement: kube-policies-policy-manager
+          action: replace
+      {{- if $tls }}
+      tlsConfig:
+        insecureSkipVerify: {{ $tlsCfg.insecureSkipVerify }}
+        {{- with $tlsCfg.serverName }}
+        serverName: {{ . | quote }}
+        {{- end }}
+        {{- with $tlsCfg.caFile }}
+        caFile: {{ . | quote }}
+        {{- end }}
+      {{- end }}
+{{- end }}
+{{- end }}

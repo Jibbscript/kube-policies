@@ -69,6 +69,20 @@ func TestMetricsCollector_IncAdmissionRequests(t *testing.T) {
 	testCollector.IncAdmissionRequests("mutate", "allowed", "PolicyCompliant")
 }
 
+func TestMetricsCollector_IncFailOpen(t *testing.T) {
+	// IRM-WU-08. NewCollector registers against the global registry, so reuse the
+	// package-shared testCollector and assert a before/after delta on the single
+	// "mutate" child series.
+	before, labels := collectCounterValue(t, testCollector.admissionFailOpen.WithLabelValues("mutate"))
+	assert.Equal(t, []string{"operation"}, labels, "fail_open must carry only the operation label")
+
+	testCollector.IncFailOpen("mutate")
+	testCollector.IncFailOpen("mutate")
+
+	after, _ := collectCounterValue(t, testCollector.admissionFailOpen.WithLabelValues("mutate"))
+	assert.Equal(t, before+2, after, "fail_open counter must increment once per fail-open admission")
+}
+
 func TestMetricsCollector_ObserveEvaluationDuration(t *testing.T) {
 	// Using shared testCollector
 

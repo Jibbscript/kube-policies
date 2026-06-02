@@ -1,15 +1,53 @@
+# Standalone (bring-your-own Prometheus) Alertmanager config (IRM-WU-16).
+#
+# The dummy http://127.0.0.1:5001/ receiver has been removed. This is a
+# severity-based route tree with inhibition and a dead-man's-switch heartbeat
+# split-off, mirroring the chart's canonical config
+# (charts/kube-policies/templates/alertmanager-config.yaml). Receivers are
+# name-only here because real paging/chat credentials MUST come from a Secret,
+# not this file — wire them via the Helm chart
+# (monitoring.alertmanager.config.*) which references them with *_file, or fill
+# in *_configs below pointing at *_file paths you mount. amtool check-config
+# validates this file in CI.
 global:
   resolve_timeout: 5m
 
 route:
-  group_by: ["alertname", "cluster", "service"]
-  group_wait: 10s
-  group_interval: 10s
-  repeat_interval: 1h
-  receiver: default-webhook
+  group_by: ["alertname", "component"]
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 4h
+  receiver: kube-policies-default
+  routes:
+    - matchers:
+        - alertname="KubePoliciesWatchdog"
+      receiver: kube-policies-heartbeat
+      group_wait: 0s
+      group_interval: 1m
+      repeat_interval: 1m
+      continue: false
+    - matchers:
+        - severity="critical"
+      receiver: kube-policies-critical
+      continue: true
+    - matchers:
+        - severity="warning"
+      receiver: kube-policies-warning
+
+inhibit_rules:
+  - source_matchers:
+      - alertname="KubePoliciesDown"
+    target_matchers:
+      - severity="warning"
+    equal: ["component"]
+  - source_matchers:
+      - severity="critical"
+    target_matchers:
+      - severity="warning"
+    equal: ["component"]
 
 receivers:
-  - name: default-webhook
-    webhook_configs:
-      - url: "http://127.0.0.1:5001/"
-        send_resolved: true
+  - name: kube-policies-default
+  - name: kube-policies-critical
+  - name: kube-policies-warning
+  - name: kube-policies-heartbeat

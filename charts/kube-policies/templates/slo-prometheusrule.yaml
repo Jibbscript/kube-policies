@@ -1,0 +1,29 @@
+{{- /*
+IRM-WU-18 (NIST CA-7, SI-4, FedRAMP ConMon): SLO / error-budget burn-rate rules
+as a SEPARATE PrometheusRule so SLO alerting can be toggled independently of the
+operational alerts. Rule groups are read from the single source
+charts/kube-policies/files/slo/*.yaml (promtool-tested in CI). Formal objectives
+and windows are documented in docs/observability/slo.md.
+
+Gated on monitoring.prometheusRule.enabled AND monitoring.prometheusRule.slo.enabled.
+*/ -}}
+{{- if and .Values.monitoring.prometheusRule.enabled .Values.monitoring.prometheusRule.slo.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: {{ include "kube-policies.fullname" . }}-slo
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kube-policies.labels" . | nindent 4 }}
+    app.kubernetes.io/component: slo
+    {{- with .Values.monitoring.prometheusRule.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  groups:
+  {{- range $path, $_ := .Files.Glob "files/slo/*.yaml" }}
+  {{- range ($.Files.Get $path | fromYaml).groups }}
+    - {{ toYaml . | nindent 6 | trim }}
+  {{- end }}
+  {{- end }}
+{{- end }}

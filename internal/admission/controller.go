@@ -227,7 +227,10 @@ func (c *Controller) MutateHandler(ctx *gin.Context) {
 			c.publisher.Publish(audit.NewPublicEvent(auditCtx, nil))
 		}
 
-		// Fail-safe behavior - allow without mutations
+		// Fail-safe behavior - allow without mutations (FAIL-OPEN). The request
+		// is admitted WITHOUT a successful policy evaluation, so a control was
+		// bypassed: record it (IRM-WU-08) for the KubePoliciesFailOpenActive alert.
+		c.metrics.IncFailOpen("mutate")
 		response := &admissionv1.AdmissionResponse{
 			UID:     req.UID,
 			Allowed: true,
@@ -251,7 +254,10 @@ func (c *Controller) MutateHandler(ctx *gin.Context) {
 			c.logger.Error("Failed to marshal patches", zap.Error(err))
 			c.metrics.IncAdmissionRequests("mutate", "error", "patch_marshal_error")
 
-			// Allow without mutations on patch error
+			// Allow without mutations on patch error (FAIL-OPEN): the computed
+			// mutation could not be applied, so the object is admitted unmutated.
+			// Record the bypass (IRM-WU-08).
+			c.metrics.IncFailOpen("mutate")
 			response.Allowed = true
 		} else {
 			response.Patch = patchBytes

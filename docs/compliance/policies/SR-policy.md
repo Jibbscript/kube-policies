@@ -110,7 +110,7 @@ lockfile. The lockfile must be committed and kept in sync; any divergence betwee
 and the lockfile is a change-control finding.
 
 **Dependabot.** Automated dependency-update PRs are configured in
-[`.github/dependabot.yml`](.github/dependabot.yml) covering the `gomod`, `npm`, `docker`, and
+[`.github/dependabot.yml`](../../../.github/dependabot.yml) covering the `gomod`, `npm`, `docker`, and
 `github-actions` ecosystems. Dependabot PRs follow the same PR + gating-CI review as any other
 change (see [CM procedures](../procedures/CM-procedures.md) §2).
 

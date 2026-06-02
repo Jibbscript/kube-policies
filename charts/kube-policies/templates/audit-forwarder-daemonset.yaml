@@ -25,6 +25,9 @@ so the conftest restricted.pss gate evaluates it.
 {{- if and .Values.audit.forwarder.destination.splunk.enabled (not .Values.audit.forwarder.destination.splunk.token) }}
 {{- fail "audit.forwarder.destination.splunk.enabled=true requires audit.forwarder.destination.splunk.token (the Splunk HEC token). Set it (ideally via a value sourced from a Secret) or disable the splunk destination." }}
 {{- end }}
+{{- if and .Values.audit.forwarder.destination.http.enabled (not .Values.audit.forwarder.destination.http.tls) }}
+{{- fail "audit.forwarder.destination.http.enabled=true with tls=false would ship audit records (AU-9(3) accountability data with attribution) in PLAINTEXT. Set audit.forwarder.destination.http.tls=true (SC-8/AU-9(3))." }}
+{{- end }}
 apiVersion: apps/v1
 kind: DaemonSet
 metadata:
@@ -191,10 +194,29 @@ data:
         Port          {{ .Values.audit.forwarder.destination.syslog.port }}
         Mode          {{ .Values.audit.forwarder.destination.syslog.mode }}
 {{- end }}
-{{- if not (or .Values.audit.forwarder.destination.loki.enabled .Values.audit.forwarder.destination.elasticsearch.enabled .Values.audit.forwarder.destination.splunk.enabled .Values.audit.forwarder.destination.syslog.enabled) }}
+{{- if .Values.audit.forwarder.destination.http.enabled }}
+
+    # Generic HTTP/OTLP SIEM endpoint over TLS (IRM-WU-13). Ships each audit
+    # record as a JSON body. tls On enables an encrypted channel to the SIEM.
+    [OUTPUT]
+        Name          http
+        Match         kube-policies.audit
+        Host          {{ .Values.audit.forwarder.destination.http.host }}
+        Port          {{ .Values.audit.forwarder.destination.http.port }}
+        URI           {{ .Values.audit.forwarder.destination.http.uri }}
+        Format        json
+        tls           {{ if .Values.audit.forwarder.destination.http.tls }}On{{ else }}Off{{ end }}
+{{- if .Values.audit.forwarder.destination.http.tls }}
+        tls.verify    On
+{{- end }}
+{{- if .Values.audit.forwarder.destination.http.caFile }}
+        tls.ca_file   {{ .Values.audit.forwarder.destination.http.caFile }}
+{{- end }}
+{{- end }}
+{{- if not (or .Values.audit.forwarder.destination.loki.enabled .Values.audit.forwarder.destination.elasticsearch.enabled .Values.audit.forwarder.destination.splunk.enabled .Values.audit.forwarder.destination.syslog.enabled .Values.audit.forwarder.destination.http.enabled) }}
 
     # No destination enabled — logging to stdout as a safe default.
-    # Enable one of audit.forwarder.destination.{loki,elasticsearch,splunk,syslog}
+    # Enable one of audit.forwarder.destination.{loki,elasticsearch,splunk,syslog,http}
     # to ship logs to a real backend.
     [OUTPUT]
         Name          stdout

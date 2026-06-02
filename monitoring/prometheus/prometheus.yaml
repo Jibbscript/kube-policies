@@ -5,6 +5,11 @@ global:
     cluster: 'kube-policies-cluster'
     environment: 'production'
 
+# Mounts the kube-policies alert + SLO rules. The single source of truth is the
+# Helm chart (charts/kube-policies/files/alerts/*.yaml + files/slo/*.yaml),
+# concatenated into monitoring/prometheus/rules/kube-policies.rules.yml by
+# `make gen-monitoring-rules` (IRM-WU-14 / RES-WU-10). Mount that file at
+# /etc/prometheus/rules/ so this glob resolves.
 rule_files:
   - "/etc/prometheus/rules/*.yml"
 

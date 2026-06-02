@@ -14,6 +14,13 @@ type Collector struct {
 	evaluationDuration *prometheus.HistogramVec
 	policyEvaluations  *prometheus.CounterVec
 
+	// Fail-open admissions (IRM-WU-08, NIST SI-4(2)/IR-5): incremented whenever
+	// the webhook admits a request it could NOT evaluate (the engine errored),
+	// i.e. a security control was bypassed. Labelled by operation ("mutate";
+	// "validate" fails closed by contract so it never increments). Any nonzero
+	// rate is alert-worthy — the KubePoliciesFailOpenActive rule pages on it.
+	admissionFailOpen *prometheus.CounterVec
+
 	// Policy management metrics
 	policiesLoaded prometheus.Gauge
 	policyUpdates  *prometheus.CounterVec
@@ -59,6 +66,16 @@ func NewCollector() *Collector {
 				Help:      "Total number of admission requests processed",
 			},
 			[]string{"operation", "status", "reason"},
+		),
+
+		admissionFailOpen: promauto.NewCounterVec(
+			prometheus.CounterOpts{
+				Namespace: "kube_policies",
+				Subsystem: "admission",
+				Name:      "fail_open_total",
+				Help:      "Total number of requests admitted WITHOUT successful policy evaluation because the engine errored (fail-open). A control bypass; alert on any increase.",
+			},
+			[]string{"operation"},
 		),
 
 		evaluationDuration: promauto.NewHistogramVec(
@@ -217,6 +234,15 @@ func (c *Collector) IncAdmissionRequests(operation, status, reason string) {
 	c.admissionRequests.WithLabelValues(operation, status, reason).Inc()
 }
 
+// IncFailOpen increments the fail-open admissions counter (IRM-WU-08). Call this
+// only on the paths that ADMIT a request the engine could not evaluate (e.g. the
+// MutateHandler engine-error / patch-marshal-error branches). operation is the
+// admission operation ("mutate"); the validate path fails closed and must never
+// call this.
+func (c *Collector) IncFailOpen(operation string) {
+	c.admissionFailOpen.WithLabelValues(operation).Inc()
+}
+
 // ObserveEvaluationDuration observes policy evaluation duration
 func (c *Collector) ObserveEvaluationDuration(operation string, duration time.Duration) {
 	c.evaluationDuration.WithLabelValues(operation).Observe(duration.Seconds())
@@ -290,6 +316,7 @@ func (c *Collector) IncRateLimited(handler, reason string) {
 func (c *Collector) GetMetrics() map[string]prometheus.Collector {
 	return map[string]prometheus.Collector{
 		"admission_requests":               c.admissionRequests,
+		"admission_fail_open":              c.admissionFailOpen,
 		"evaluation_duration":              c.evaluationDuration,
 		"policy_evaluations":               c.policyEvaluations,
 		"policies_loaded":                  c.policiesLoaded,

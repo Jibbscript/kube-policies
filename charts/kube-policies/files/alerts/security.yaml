@@ -1,0 +1,82 @@
+# Security-signal alerts (IRM-WU-08/10/11, AUD-WU-15; NIST SI-4, SI-4(2), AU-6,
+# AU-9, IR-5, AC-6, CA-7). These fire on the security-relevant counters emitted
+# by internal/metrics/collector.go and internal/audit/logger.go.
+groups:
+  - name: kube-policies-security
+    rules:
+      # IRM-WU-08: the webhook admitted a request it could NOT evaluate (engine
+      # error on the fail-open mutate path). Each event is a control bypass, so
+      # ANY increase is critical and pages immediately.
+      - alert: KubePoliciesFailOpenActive
+        expr: increase(kube_policies_admission_fail_open_total[5m]) > 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "kube-policies is FAILING OPEN ({{ $labels.operation }}) — controls bypassed"
+          description: "The webhook admitted {{ printf \"%.0f\" $value }} request(s) in the last 5m WITHOUT successful policy evaluation ({{ $labels.operation }} fail-open). Workloads are being admitted unchecked. Investigate engine errors (kube_policies_system_errors_total) and contain per the fail-open runbook."
+          runbook_url: "https://github.com/Jibbscript/kube-policies/blob/main/docs/security/runbooks/fail-open-event.md"
+
+      # IRM-WU-10 / AUD-WU-15: audit records were dropped from the buffer (AU-9
+      # loss of accountability records). ANY drop is critical.
+      - alert: KubePoliciesAuditEventsDropped
+        expr: rate(kube_policies_audit_events_total{status="dropped"}[5m]) > 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "kube-policies is dropping audit events ({{ $labels.event_type }})"
+          description: "Audit events of type {{ $labels.event_type }} are being dropped ({{ printf \"%.2f\" $value }}/s) — the buffer saturated under the 'drop' overflow policy. Accountability records are being lost (AU-9). Increase audit.bufferSize or set overflowPolicy=block, and check forwarder/consumer health."
+          runbook_url: "https://github.com/Jibbscript/kube-policies/blob/main/docs/security/runbooks/audit-pipeline-loss.md"
+
+      # AUD-WU-15: the audit file backend failed to write/seal a record.
+      - alert: KubePoliciesAuditWriteErrors
+        expr: rate(kube_policies_audit_events_total{status="write_error"}[5m]) > 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "kube-policies audit backend write errors ({{ $labels.event_type }})"
+          description: "The audit backend is failing to persist records ({{ printf \"%.2f\" $value }} write_error/s, type {{ $labels.event_type }}). Records may be lost (AU-9). Check disk/PVC capacity, the file backend, and the integrity hash-chain."
+          runbook_url: "https://github.com/Jibbscript/kube-policies/blob/main/docs/security/runbooks/audit-pipeline-loss.md"
+
+      # IRM-WU-10 / AUD-WU-15: buffer sustained near capacity is the early-warning
+      # before drops begin. bufferSize default is 1000 (values.yaml audit.bufferSize).
+      - alert: KubePoliciesAuditBufferSaturated
+        expr: kube_policies_audit_buffer_size > 800
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "kube-policies audit buffer is near capacity"
+          description: "The audit buffer has held above 800 entries for >10m (default capacity 1000). The consumer/forwarder is not keeping up; drops are imminent. Increase audit.bufferSize or speed up the backend before records are lost."
+          runbook_url: "https://github.com/Jibbscript/kube-policies/blob/main/docs/security/runbooks/audit-pipeline-loss.md"
+
+      # IRM-WU-11: CRD reconciliation / policy-update failures. The policy-manager
+      # could not apply a Policy/PolicyException change; the served bundle may be
+      # stale. Rationale: status="error" should be ~0 in steady state.
+      - alert: KubePoliciesPolicyUpdateFailures
+        expr: rate(kube_policies_policy_updates_total{status="error"}[5m]) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "kube-policies policy/CRD updates are failing ({{ $labels.operation }})"
+          description: "Policy update operation {{ $labels.operation }} has been failing ({{ printf \"%.2f\" $value }}/s) for >5m. New or changed Policy/PolicyException objects may not be reflected in enforcement; the webhook serves its last-good bundle. Check policy-manager logs and CRD validity."
+          runbook_url: "https://github.com/Jibbscript/kube-policies/blob/main/docs/security/runbooks/high-error-rate.md"
+
+      # IRM-WU-11: mass exception suppression. A sustained, anomalous rate of
+      # policy-violation suppressions can indicate an over-broad or malicious
+      # PolicyException silently disabling enforcement (AC-6 least privilege).
+      # Threshold: > 1 suppression/s sustained for 15m — well above the
+      # occasional, scoped exception expected in normal operation. Tune
+      # security.alerting thresholds per environment baseline.
+      - alert: KubePoliciesExceptionSuppressionSpike
+        expr: sum(rate(kube_policies_policy_exception_suppressions_total[5m])) > 1
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "kube-policies exception-suppression rate is anomalously high"
+          description: "Policy violations are being suppressed by PolicyExceptions at {{ printf \"%.2f\" $value }}/s, sustained for >15m. A broad or abused exception may be silently disabling enforcement. Review recently added/modified PolicyExceptions and their scope. Threshold (1/s, 15m) is well above normal scoped-exception traffic."
+          runbook_url: "https://github.com/Jibbscript/kube-policies/blob/main/docs/security/runbooks/deny-rate-spike.md"

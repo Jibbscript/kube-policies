@@ -1,0 +1,118 @@
+# Availability / resilience alerts (RES-WU-10, NIST CP-2 / SC-5 / CP-10(2)).
+#
+# SINGLE SOURCE OF TRUTH (IRM-WU-14): this file is the canonical definition of
+# the kube-policies-availability rule group. It is consumed three ways from ONE
+# copy:
+#   1. the chart PrometheusRule (templates/prometheusrule.yaml, .Files.Glob);
+#   2. promtool check/test in CI + `make validate-monitoring-rules`
+#      (tests/monitoring/*_test.yaml reference this path);
+#   3. a standalone Prometheus that mounts charts/kube-policies/files/alerts/.
+# The 5 rules formerly embedded in
+# deployments/kubernetes/monitoring/prometheus-deployment.yaml were migrated
+# here so there is no divergent second copy.
+#
+# kube_policies_* series come from internal/metrics/collector.go; up{job=...},
+# container_*, and kube_* series come from the scrape targets / kube-state-metrics
+# and are validated by the metric-name drift check only for the kube_policies_*
+# names (the external series are intentionally skipped).
+groups:
+  - name: kube-policies-availability
+    rules:
+      - alert: KubePoliciesDown
+        expr: up{job="kube-policies-admission-webhook"} == 0
+        for: 1m
+        labels:
+          severity: critical
+          component: admission-webhook
+        annotations:
+          summary: "kube-policies admission webhook is down"
+          description: "The admission webhook (job kube-policies-admission-webhook) has been unscrapeable (up==0) for >1m. Depending on the ValidatingWebhookConfiguration failurePolicy this blocks or bypasses admission cluster-wide."
+          runbook_url: "https://github.com/Jibbscript/kube-policies/blob/main/docs/security/runbooks/webhook-outage.md"
+
+      - alert: KubePoliciesPolicyManagerDown
+        expr: up{job="kube-policies-policy-manager"} == 0
+        for: 1m
+        labels:
+          severity: critical
+          component: policy-manager
+        annotations:
+          summary: "kube-policies policy-manager is down"
+          description: "The policy-manager (job kube-policies-policy-manager) has been unscrapeable (up==0) for >1m. Policy/PolicyException reconciliation and the policy API are unavailable; the webhook keeps serving its last-loaded bundle."
+          runbook_url: "https://github.com/Jibbscript/kube-policies/blob/main/docs/security/runbooks/webhook-outage.md"
+
+      - alert: KubePoliciesHighErrorRate
+        expr: sum(rate(kube_policies_admission_requests_total{status="error"}[5m])) / sum(rate(kube_policies_admission_requests_total[5m])) > 0.05
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "kube-policies high admission error rate"
+          description: "More than 5% of admission requests are erroring over the last 5m ({{ $value | humanizePercentage }}). Decode/nil-request/evaluation/patch-marshal errors degrade enforcement; on the mutate path errors fail open."
+          runbook_url: "https://github.com/Jibbscript/kube-policies/blob/main/docs/security/runbooks/high-error-rate.md"
+
+      - alert: KubePoliciesHighLatency
+        expr: histogram_quantile(0.95, sum(rate(kube_policies_admission_evaluation_duration_seconds_bucket[5m])) by (le)) > 0.1
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "kube-policies admission webhook high latency"
+          description: "p95 admission evaluation latency is {{ $value }}s over the last 5m (threshold 0.1s). Sustained latency risks apiserver webhook timeouts."
+          runbook_url: "https://github.com/Jibbscript/kube-policies/blob/main/docs/security/runbooks/high-error-rate.md"
+
+      - alert: KubePoliciesHighDenyRate
+        expr: sum(rate(kube_policies_admission_requests_total{status="denied"}[5m])) > 10
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "kube-policies high admission deny rate"
+          description: "{{ $value }} denied admission requests/s over the last 5m. Could be a new/overbroad policy rollout, a misconfigured workload fleet, or an attack — triage before relaxing policy."
+          runbook_url: "https://github.com/Jibbscript/kube-policies/blob/main/docs/security/runbooks/deny-rate-spike.md"
+
+      - alert: KubePoliciesMemoryUsage
+        expr: container_memory_usage_bytes{pod=~".*kube-policies.*"} / container_spec_memory_limit_bytes{pod=~".*kube-policies.*"} > 0.8
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "kube-policies high memory usage"
+          description: "{{ $labels.pod }} memory usage is {{ $value | humanizePercentage }} of its limit for >5m. Risk of OOMKill and a fail-closed gatekeeper restart."
+          runbook_url: "https://github.com/Jibbscript/kube-policies/blob/main/docs/security/runbooks/webhook-outage.md"
+
+      - alert: KubePoliciesReplicaShortfall
+        # Fewer ready replicas than desired for either control-plane Deployment.
+        # Reduced redundancy for the fail-closed gatekeeper (RES-WU-10).
+        expr: (kube_deployment_status_replicas_available{deployment=~".*kube-policies.*"} < kube_deployment_spec_replicas{deployment=~".*kube-policies.*"})
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "kube-policies {{ $labels.deployment }} has fewer ready replicas than desired"
+          description: "{{ $labels.deployment }} has {{ $value }} available replicas, below its desired count, for >10m. HA redundancy is degraded; a single further failure could take the component down."
+          runbook_url: "https://github.com/Jibbscript/kube-policies/blob/main/docs/security/runbooks/webhook-outage.md"
+
+      - alert: KubePoliciesPodDisruptionBudgetAtLimit
+        # PDB allows zero further voluntary disruptions: the component is at its
+        # minimum and a drain/upgrade is (correctly) being blocked, but it also
+        # means there is no headroom (RES-WU-10).
+        expr: kube_poddisruptionbudget_status_pod_disruptions_allowed{poddisruptionbudget=~".*kube-policies.*"} == 0
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "kube-policies PDB {{ $labels.poddisruptionbudget }} allows no disruptions"
+          description: "PDB {{ $labels.poddisruptionbudget }} has allowed-disruptions=0 for >15m: the component is at its minimum healthy count with no headroom for voluntary disruption. Investigate unhealthy/pending replicas."
+          runbook_url: "https://github.com/Jibbscript/kube-policies/blob/main/docs/security/runbooks/webhook-outage.md"
+
+      - alert: KubePoliciesWebhookNotReady
+        # A scheduled webhook pod that is failing its TLS-aware /readyz probe
+        # (RES-WU-06) so it is pulled from Service endpoints (RES-WU-10).
+        expr: kube_pod_container_status_ready{pod=~".*admission-webhook-.*",container="admission-webhook"} == 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "kube-policies admission-webhook pod {{ $labels.pod }} is not ready"
+          description: "Webhook pod {{ $labels.pod }} has failed its readiness probe for >5m and is out of Service endpoints. Reduced webhook capacity; check TLS load (/readyz), recent rollouts, and pod logs."
+          runbook_url: "https://github.com/Jibbscript/kube-policies/blob/main/docs/security/runbooks/webhook-outage.md"

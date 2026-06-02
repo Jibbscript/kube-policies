@@ -650,13 +650,116 @@ metrics:
     enabled: false
 
 # Monitoring Configuration.
-# NOTE: this flag is currently inert in the chart — the over-privileged monitoring
-# ClusterRole it used to gate (cluster-wide nodes/pods/services read bound to the app
-# SA) was removed as dead privilege (IAM-WU-08). A real Prometheus ships its own RBAC
-# (see deployments/kubernetes/monitoring/). Reserved for a future ServiceMonitor gate.
+# NOTE: monitoring.enabled is currently inert in the chart — the over-privileged
+# monitoring ClusterRole it used to gate (cluster-wide nodes/pods/services read
+# bound to the app SA) was removed as dead privilege (IAM-WU-08). A real
+# Prometheus ships its own RBAC (see deployments/kubernetes/monitoring/). The
+# real monitoring integration is the PrometheusRule + ServiceMonitor below.
 monitoring:
   # Enable monitoring stack
   enabled: true
+
+  # PrometheusRule CRD (IRM-WU-14, NIST SI-4/CA-7). When enabled, the chart
+  # renders ONE PrometheusRule containing every alert group, sourced from the
+  # single-source rule files under charts/kube-policies/files/alerts/*.yaml (the
+  # same files promtool tests in CI). Requires the Prometheus Operator
+  # (monitoring.coreos.com CRDs) to be installed. Default OFF so the chart
+  # renders cleanly on clusters without the operator.
+  prometheusRule:
+    enabled: false
+    # Extra labels so a kube-prometheus-stack ruleSelector picks the rule up
+    # (commonly `release: <prometheus release name>`).
+    labels: {}
+    # SLO / error-budget burn-rate rules (IRM-WU-18). Rendered as a SEPARATE
+    # PrometheusRule (templates/slo-prometheusrule.yaml) from
+    # files/slo/*.yaml so SLO alerting can be toggled independently.
+    slo:
+      enabled: true
+
+  # ServiceMonitor CRDs (IRM-WU-14) for the webhook (:9090) and policy-manager
+  # (:9091) `metrics` ports. Requires the Prometheus Operator. Default OFF.
+  serviceMonitor:
+    enabled: false
+    interval: "30s"
+    scrapeTimeout: "10s"
+    # Extra labels for the operator's serviceMonitorSelector.
+    labels: {}
+    # honorLabels for the scraped endpoints.
+    honorLabels: false
+    # TLS scrape settings, used only when metrics.tls.enabled=true. insecureSkipVerify
+    # defaults true for the demo path (the metrics cert is signed by the chart's
+    # internal CA); for production set caFile + serverName and flip
+    # insecureSkipVerify to false so transit integrity is actually verified (SC-8).
+    tlsConfig:
+      insecureSkipVerify: true
+      serverName: ""
+      caFile: ""
+
+  # Alertmanager integration (IRM-WU-16/22). The chart renders an
+  # Alertmanager configuration (severity-routed, secret-backed receivers,
+  # inhibition, heartbeat) and optionally an HA StatefulSet with persistent
+  # storage. Default OFF — most operators run a cluster-wide Alertmanager and
+  # only need the routing config. See docs/security/on-call-escalation.md.
+  alertmanager:
+    # Render the Alertmanager config Secret (templates/alertmanager-config.yaml).
+    config:
+      enabled: false
+      # Name of an existing Secret holding receiver credentials (PagerDuty
+      # routing key, Slack/webhook URLs, SMTP password). Keys referenced below.
+      # NEVER inline these in values; reference the Secret.
+      existingSecret: ""
+      # Receiver toggles + the Secret keys their credentials come from.
+      receivers:
+        pagerduty:
+          enabled: false
+          # Secret key holding the PagerDuty routing/service key.
+          routingKeySecretKey: "pagerduty-routing-key"
+        slack:
+          enabled: false
+          # Secret key holding the Slack incoming-webhook URL.
+          apiUrlSecretKey: "slack-api-url"
+          channel: "#kube-policies-alerts"
+        email:
+          enabled: false
+          to: ""
+          from: "alertmanager@kube-policies.local"
+          smarthost: ""
+          # Secret key holding the SMTP auth password.
+          authPasswordSecretKey: "smtp-password"
+      # Dead-man's-switch heartbeat receiver (consumes the Watchdog alert).
+      heartbeat:
+        enabled: false
+        # Secret key holding the heartbeat push URL (e.g. Dead Man's Snitch).
+        urlSecretKey: "heartbeat-url"
+    # HA Alertmanager StatefulSet with a PVC (IRM-WU-22). Most operators leave
+    # this OFF and point the chart's routing config at their existing HA
+    # Alertmanager.
+    ha:
+      enabled: false
+      replicas: 2
+      image:
+        repository: quay.io/prometheus/alertmanager
+        tag: "v0.27.0"
+        pullPolicy: IfNotPresent
+      persistence:
+        size: 1Gi
+        storageClass: ""
+      resources:
+        requests:
+          cpu: 25m
+          memory: 64Mi
+        limits:
+          cpu: 100m
+          memory: 128Mi
+
+# Runtime detection (IRM-WU-23, NIST SI-4). Opt-in: when enabled, the chart
+# ships the kube-policies Falco ruleset (charts/kube-policies/files/falco/) as a
+# ConfigMap an existing Falco DaemonSet can load. Falco itself is deployed
+# separately; findings forward to the SIEM via falcosidekick or the audit
+# forwarder. See docs/security/runtime-detection.md. The webhook ingress/egress
+# is already restricted by the NetworkPolicy objects (networkPolicy.enabled).
+runtimeDetection:
+  enabled: false
 
 # Audit Configuration
 audit:
@@ -757,7 +860,22 @@ audit:
         enabled: false
         host: "syslog.logging.svc.cluster.local"
         port: 514
+        # tcp | tls — use tls to ship to a SIEM over an encrypted syslog channel.
         mode: tcp
+      # Generic HTTP/OTLP SIEM endpoint over TLS (IRM-WU-13). The most portable
+      # SIEM target: POSTs each audit record as JSON to https://host:port/uri.
+      # tls=true enables TLS (recommended); caFile points Fluent Bit at the SIEM's
+      # CA bundle when it uses a private PKI. This is the path the SIEM-delivery
+      # integration test (internal/audit/siem_forward_test.go) exercises against a
+      # mock TLS receiver.
+      http:
+        enabled: false
+        host: "siem.logging.svc.cluster.local"
+        port: 443
+        uri: "/"
+        tls: true
+        # In-pod path of a mounted CA bundle for the SIEM's TLS cert (optional).
+        caFile: ""
 
     resources:
       requests:

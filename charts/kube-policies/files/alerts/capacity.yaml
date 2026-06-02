@@ -1,0 +1,44 @@
+# Capacity / backup-staleness alerts (RES-WU-11, NIST CP-9, SC-5, CP-10(2)).
+# Backup-staleness was deferred from P8 to P9 because it consumes the backup
+# CronJob's status.lastSuccessfulTime via kube-state-metrics
+# (kube_cronjob_status_last_successful_time), which is an external series.
+groups:
+  - name: kube-policies-capacity
+    rules:
+      # The CRD-backup CronJob (RES-WU-13, <release>-backup) has not completed a
+      # successful run within ~2 backup intervals. Default schedule is daily, so
+      # >26h since the last success is stale. RPO is at risk (CP-9).
+      - alert: KubePoliciesBackupStale
+        expr: (time() - max(kube_cronjob_status_last_successful_time{cronjob=~".*kube-policies.*-backup"})) > (26 * 3600)
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: "kube-policies CRD backup is stale"
+          description: "The CRD-backup CronJob has not completed successfully in over 26h ({{ $value | humanizeDuration }} ago). The recovery point objective is at risk. Check the CronJob, its RBAC, and the object-store credentials per the DR runbook."
+          runbook_url: "https://github.com/Jibbscript/kube-policies/blob/main/docs/runbooks/disaster-recovery.md"
+
+      # No successful backup series at all (CronJob never ran / KSM not scraping
+      # it). Distinct from "stale" so a never-backed-up cluster is not silent.
+      - alert: KubePoliciesBackupMissing
+        expr: absent(kube_cronjob_status_last_successful_time{cronjob=~".*kube-policies.*-backup"}) and on() (max(kube_cronjob_created{cronjob=~".*kube-policies.*-backup"}) > 0)
+        for: 6h
+        labels:
+          severity: warning
+        annotations:
+          summary: "kube-policies CRD backup has never succeeded"
+          description: "A kube-policies backup CronJob exists but has no recorded successful run for >6h. Verify the CronJob is enabled, scheduled, and authorized to write to the object store."
+          runbook_url: "https://github.com/Jibbscript/kube-policies/blob/main/docs/runbooks/disaster-recovery.md"
+
+      # Audit-log volume capacity (AU-4). When durable audit storage is a PVC,
+      # a near-full volume will start failing writes (write_error) and lose
+      # records. Early-warn at 85% used.
+      - alert: KubePoliciesAuditVolumeHigh
+        expr: (kubelet_volume_stats_used_bytes{persistentvolumeclaim=~".*kube-policies.*-audit"} / kubelet_volume_stats_capacity_bytes{persistentvolumeclaim=~".*kube-policies.*-audit"}) > 0.85
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "kube-policies audit volume {{ $labels.persistentvolumeclaim }} is nearly full"
+          description: "The audit PVC {{ $labels.persistentvolumeclaim }} is {{ $value | humanizePercentage }} full for >15m. A full volume fails audit writes and loses records (AU-4/AU-9). Expand the PVC or verify rotation/retention and the forwarder."
+          runbook_url: "https://github.com/Jibbscript/kube-policies/blob/main/docs/security/runbooks/audit-pipeline-loss.md"

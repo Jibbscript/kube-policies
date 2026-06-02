@@ -321,19 +321,69 @@ validate-rbac: ## Gate RBAC + ServiceAccount-token least-privilege (IAM-WU-17) v
 	fi
 	@echo "$(GREEN)RBAC/SA-token least-privilege gate passed (policy self-test green)$(NC)"
 
+CHART_ALERT_RULES := charts/kube-policies/files/alerts charts/kube-policies/files/slo
+STANDALONE_RULES := monitoring/prometheus/rules/kube-policies.rules.yml
+
+.PHONY: gen-monitoring-rules
+gen-monitoring-rules: ## Regenerate the standalone Prometheus rules file from the chart single source (IRM-WU-14)
+	@command -v yq >/dev/null 2>&1 || { echo "$(RED)yq not found — install yq (https://github.com/mikefarah/yq) and rerun$(NC)"; exit 127; }
+	@mkdir -p $(dir $(STANDALONE_RULES))
+	@{ \
+	  printf '%s\n' \
+	    '# GENERATED — DO NOT EDIT. Single source: charts/kube-policies/files/alerts/*.yaml' \
+	    '# + charts/kube-policies/files/slo/*.yaml. Regenerate with: make gen-monitoring-rules' \
+	    '# Standalone (bring-your-own Prometheus) mount of the same rules the chart ships' \
+	    '# as a PrometheusRule (IRM-WU-14 / RES-WU-10).'; \
+	  yq eval-all '[.] | {"groups": [.[].groups[]]}' \
+	    charts/kube-policies/files/alerts/*.yaml charts/kube-policies/files/slo/*.yaml; \
+	} > $(STANDALONE_RULES)
+	@echo "$(GREEN)Regenerated $(STANDALONE_RULES) from the chart single source$(NC)"
+
 .PHONY: validate-monitoring-rules
-validate-monitoring-rules: ## Validate Prometheus rules + run promtool unit tests (NET-WU-23)
-	@echo "$(BLUE)Validating Prometheus rules and running promtool unit tests (NET-WU-23)...$(NC)"
+validate-monitoring-rules: ## Validate alert rules (promtool check+test), metric-name drift, and standalone-rules freshness (NET-WU-23, IRM-WU-15)
+	@echo "$(BLUE)Validating Prometheus alert rules (IRM-WU-15)...$(NC)"
 	@command -v promtool >/dev/null 2>&1 || { echo "$(RED)promtool not found — install Prometheus (https://prometheus.io/download/) and rerun$(NC)"; exit 127; }
-	@rule_files="$$(find monitoring/prometheus/rules -name '*.yml' ! -name '*_test.yml' | sort)"; \
-	test -n "$$rule_files" || { echo "$(RED)no Prometheus rule files found$(NC)" >&2; exit 1; }; \
-	echo "==> promtool check rules"; \
+	@rule_files="$$(find $(CHART_ALERT_RULES) -name '*.yaml' | sort)"; \
+	test -n "$$rule_files" || { echo "$(RED)no chart rule files found under $(CHART_ALERT_RULES)$(NC)" >&2; exit 1; }; \
+	echo "==> promtool check rules (chart single source)"; \
 	promtool check rules $$rule_files
-	@test_files="$$(find monitoring/prometheus/rules -name '*_test.yml' | sort)"; \
-	test -n "$$test_files" || { echo "$(RED)no promtool unit-test files (*_test.yml) found$(NC)" >&2; exit 1; }; \
-	echo "==> promtool test rules"; \
+	@test_files="$$(find tests/monitoring -name '*_test.yaml' | sort)"; \
+	test -n "$$test_files" || { echo "$(RED)no promtool unit-test files (*_test.yaml) found under tests/monitoring$(NC)" >&2; exit 1; }; \
+	echo "==> promtool test rules (tests/monitoring)"; \
 	promtool test rules $$test_files
-	@echo "$(GREEN)Prometheus rule validation + unit tests passed$(NC)"
+	@echo "==> metric-name drift check (rules must reference only metrics collector.go emits)"; \
+	find $(CHART_ALERT_RULES) -name '*.yaml' -print0 | sort -z | xargs -0 ./scripts/validate/metric-name-drift.sh
+	@echo "==> Falco ruleset copies are in sync (chart vs canonical)"; \
+	diff -q monitoring/falco/kube-policies-rules.yaml charts/kube-policies/files/falco/kube-policies-rules.yaml \
+		|| { echo "$(RED)Falco rule copies diverged — sync monitoring/falco/ and charts/kube-policies/files/falco/$(NC)" >&2; exit 1; }
+	@echo "==> standalone rules freshness ($(STANDALONE_RULES) must match the chart source)"; \
+	git ls-files --error-unmatch $(STANDALONE_RULES) >/dev/null 2>&1 || { echo "$(RED)$(STANDALONE_RULES) is untracked — 'git add' it so the freshness gate is meaningful$(NC)" >&2; exit 1; }; \
+	$(MAKE) -s gen-monitoring-rules; \
+	git diff --exit-code -- $(STANDALONE_RULES) || { echo "$(RED)$(STANDALONE_RULES) is stale — run 'make gen-monitoring-rules' and commit$(NC)" >&2; exit 1; }
+	@echo "$(GREEN)Alert rule validation + unit tests + drift + Falco-sync + freshness passed$(NC)"
+
+.PHONY: validate-alertmanager-config
+validate-alertmanager-config: ## Validate rendered + standalone Alertmanager configs with amtool (IRM-WU-15/16)
+	@echo "$(BLUE)Validating Alertmanager configs (IRM-WU-15)...$(NC)"
+	@command -v amtool >/dev/null 2>&1 || { echo "$(RED)amtool not found — install Alertmanager (https://prometheus.io/download/) and rerun$(NC)"; exit 127; }
+	@command -v helm >/dev/null 2>&1 || { echo "$(RED)helm not found$(NC)"; exit 127; }
+	@echo "==> amtool check-config (standalone)"; \
+	amtool check-config monitoring/alertmanager/alertmanager.yaml
+	@echo "==> amtool check-config (chart-rendered, all receivers)"; \
+	tmp="$$(mktemp)"; \
+	helm template kp $(CHARTS_DIR)/kube-policies \
+	  --set monitoring.alertmanager.config.enabled=true \
+	  --set monitoring.alertmanager.config.existingSecret=am-secrets \
+	  --set monitoring.alertmanager.config.receivers.pagerduty.enabled=true \
+	  --set monitoring.alertmanager.config.receivers.slack.enabled=true \
+	  --set monitoring.alertmanager.config.receivers.email.enabled=true \
+	  --set monitoring.alertmanager.config.receivers.email.to=secops@example.com \
+	  --set monitoring.alertmanager.config.receivers.email.smarthost=smtp.example.com:587 \
+	  --set monitoring.alertmanager.config.heartbeat.enabled=true \
+	  --show-only templates/alertmanager-config.yaml \
+	  | yq ea 'select(.kind=="Secret") | .stringData."alertmanager.yml"' > "$$tmp"; \
+	amtool check-config "$$tmp"; rm -f "$$tmp"
+	@echo "$(GREEN)Alertmanager config validation passed$(NC)"
 
 .PHONY: validate-compliance
 validate-compliance: ## Validate compliance artifacts (control matrix, POA&M, inventory, doc links) offline

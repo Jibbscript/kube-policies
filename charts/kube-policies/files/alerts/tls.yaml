@@ -1,0 +1,42 @@
+# TLS certificate-expiry alerts (IRM-WU-09 / CRY-WU-12, NIST SC-12 / SC-17 / SI-4 / IR-5).
+#
+# Metric: kube_policies_tls_cert_expiry_seconds{component} — the served cert's
+# NotAfter as Unix seconds, set per component on every TLS hot reload
+# (internal/metrics/collector.go SetCertExpiry; wired in cmd/admission-webhook
+# and cmd/policy-manager). IRM-WU-09 reuses this existing, already-tested gauge
+# rather than introducing a duplicate metric, and adds the <30d warning tier on
+# top of the prior <7d/expired alerts.
+groups:
+  - name: kube-policies-tls
+    rules:
+      - alert: KubePoliciesCertExpiringSoon
+        # < 30 days of validity left (IRM-WU-09 warning tier).
+        expr: (kube_policies_tls_cert_expiry_seconds - time()) < (30 * 24 * 3600)
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "kube-policies {{ $labels.component }} TLS certificate expires in under 30 days"
+          description: "The serving certificate for {{ $labels.component }} has under 30 days of validity. Rotate it (cert-manager renews automatically; for the demo/self-signed path, regenerate the Secret)."
+          runbook_url: "https://github.com/Jibbscript/kube-policies/blob/main/docs/security/runbooks/cert-expiry.md"
+
+      - alert: KubePoliciesCertExpiringCritical
+        # < 7 days of validity left (IRM-WU-09 critical tier).
+        expr: (kube_policies_tls_cert_expiry_seconds - time()) < (7 * 24 * 3600)
+        for: 15m
+        labels:
+          severity: critical
+        annotations:
+          summary: "kube-policies {{ $labels.component }} TLS certificate expires in under 7 days"
+          description: "The serving certificate for {{ $labels.component }} has under 7 days of validity. An expired caBundle silently breaks all admissions under failurePolicy=Fail — rotate now."
+          runbook_url: "https://github.com/Jibbscript/kube-policies/blob/main/docs/security/runbooks/cert-expiry.md"
+
+      - alert: KubePoliciesCertExpired
+        expr: (kube_policies_tls_cert_expiry_seconds - time()) <= 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "kube-policies {{ $labels.component }} TLS certificate has EXPIRED"
+          description: "The serving certificate for {{ $labels.component }} is expired; TLS handshakes (and, for the webhook, admission) will fail. Rotate immediately."
+          runbook_url: "https://github.com/Jibbscript/kube-policies/blob/main/docs/security/runbooks/cert-expiry.md"

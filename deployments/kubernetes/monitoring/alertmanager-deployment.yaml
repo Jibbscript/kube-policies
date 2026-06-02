@@ -4,22 +4,71 @@ metadata:
   name: alertmanager-config
   namespace: kube-policies-monitoring
 data:
+  # IRM-WU-16: severity-based routing with inhibition + a dead-man's-switch
+  # heartbeat split-off. The dummy http://127.0.0.1:5001/ receiver is gone.
+  # Receivers are name-only; wire real paging/chat creds from a Secret (use the
+  # Helm chart's monitoring.alertmanager.config.* which references them via
+  # *_file). Keep in sync with monitoring/alertmanager/alertmanager.yaml.
   alertmanager.yml: |
     global:
       resolve_timeout: 5m
-      
+
     route:
-      group_by: ['alertname', 'cluster', 'service']
-      group_wait: 10s
-      group_interval: 10s
-      repeat_interval: 1h
-      receiver: default-webhook
+      group_by: ['alertname', 'component']
+      group_wait: 30s
+      group_interval: 5m
+      repeat_interval: 4h
+      receiver: kube-policies-default
+      routes:
+        - matchers:
+            - alertname="KubePoliciesWatchdog"
+          receiver: kube-policies-heartbeat
+          group_wait: 0s
+          group_interval: 1m
+          repeat_interval: 1m
+          continue: false
+        - matchers:
+            - severity="critical"
+          receiver: kube-policies-critical
+          continue: true
+        - matchers:
+            - severity="warning"
+          receiver: kube-policies-warning
+
+    inhibit_rules:
+      - source_matchers:
+          - alertname="KubePoliciesDown"
+        target_matchers:
+          - severity="warning"
+        equal: ['component']
+      - source_matchers:
+          - severity="critical"
+        target_matchers:
+          - severity="warning"
+        equal: ['component']
 
     receivers:
-    - name: default-webhook
-      webhook_configs:
-      - url: "http://127.0.0.1:5001/"
-        send_resolved: true
+      - name: kube-policies-default
+      - name: kube-policies-critical
+      - name: kube-policies-warning
+      - name: kube-policies-heartbeat
+---
+# IRM-WU-22: durable Alertmanager storage. Silences + notification log persist
+# across pod restarts (was emptyDir). ReadWriteOnce is safe for this
+# single-replica Deployment.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: alertmanager-storage
+  namespace: kube-policies-monitoring
+  labels:
+    app: alertmanager
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -109,12 +158,15 @@ spec:
       - name: config-volume
         configMap:
           name: alertmanager-config
-      # DEMO/Kind-grade storage only. Alertmanager's storage path and /tmp use
-      # ephemeral emptyDir volumes — silences/notification state are lost on
-      # pod restart. A production deployment must replace storage-volume with a
-      # PersistentVolumeClaim.
+      # IRM-WU-22: durable storage so silences + the notification log survive a
+      # pod restart (replaces the former emptyDir). /tmp stays ephemeral scratch.
+      # NOTE: this standalone Deployment is single-replica; for true HA gossip
+      # delivery use the chart's Alertmanager StatefulSet
+      # (monitoring.alertmanager.ha.enabled) which runs >=2 replicas each with
+      # its own PVC.
       - name: storage-volume
-        emptyDir: {}
+        persistentVolumeClaim:
+          claimName: alertmanager-storage
       - name: tmp-volume
         emptyDir: {}
 ---

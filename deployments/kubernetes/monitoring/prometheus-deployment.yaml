@@ -186,78 +186,23 @@ kind: ConfigMap
 metadata:
   name: prometheus-rules
   namespace: kube-policies-monitoring
+# IRM-WU-14: alert rules are NO LONGER embedded here. They previously duplicated
+# (and drifted from) the canonical rules. The SINGLE SOURCE OF TRUTH is
+# charts/kube-policies/files/alerts/*.yaml (+ files/slo/*.yaml), rendered into
+# the chart PrometheusRule and concatenated into
+# monitoring/prometheus/rules/kube-policies.rules.yml by `make gen-monitoring-rules`.
+# For this standalone (bring-your-own Prometheus) demo, regenerate and load the
+# rules into THIS ConfigMap instead of hand-editing them here:
+#
+#   make gen-monitoring-rules
+#   kubectl create configmap prometheus-rules -n kube-policies-monitoring \
+#     --from-file=monitoring/prometheus/rules/kube-policies.rules.yml \
+#     --dry-run=client -o yaml | kubectl apply -f -
+#
+# The empty placeholder below keeps the mount valid until you do so.
 data:
-  kube-policies.yml: |
-    groups:
-    - name: kube-policies.rules
-      rules:
-      - alert: KubePoliciesHighLatency
-        expr: histogram_quantile(0.95, sum(rate(kube_policies_admission_evaluation_duration_seconds_bucket[5m])) by (le)) > 0.1
-        for: 2m
-        labels:
-          severity: warning
-        annotations:
-          summary: "Kube-Policies admission webhook high latency"
-          description: "95th percentile latency is {{ $value }}s for the last 5 minutes."
-
-      - alert: KubePoliciesHighErrorRate
-        expr: sum(rate(kube_policies_admission_requests_total{status="error"}[5m])) / sum(rate(kube_policies_admission_requests_total[5m])) > 0.05
-        for: 2m
-        labels:
-          severity: critical
-        annotations:
-          summary: "Kube-Policies high error rate"
-          description: "Error rate is {{ $value | humanizePercentage }} for the last 5 minutes."
-
-      - alert: KubePoliciesDown
-        expr: up{job="kube-policies-admission-webhook"} == 0
-        for: 1m
-        labels:
-          severity: critical
-        annotations:
-          summary: "Kube-Policies admission webhook is down"
-          description: "Kube-Policies admission webhook has been down for more than 1 minute."
-
-      - alert: KubePoliciesHighDenyRate
-        expr: sum(rate(kube_policies_admission_requests_total{status="denied"}[5m])) > 10
-        for: 5m
-        labels:
-          severity: warning
-        annotations:
-          summary: "High admission deny rate"
-          description: "{{ $value }} denied admission requests per second for the last 5 minutes."
-
-      - alert: KubePoliciesMemoryUsage
-        expr: container_memory_usage_bytes{pod=~"kube-policies-.*"} / container_spec_memory_limit_bytes{pod=~"kube-policies-.*"} > 0.8
-        for: 5m
-        labels:
-          severity: warning
-        annotations:
-          summary: "Kube-Policies high memory usage"
-          description: "{{ $labels.pod }} memory usage is {{ $value | humanizePercentage }} of limit."
-    # TLS certificate-expiry alerts (CRY-WU-12). Keep in sync with the
-    # canonical source monitoring/prometheus/rules/kube-policies-tls.yml
-    # (which has a promtool unit test).
-    - name: kube-policies-tls
-      rules:
-      - alert: KubePoliciesCertExpiringSoon
-        expr: (kube_policies_tls_cert_expiry_seconds - time()) < (7 * 24 * 3600)
-        for: 15m
-        labels:
-          severity: warning
-        annotations:
-          summary: "kube-policies {{ $labels.component }} TLS certificate expires in under 7 days"
-          description: "Rotate the serving certificate for {{ $labels.component }} (cert-manager renews automatically; regenerate the Secret for the demo/self-signed path)."
-          runbook_url: "https://github.com/Jibbscript/kube-policies/blob/main/docs/runbooks/cert-rotation.md"
-      - alert: KubePoliciesCertExpired
-        expr: (kube_policies_tls_cert_expiry_seconds - time()) <= 0
-        for: 1m
-        labels:
-          severity: critical
-        annotations:
-          summary: "kube-policies {{ $labels.component }} TLS certificate has EXPIRED"
-          description: "The serving certificate for {{ $labels.component }} is expired; TLS handshakes (and, for the webhook, admission) will fail. Rotate immediately."
-          runbook_url: "https://github.com/Jibbscript/kube-policies/blob/main/docs/runbooks/cert-rotation.md"
+  kube-policies.rules.yml: |
+    groups: []
 ---
 apiVersion: apps/v1
 kind: Deployment

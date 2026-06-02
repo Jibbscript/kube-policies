@@ -1,0 +1,125 @@
+# promtool unit tests for the kube-policies-security alert group (IRM-WU-08/10/11,
+# AUD-WU-15). Rule file is the chart single source. Run from repo root:
+#   promtool test rules tests/monitoring/security_test.yaml
+rule_files:
+  - ../../charts/kube-policies/files/alerts/security.yaml
+
+evaluation_interval: 1m
+
+tests:
+  # --- KubePoliciesFailOpenActive (IRM-WU-08) -----------------------------
+  # The fail-open counter increasing => the webhook admitted unevaluated
+  # requests. increase()[5m] > 0 must fire critical.
+  - interval: 1m
+    input_series:
+      - series: 'kube_policies_admission_fail_open_total{operation="mutate"}'
+        values: '0+1x10'
+    alert_rule_test:
+      - eval_time: 8m
+        alertname: KubePoliciesFailOpenActive
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              operation: mutate
+            exp_annotations:
+              description: "The webhook admitted 5 request(s) in the last 5m WITHOUT successful policy evaluation (mutate fail-open). Workloads are being admitted unchecked. Investigate engine errors (kube_policies_system_errors_total) and contain per the fail-open runbook."
+              runbook_url: "https://github.com/Jibbscript/kube-policies/blob/main/docs/security/runbooks/fail-open-event.md"
+              summary: "kube-policies is FAILING OPEN (mutate) — controls bypassed"
+
+  # Negative control: a flat counter (no new fail-opens) must NOT fire.
+  - interval: 1m
+    input_series:
+      - series: 'kube_policies_admission_fail_open_total{operation="mutate"}'
+        values: '5 5 5 5 5 5 5 5 5 5'
+    alert_rule_test:
+      - eval_time: 8m
+        alertname: KubePoliciesFailOpenActive
+        exp_alerts: []
+
+  # --- KubePoliciesAuditEventsDropped (IRM-WU-10 / AUD-WU-15) --------------
+  - interval: 1m
+    input_series:
+      - series: 'kube_policies_audit_events_total{event_type="PolicyDecision",status="dropped"}'
+        values: '0+5x10'
+    alert_rule_test:
+      - eval_time: 8m
+        alertname: KubePoliciesAuditEventsDropped
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              event_type: PolicyDecision
+              status: dropped
+            exp_annotations:
+              description: "Audit events of type PolicyDecision are being dropped (0.08/s) — the buffer saturated under the 'drop' overflow policy. Accountability records are being lost (AU-9). Increase audit.bufferSize or set overflowPolicy=block, and check forwarder/consumer health."
+              runbook_url: "https://github.com/Jibbscript/kube-policies/blob/main/docs/security/runbooks/audit-pipeline-loss.md"
+              summary: "kube-policies is dropping audit events (PolicyDecision)"
+
+  # --- KubePoliciesAuditWriteErrors (AUD-WU-15) ---------------------------
+  - interval: 1m
+    input_series:
+      - series: 'kube_policies_audit_events_total{event_type="PolicyDecision",status="write_error"}'
+        values: '0+3x10'
+    alert_rule_test:
+      - eval_time: 8m
+        alertname: KubePoliciesAuditWriteErrors
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              event_type: PolicyDecision
+              status: write_error
+            exp_annotations:
+              description: "The audit backend is failing to persist records (0.05 write_error/s, type PolicyDecision). Records may be lost (AU-9). Check disk/PVC capacity, the file backend, and the integrity hash-chain."
+              runbook_url: "https://github.com/Jibbscript/kube-policies/blob/main/docs/security/runbooks/audit-pipeline-loss.md"
+              summary: "kube-policies audit backend write errors (PolicyDecision)"
+
+  # --- KubePoliciesAuditBufferSaturated (IRM-WU-10) -----------------------
+  # Buffer held at 900 (> 800 threshold) for > 10m must fire warning.
+  - interval: 1m
+    input_series:
+      - series: 'kube_policies_audit_buffer_size'
+        values: '900x15'
+    alert_rule_test:
+      - eval_time: 12m
+        alertname: KubePoliciesAuditBufferSaturated
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              description: "The audit buffer has held above 800 entries for >10m (default capacity 1000). The consumer/forwarder is not keeping up; drops are imminent. Increase audit.bufferSize or speed up the backend before records are lost."
+              runbook_url: "https://github.com/Jibbscript/kube-policies/blob/main/docs/security/runbooks/audit-pipeline-loss.md"
+              summary: "kube-policies audit buffer is near capacity"
+
+  # --- KubePoliciesPolicyUpdateFailures (IRM-WU-11) -----------------------
+  - interval: 1m
+    input_series:
+      - series: 'kube_policies_policy_updates_total{operation="reconcile",status="error"}'
+        values: '0+2x12'
+    alert_rule_test:
+      - eval_time: 8m
+        alertname: KubePoliciesPolicyUpdateFailures
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              operation: reconcile
+              status: error
+            exp_annotations:
+              description: "Policy update operation reconcile has been failing (0.03/s) for >5m. New or changed Policy/PolicyException objects may not be reflected in enforcement; the webhook serves its last-good bundle. Check policy-manager logs and CRD validity."
+              runbook_url: "https://github.com/Jibbscript/kube-policies/blob/main/docs/security/runbooks/high-error-rate.md"
+              summary: "kube-policies policy/CRD updates are failing (reconcile)"
+
+  # --- KubePoliciesExceptionSuppressionSpike (IRM-WU-11) ------------------
+  # 120 suppressions/min = 2/s (> 1/s threshold) sustained > 15m must fire.
+  - interval: 1m
+    input_series:
+      - series: 'kube_policies_policy_exception_suppressions_total{policy_id="p1",rule_id="r1"}'
+        values: '0+120x20'
+    alert_rule_test:
+      - eval_time: 18m
+        alertname: KubePoliciesExceptionSuppressionSpike
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              description: "Policy violations are being suppressed by PolicyExceptions at 2.00/s, sustained for >15m. A broad or abused exception may be silently disabling enforcement. Review recently added/modified PolicyExceptions and their scope. Threshold (1/s, 15m) is well above normal scoped-exception traffic."
+              runbook_url: "https://github.com/Jibbscript/kube-policies/blob/main/docs/security/runbooks/deny-rate-spike.md"
+              summary: "kube-policies exception-suppression rate is anomalously high"

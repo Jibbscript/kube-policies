@@ -1,0 +1,383 @@
+# GENERATED — DO NOT EDIT. Single source: charts/kube-policies/files/alerts/*.yaml
+# + charts/kube-policies/files/slo/*.yaml. Regenerate with: make gen-monitoring-rules
+# Standalone (bring-your-own Prometheus) mount of the same rules the chart ships
+# as a PrometheusRule (IRM-WU-14 / RES-WU-10).
+groups:
+  - name: kube-policies-availability
+    rules:
+      - alert: KubePoliciesDown
+        expr: up{job="kube-policies-admission-webhook"} == 0
+        for: 1m
+        labels:
+          severity: critical
+          component: admission-webhook
+        annotations:
+          summary: "kube-policies admission webhook is down"
+          description: "The admission webhook (job kube-policies-admission-webhook) has been unscrapeable (up==0) for >1m. Depending on the ValidatingWebhookConfiguration failurePolicy this blocks or bypasses admission cluster-wide."
+          runbook_url: "https://github.com/Jibbscript/kube-policies/blob/main/docs/security/runbooks/webhook-outage.md"
+      - alert: KubePoliciesPolicyManagerDown
+        expr: up{job="kube-policies-policy-manager"} == 0
+        for: 1m
+        labels:
+          severity: critical
+          component: policy-manager
+        annotations:
+          summary: "kube-policies policy-manager is down"
+          description: "The policy-manager (job kube-policies-policy-manager) has been unscrapeable (up==0) for >1m. Policy/PolicyException reconciliation and the policy API are unavailable; the webhook keeps serving its last-loaded bundle."
+          runbook_url: "https://github.com/Jibbscript/kube-policies/blob/main/docs/security/runbooks/webhook-outage.md"
+      - alert: KubePoliciesHighErrorRate
+        expr: sum(rate(kube_policies_admission_requests_total{status="error"}[5m])) / sum(rate(kube_policies_admission_requests_total[5m])) > 0.05
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "kube-policies high admission error rate"
+          description: "More than 5% of admission requests are erroring over the last 5m ({{ $value | humanizePercentage }}). Decode/nil-request/evaluation/patch-marshal errors degrade enforcement; on the mutate path errors fail open."
+          runbook_url: "https://github.com/Jibbscript/kube-policies/blob/main/docs/security/runbooks/high-error-rate.md"
+      - alert: KubePoliciesHighLatency
+        expr: histogram_quantile(0.95, sum(rate(kube_policies_admission_evaluation_duration_seconds_bucket[5m])) by (le)) > 0.1
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "kube-policies admission webhook high latency"
+          description: "p95 admission evaluation latency is {{ $value }}s over the last 5m (threshold 0.1s). Sustained latency risks apiserver webhook timeouts."
+          runbook_url: "https://github.com/Jibbscript/kube-policies/blob/main/docs/security/runbooks/high-error-rate.md"
+      - alert: KubePoliciesHighDenyRate
+        expr: sum(rate(kube_policies_admission_requests_total{status="denied"}[5m])) > 10
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "kube-policies high admission deny rate"
+          description: "{{ $value }} denied admission requests/s over the last 5m. Could be a new/overbroad policy rollout, a misconfigured workload fleet, or an attack — triage before relaxing policy."
+          runbook_url: "https://github.com/Jibbscript/kube-policies/blob/main/docs/security/runbooks/deny-rate-spike.md"
+      - alert: KubePoliciesMemoryUsage
+        expr: container_memory_usage_bytes{pod=~".*kube-policies.*"} / container_spec_memory_limit_bytes{pod=~".*kube-policies.*"} > 0.8
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "kube-policies high memory usage"
+          description: "{{ $labels.pod }} memory usage is {{ $value | humanizePercentage }} of its limit for >5m. Risk of OOMKill and a fail-closed gatekeeper restart."
+          runbook_url: "https://github.com/Jibbscript/kube-policies/blob/main/docs/security/runbooks/webhook-outage.md"
+      - alert: KubePoliciesReplicaShortfall
+        # Fewer ready replicas than desired for either control-plane Deployment.
+        # Reduced redundancy for the fail-closed gatekeeper (RES-WU-10).
+        expr: (kube_deployment_status_replicas_available{deployment=~".*kube-policies.*"} < kube_deployment_spec_replicas{deployment=~".*kube-policies.*"})
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "kube-policies {{ $labels.deployment }} has fewer ready replicas than desired"
+          description: "{{ $labels.deployment }} has {{ $value }} available replicas, below its desired count, for >10m. HA redundancy is degraded; a single further failure could take the component down."
+          runbook_url: "https://github.com/Jibbscript/kube-policies/blob/main/docs/security/runbooks/webhook-outage.md"
+      - alert: KubePoliciesPodDisruptionBudgetAtLimit
+        # PDB allows zero further voluntary disruptions: the component is at its
+        # minimum and a drain/upgrade is (correctly) being blocked, but it also
+        # means there is no headroom (RES-WU-10).
+        expr: kube_poddisruptionbudget_status_pod_disruptions_allowed{poddisruptionbudget=~".*kube-policies.*"} == 0
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "kube-policies PDB {{ $labels.poddisruptionbudget }} allows no disruptions"
+          description: "PDB {{ $labels.poddisruptionbudget }} has allowed-disruptions=0 for >15m: the component is at its minimum healthy count with no headroom for voluntary disruption. Investigate unhealthy/pending replicas."
+          runbook_url: "https://github.com/Jibbscript/kube-policies/blob/main/docs/security/runbooks/webhook-outage.md"
+      - alert: KubePoliciesWebhookNotReady
+        # A scheduled webhook pod that is failing its TLS-aware /readyz probe
+        # (RES-WU-06) so it is pulled from Service endpoints (RES-WU-10).
+        expr: kube_pod_container_status_ready{pod=~".*admission-webhook-.*",container="admission-webhook"} == 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "kube-policies admission-webhook pod {{ $labels.pod }} is not ready"
+          description: "Webhook pod {{ $labels.pod }} has failed its readiness probe for >5m and is out of Service endpoints. Reduced webhook capacity; check TLS load (/readyz), recent rollouts, and pod logs."
+          runbook_url: "https://github.com/Jibbscript/kube-policies/blob/main/docs/security/runbooks/webhook-outage.md"
+  - name: kube-policies-capacity
+    rules:
+      # The CRD-backup CronJob (RES-WU-13, <release>-backup) has not completed a
+      # successful run within ~2 backup intervals. Default schedule is daily, so
+      # >26h since the last success is stale. RPO is at risk (CP-9).
+      - alert: KubePoliciesBackupStale
+        expr: (time() - max(kube_cronjob_status_last_successful_time{cronjob=~".*kube-policies.*-backup"})) > (26 * 3600)
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: "kube-policies CRD backup is stale"
+          description: "The CRD-backup CronJob has not completed successfully in over 26h ({{ $value | humanizeDuration }} ago). The recovery point objective is at risk. Check the CronJob, its RBAC, and the object-store credentials per the DR runbook."
+          runbook_url: "https://github.com/Jibbscript/kube-policies/blob/main/docs/runbooks/disaster-recovery.md"
+      # No successful backup series at all (CronJob never ran / KSM not scraping
+      # it). Distinct from "stale" so a never-backed-up cluster is not silent.
+      - alert: KubePoliciesBackupMissing
+        expr: absent(kube_cronjob_status_last_successful_time{cronjob=~".*kube-policies.*-backup"}) and on() (max(kube_cronjob_created{cronjob=~".*kube-policies.*-backup"}) > 0)
+        for: 6h
+        labels:
+          severity: warning
+        annotations:
+          summary: "kube-policies CRD backup has never succeeded"
+          description: "A kube-policies backup CronJob exists but has no recorded successful run for >6h. Verify the CronJob is enabled, scheduled, and authorized to write to the object store."
+          runbook_url: "https://github.com/Jibbscript/kube-policies/blob/main/docs/runbooks/disaster-recovery.md"
+      # Audit-log volume capacity (AU-4). When durable audit storage is a PVC,
+      # a near-full volume will start failing writes (write_error) and lose
+      # records. Early-warn at 85% used.
+      - alert: KubePoliciesAuditVolumeHigh
+        expr: (kubelet_volume_stats_used_bytes{persistentvolumeclaim=~".*kube-policies.*-audit"} / kubelet_volume_stats_capacity_bytes{persistentvolumeclaim=~".*kube-policies.*-audit"}) > 0.85
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "kube-policies audit volume {{ $labels.persistentvolumeclaim }} is nearly full"
+          description: "The audit PVC {{ $labels.persistentvolumeclaim }} is {{ $value | humanizePercentage }} full for >15m. A full volume fails audit writes and loses records (AU-4/AU-9). Expand the PVC or verify rotation/retention and the forwarder."
+          runbook_url: "https://github.com/Jibbscript/kube-policies/blob/main/docs/security/runbooks/audit-pipeline-loss.md"
+  - name: kube-policies-dos
+    rules:
+      # Sustained admission-request flood. Threshold: > 200 req/s per replica
+      # held for 10m. `for: 10m` rides out CI-deploy and rollout bursts so we
+      # alert on sustained load, not spikes.
+      - alert: KubePoliciesHighAdmissionRequestRate
+        expr: sum by (instance) (rate(kube_policies_admission_requests_total[5m])) > 200
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "kube-policies admission request rate is sustained-high on {{ $labels.instance }}"
+          description: "Admission request rate on {{ $labels.instance }} has held above 200 req/s for 10m ({{ printf \"%.0f\" $value }} req/s). Possible client loop or DoS flood; check the offending source and consider rate-limit tuning (security.ratelimit.*)."
+          runbook_url: "https://github.com/Jibbscript/kube-policies/blob/main/docs/security/runbooks/dos-response.md"
+      # Rate-limiter is actively shedding load. ANY sustained throttling means
+      # clients are exceeding the configured limits (NET-WU-15).
+      - alert: KubePoliciesRateLimitSurge
+        expr: sum by (instance, reason) (rate(kube_policies_http_rate_limited_total[5m])) > 1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "kube-policies is throttling clients (reason={{ $labels.reason }}) on {{ $labels.instance }}"
+          description: "The rate limiter on {{ $labels.instance }} has rejected > 1 req/s for reason '{{ $labels.reason }}' over 5m ({{ printf \"%.1f\" $value }} rejections/s). Clients are exceeding limits — possible flood. Identify the source before relaxing security.ratelimit.* limits."
+          runbook_url: "https://github.com/Jibbscript/kube-policies/blob/main/docs/security/runbooks/dos-response.md"
+      # p95 admission evaluation latency approaching the 10s webhook timeout.
+      - alert: KubePoliciesAdmissionLatencyHigh
+        expr: histogram_quantile(0.95, sum by (le) (rate(kube_policies_admission_evaluation_duration_seconds_bucket[5m]))) > 5
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "kube-policies admission p95 latency is high (> 5s)"
+          description: "p95 admission evaluation latency is {{ printf \"%.2f\" $value }}s, over half the 10s webhook timeout. Sustained load or slow policy evaluation; investigate before requests start timing out."
+          runbook_url: "https://github.com/Jibbscript/kube-policies/blob/main/docs/security/runbooks/dos-response.md"
+      - alert: KubePoliciesAdmissionLatencyCritical
+        expr: histogram_quantile(0.95, sum by (le) (rate(kube_policies_admission_evaluation_duration_seconds_bucket[5m]))) > 8
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "kube-policies admission p95 latency is CRITICAL (> 8s, near 10s timeout)"
+          description: "p95 admission evaluation latency is {{ printf \"%.2f\" $value }}s, at 80% of the 10s webhook timeout. Requests are about to time out (fail-open admits unchecked / fail-closed blocks apply). Mitigate load immediately."
+          runbook_url: "https://github.com/Jibbscript/kube-policies/blob/main/docs/security/runbooks/dos-response.md"
+      # Decision-publish buffer is dropping events. ANY nonzero drop rate alerts.
+      - alert: KubePoliciesDecisionPublishDrops
+        expr: sum by (instance) (rate(kube_policies_webhook_decision_publish_dropped_total[5m])) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "kube-policies is dropping admission-decision publishes on {{ $labels.instance }}"
+          description: "The decision-publish buffer on {{ $labels.instance }} is dropping events ({{ printf \"%.2f\" $value }} drops/s) — buffer saturation under load. Audit decisions are being lost; check decisions-channel health and consumer throughput."
+          runbook_url: "https://github.com/Jibbscript/kube-policies/blob/main/docs/security/runbooks/audit-pipeline-loss.md"
+  - name: kube-policies-security
+    rules:
+      # IRM-WU-08: the webhook admitted a request it could NOT evaluate (engine
+      # error on the fail-open mutate path). Each event is a control bypass, so
+      # ANY increase is critical and pages immediately.
+      - alert: KubePoliciesFailOpenActive
+        expr: increase(kube_policies_admission_fail_open_total[5m]) > 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "kube-policies is FAILING OPEN ({{ $labels.operation }}) — controls bypassed"
+          description: "The webhook admitted {{ printf \"%.0f\" $value }} request(s) in the last 5m WITHOUT successful policy evaluation ({{ $labels.operation }} fail-open). Workloads are being admitted unchecked. Investigate engine errors (kube_policies_system_errors_total) and contain per the fail-open runbook."
+          runbook_url: "https://github.com/Jibbscript/kube-policies/blob/main/docs/security/runbooks/fail-open-event.md"
+      # IRM-WU-10 / AUD-WU-15: audit records were dropped from the buffer (AU-9
+      # loss of accountability records). ANY drop is critical.
+      - alert: KubePoliciesAuditEventsDropped
+        expr: rate(kube_policies_audit_events_total{status="dropped"}[5m]) > 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "kube-policies is dropping audit events ({{ $labels.event_type }})"
+          description: "Audit events of type {{ $labels.event_type }} are being dropped ({{ printf \"%.2f\" $value }}/s) — the buffer saturated under the 'drop' overflow policy. Accountability records are being lost (AU-9). Increase audit.bufferSize or set overflowPolicy=block, and check forwarder/consumer health."
+          runbook_url: "https://github.com/Jibbscript/kube-policies/blob/main/docs/security/runbooks/audit-pipeline-loss.md"
+      # AUD-WU-15: the audit file backend failed to write/seal a record.
+      - alert: KubePoliciesAuditWriteErrors
+        expr: rate(kube_policies_audit_events_total{status="write_error"}[5m]) > 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "kube-policies audit backend write errors ({{ $labels.event_type }})"
+          description: "The audit backend is failing to persist records ({{ printf \"%.2f\" $value }} write_error/s, type {{ $labels.event_type }}). Records may be lost (AU-9). Check disk/PVC capacity, the file backend, and the integrity hash-chain."
+          runbook_url: "https://github.com/Jibbscript/kube-policies/blob/main/docs/security/runbooks/audit-pipeline-loss.md"
+      # IRM-WU-10 / AUD-WU-15: buffer sustained near capacity is the early-warning
+      # before drops begin. bufferSize default is 1000 (values.yaml audit.bufferSize).
+      - alert: KubePoliciesAuditBufferSaturated
+        expr: kube_policies_audit_buffer_size > 800
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "kube-policies audit buffer is near capacity"
+          description: "The audit buffer has held above 800 entries for >10m (default capacity 1000). The consumer/forwarder is not keeping up; drops are imminent. Increase audit.bufferSize or speed up the backend before records are lost."
+          runbook_url: "https://github.com/Jibbscript/kube-policies/blob/main/docs/security/runbooks/audit-pipeline-loss.md"
+      # IRM-WU-11: CRD reconciliation / policy-update failures. The policy-manager
+      # could not apply a Policy/PolicyException change; the served bundle may be
+      # stale. Rationale: status="error" should be ~0 in steady state.
+      - alert: KubePoliciesPolicyUpdateFailures
+        expr: rate(kube_policies_policy_updates_total{status="error"}[5m]) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "kube-policies policy/CRD updates are failing ({{ $labels.operation }})"
+          description: "Policy update operation {{ $labels.operation }} has been failing ({{ printf \"%.2f\" $value }}/s) for >5m. New or changed Policy/PolicyException objects may not be reflected in enforcement; the webhook serves its last-good bundle. Check policy-manager logs and CRD validity."
+          runbook_url: "https://github.com/Jibbscript/kube-policies/blob/main/docs/security/runbooks/high-error-rate.md"
+      # IRM-WU-11: mass exception suppression. A sustained, anomalous rate of
+      # policy-violation suppressions can indicate an over-broad or malicious
+      # PolicyException silently disabling enforcement (AC-6 least privilege).
+      # Threshold: > 1 suppression/s sustained for 15m — well above the
+      # occasional, scoped exception expected in normal operation. Tune
+      # security.alerting thresholds per environment baseline.
+      - alert: KubePoliciesExceptionSuppressionSpike
+        expr: sum(rate(kube_policies_policy_exception_suppressions_total[5m])) > 1
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "kube-policies exception-suppression rate is anomalously high"
+          description: "Policy violations are being suppressed by PolicyExceptions at {{ printf \"%.2f\" $value }}/s, sustained for >15m. A broad or abused exception may be silently disabling enforcement. Review recently added/modified PolicyExceptions and their scope. Threshold (1/s, 15m) is well above normal scoped-exception traffic."
+          runbook_url: "https://github.com/Jibbscript/kube-policies/blob/main/docs/security/runbooks/deny-rate-spike.md"
+  - name: kube-policies-tls
+    rules:
+      - alert: KubePoliciesCertExpiringSoon
+        # < 30 days of validity left (IRM-WU-09 warning tier).
+        expr: (kube_policies_tls_cert_expiry_seconds - time()) < (30 * 24 * 3600)
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "kube-policies {{ $labels.component }} TLS certificate expires in under 30 days"
+          description: "The serving certificate for {{ $labels.component }} has under 30 days of validity. Rotate it (cert-manager renews automatically; for the demo/self-signed path, regenerate the Secret)."
+          runbook_url: "https://github.com/Jibbscript/kube-policies/blob/main/docs/security/runbooks/cert-expiry.md"
+      - alert: KubePoliciesCertExpiringCritical
+        # < 7 days of validity left (IRM-WU-09 critical tier).
+        expr: (kube_policies_tls_cert_expiry_seconds - time()) < (7 * 24 * 3600)
+        for: 15m
+        labels:
+          severity: critical
+        annotations:
+          summary: "kube-policies {{ $labels.component }} TLS certificate expires in under 7 days"
+          description: "The serving certificate for {{ $labels.component }} has under 7 days of validity. An expired caBundle silently breaks all admissions under failurePolicy=Fail — rotate now."
+          runbook_url: "https://github.com/Jibbscript/kube-policies/blob/main/docs/security/runbooks/cert-expiry.md"
+      - alert: KubePoliciesCertExpired
+        expr: (kube_policies_tls_cert_expiry_seconds - time()) <= 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "kube-policies {{ $labels.component }} TLS certificate has EXPIRED"
+          description: "The serving certificate for {{ $labels.component }} is expired; TLS handshakes (and, for the webhook, admission) will fail. Rotate immediately."
+          runbook_url: "https://github.com/Jibbscript/kube-policies/blob/main/docs/security/runbooks/cert-expiry.md"
+  - name: kube-policies-watchdog
+    rules:
+      # Always-firing heartbeat. The Alertmanager heartbeat receiver (IRM-WU-16)
+      # consumes this and forwards it to an external dead-man's-switch (e.g.
+      # Dead Man's Snitch / healthchecks.io). If Prometheus or Alertmanager dies,
+      # the heartbeat stops arriving and the external watchdog pages.
+      - alert: KubePoliciesWatchdog
+        expr: vector(1)
+        labels:
+          severity: none
+        annotations:
+          summary: "kube-policies monitoring heartbeat"
+          description: "This alert is always firing. It is routed to the dead-man's-switch heartbeat receiver; if it stops arriving, the monitoring pipeline (Prometheus/Alertmanager) is down and on-call must investigate."
+      # The webhook is registered but receiving no admission traffic for 10m:
+      # either the apiserver is no longer routing to it (webhook config removed /
+      # caBundle broken) or the metric pipeline is broken. The == 0 clause covers
+      # the common case where the pod is healthy and the counter series exists but
+      # has stopped incrementing (a lazily-registered counter persists for the
+      # process lifetime, so absent() alone would NOT catch a traffic stop); the
+      # absent() clause covers a webhook that has never served a request / whose
+      # series was never created.
+      - alert: KubePoliciesNoTraffic
+        expr: (sum(rate(kube_policies_admission_requests_total[10m])) == 0) or absent(kube_policies_admission_requests_total)
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "kube-policies admission webhook is receiving no traffic"
+          description: "No admission requests have been recorded for >10m. Either the apiserver is no longer calling the webhook (ValidatingWebhookConfiguration removed, caBundle broken, or selectors excluding everything) or metrics scraping is broken — both mean enforcement may be silently bypassed."
+          runbook_url: "https://github.com/Jibbscript/kube-policies/blob/main/docs/security/runbooks/webhook-outage.md"
+  - name: kube-policies-slo
+    rules:
+      # --- availability SLI recording rules -------------------------------
+      - record: kube_policies:admission_error_ratio:rate5m
+        expr: |
+          sum(rate(kube_policies_admission_requests_total{status="error"}[5m]))
+            /
+          sum(rate(kube_policies_admission_requests_total[5m]))
+      - record: kube_policies:admission_error_ratio:rate1h
+        expr: |
+          sum(rate(kube_policies_admission_requests_total{status="error"}[1h]))
+            /
+          sum(rate(kube_policies_admission_requests_total[1h]))
+      - record: kube_policies:admission_error_ratio:rate30m
+        expr: |
+          sum(rate(kube_policies_admission_requests_total{status="error"}[30m]))
+            /
+          sum(rate(kube_policies_admission_requests_total[30m]))
+      - record: kube_policies:admission_error_ratio:rate6h
+        expr: |
+          sum(rate(kube_policies_admission_requests_total{status="error"}[6h]))
+            /
+          sum(rate(kube_policies_admission_requests_total[6h]))
+      # --- availability burn-rate alerts ----------------------------------
+      - alert: KubePoliciesErrorBudgetBurnFast
+        expr: |
+          kube_policies:admission_error_ratio:rate1h > (14.4 * 0.001)
+            and
+          kube_policies:admission_error_ratio:rate5m > (14.4 * 0.001)
+        for: 2m
+        labels:
+          severity: critical
+          slo: availability
+        annotations:
+          summary: "kube-policies availability error budget burning fast (14.4x)"
+          description: "The admission error ratio is burning the 99.9% availability budget at >14.4x over both 1h and 5m windows ({{ $value | humanizePercentage }}). At this rate the 30-day budget is exhausted in ~2 days. Page on-call."
+          runbook_url: "https://github.com/Jibbscript/kube-policies/blob/main/docs/security/runbooks/high-error-rate.md"
+      - alert: KubePoliciesErrorBudgetBurnSlow
+        expr: |
+          kube_policies:admission_error_ratio:rate6h > (6 * 0.001)
+            and
+          kube_policies:admission_error_ratio:rate30m > (6 * 0.001)
+        for: 15m
+        labels:
+          severity: warning
+          slo: availability
+        annotations:
+          summary: "kube-policies availability error budget burning (6x)"
+          description: "The admission error ratio is burning the 99.9% availability budget at >6x over both 6h and 30m windows ({{ $value | humanizePercentage }}). Open a ticket and investigate before the budget is exhausted."
+          runbook_url: "https://github.com/Jibbscript/kube-policies/blob/main/docs/security/runbooks/high-error-rate.md"
+      # --- latency SLO ----------------------------------------------------
+      - alert: KubePoliciesLatencySLOBreach
+        expr: histogram_quantile(0.95, sum by (le) (rate(kube_policies_admission_evaluation_duration_seconds_bucket[30m]))) > 0.5
+        for: 15m
+        labels:
+          severity: warning
+          slo: latency
+        annotations:
+          summary: "kube-policies admission latency SLO breached (p95 > 0.5s)"
+          description: "p95 admission evaluation latency is {{ printf \"%.3f\" $value }}s over 30m, breaching the 0.5s latency SLO. Investigate policy-evaluation cost and load."
+          runbook_url: "https://github.com/Jibbscript/kube-policies/blob/main/docs/security/runbooks/high-error-rate.md"
