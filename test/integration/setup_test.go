@@ -28,8 +28,26 @@ import (
 // every byte zap emits.
 type dynamicStdoutSyncer struct{}
 
-func (dynamicStdoutSyncer) Write(p []byte) (int, error) { return os.Stdout.Write(p) }
-func (dynamicStdoutSyncer) Sync() error                 { return os.Stdout.Sync() }
+// stdHandleMu serializes reads of the os.Stdout/os.Stderr globals (by this
+// syncer, which can fire from a late controller-runtime shutdown goroutine
+// after StartControllers returns) against capturePipe's redirect/restore of
+// those same globals. Without it, `*target = original` in capturePipe races the
+// `os.Stdout` read here on the bare *os.File variable (caught by `go test -race`).
+var stdHandleMu sync.Mutex
+
+func (dynamicStdoutSyncer) Write(p []byte) (int, error) {
+	stdHandleMu.Lock()
+	f := os.Stdout
+	stdHandleMu.Unlock()
+	return f.Write(p)
+}
+
+func (dynamicStdoutSyncer) Sync() error {
+	stdHandleMu.Lock()
+	f := os.Stdout
+	stdHandleMu.Unlock()
+	return f.Sync()
+}
 
 // sharedLogger is the JSON-encoded logger wired into controller-runtime / klog
 // once per integration test binary via TestMain. Test suites continue to build
@@ -186,8 +204,10 @@ func capturePipe(t *testing.T, target **os.File) (*bytes.Buffer, func()) {
 	if err != nil {
 		t.Fatalf("os.Pipe: %v", err)
 	}
+	stdHandleMu.Lock()
 	original := *target
 	*target = w
+	stdHandleMu.Unlock()
 
 	buf := &bytes.Buffer{}
 	var bufMu sync.Mutex
@@ -223,7 +243,9 @@ func capturePipe(t *testing.T, target **os.File) (*bytes.Buffer, func()) {
 		_ = w.Close()
 		<-done
 		_ = r.Close()
+		stdHandleMu.Lock()
 		*target = original
+		stdHandleMu.Unlock()
 	}
 	return buf, restore
 }

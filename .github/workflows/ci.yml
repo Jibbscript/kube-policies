@@ -648,6 +648,10 @@ jobs:
         curl -sSLo ct.tar.gz https://github.com/helm/chart-testing/releases/download/v3.9.0/chart-testing_3.9.0_linux_amd64.tar.gz
         tar -xzf ct.tar.gz
         sudo mv ct /usr/local/bin/
+        # The raw ct binary (unlike the helm/chart-testing image) does not bundle
+        # the python tools it shells out to: yamale (Chart.yaml schema validation,
+        # chart-yaml-schema) and yamllint (lint-conf). Install them pinned.
+        pip3 install --quiet --no-cache-dir yamale==4.0.4 yamllint==1.35.1
 
     - name: Lint Helm charts
       run: |
