@@ -112,6 +112,13 @@ type ServerConfig struct {
 type PolicyConfig struct {
 	FailureMode     string `mapstructure:"failure_mode"`     // "fail-open" or "fail-closed"
 	DisableDefaults bool   `mapstructure:"disable_defaults"` // skip loading bundled default policies
+	// Profiles selects which bundled enforcement profile(s) to activate
+	// (POL-WU-23), e.g. ["pss-restricted"] or ["cis"]. When non-empty, the
+	// engine enables EXACTLY the union of the selected profiles' policies and
+	// disables the rest. When empty, the engine keeps its default-enabled set
+	// (security-baseline) so existing deployments are unchanged. Known names are
+	// in policy.EnforcementProfiles.
+	Profiles []string `mapstructure:"profiles"`
 }
 
 // AuditConfig represents audit logging configuration

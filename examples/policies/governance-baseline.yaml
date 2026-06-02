@@ -1,0 +1,75 @@
+# Illustrative example mirroring the bundled governance-baseline policy (internal/policy). NOT loaded automatically; copy/adapt into your own Policy CR. The engine compiles every rule alongside data.kube_policies.lib (internal/policy/rego/podspec.rego).
+apiVersion: policies.kube-policies.io/v1
+kind: Policy
+metadata:
+  name: governance-baseline
+  namespace: kube-policies-system
+  labels:
+    category: governance
+    severity: low
+spec:
+  description: "Mandatory ownership/classification labels and a ban on the default namespace"
+  enabled: false
+
+  parameters:
+    requiredLabels: "app.kubernetes.io/name,owner,data-classification"
+
+  targets:
+    kinds:
+      - apiGroup: ""
+        kinds: ["Pod"]
+      - apiGroup: "apps"
+        kinds: ["Deployment", "ReplicaSet", "DaemonSet", "StatefulSet"]
+      - apiGroup: "batch"
+        kinds: ["Job", "CronJob"]
+
+  rules:
+    - name: require-labels
+      severity: LOW
+      description: "Workloads must carry the mandatory inventory labels (CM-8)"
+      frameworks: ["NIST CM-8", "NIST CM-8(1)", "NSA-Hardening-Namespace", "CIS-5.7.1", "NIST SP 800-190 4.3.1"]
+      rego: |
+        package kube_policies
+
+        import rego.v1
+
+        default evaluate := {"allowed": true}
+
+        required_labels := {trim_space(l) |
+        	some l in split(object.get(input.parameters, "requiredLabels", "app.kubernetes.io/name,owner,data-classification"), ",")
+        	trim_space(l) != ""
+        }
+
+        labels := object.get(object.get(input.object, "metadata", {}), "labels", {})
+
+        missing := sort([l |
+        	some l in required_labels
+        	not labels[l]
+        ])
+
+        evaluate := {
+        	"allowed": false,
+        	"message": sprintf("Workload is missing required label %q", [missing[0]]),
+        	"path": sprintf("metadata.labels[%q]", [missing[0]]),
+        } if {
+        	count(missing) > 0
+        }
+
+    - name: deny-default-namespace
+      severity: LOW
+      description: "Workloads must not be created in the default namespace"
+      frameworks: ["NSA-Hardening-Namespace", "CIS-5.7.1", "NIST SP 800-190 4.3.1", "NIST CM-8"]
+      rego: |
+        package kube_policies
+
+        import rego.v1
+
+        default evaluate := {"allowed": true}
+
+        evaluate := {
+        	"allowed": false,
+        	"message": "Workloads must not be created in the 'default' namespace",
+        	"path": "metadata.namespace",
+        } if {
+        	object.get(object.get(input.object, "metadata", {}), "namespace", "") == "default"
+        }

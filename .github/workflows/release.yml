@@ -166,6 +166,43 @@ jobs:
         name: binaries-${{ matrix.os }}-${{ matrix.arch }}
         path: dist/
 
+  # Policy bundle (POL-WU-27): emit the canonical policy-library manifest and its
+  # SHA-256 digest as release artifacts so the shipped Rego rule set can be signed
+  # (cosign sign-blob) and SLSA-attested independently of the binaries, and so a
+  # deployer can verify the policy pack's integrity and origin. The manifest is a
+  # pure function of the source tree, so the digest is reproducible.
+  build-policy-bundle:
+    name: Build Policy Bundle
+    runs-on: ubuntu-latest
+    needs: [validate-release, test-suite]
+    steps:
+    - name: Harden runner
+      uses: step-security/harden-runner@ab7a9404c0f3da075243ca237b5fac12c98deaa5  # v2
+      with:
+        egress-policy: audit
+
+    - name: Checkout code
+      uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+
+    - name: Set up Go
+      uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff  # v5
+      with:
+        go-version: ${{ env.GO_VERSION }}
+
+    - name: Generate policy bundle manifest + digest
+      run: |
+        set -euo pipefail
+        mkdir -p dist
+        go run ./cmd/policybundle manifest > dist/policy-bundle-manifest.json
+        go run ./cmd/policybundle digest > dist/policy-bundle.sha256
+        echo "Policy bundle digest: $(cat dist/policy-bundle.sha256)"
+
+    - name: Upload policy bundle artifact
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+      with:
+        name: policy-bundle
+        path: dist/policy-bundle-*
+
   # Build and push container images
   build-images:
     name: Build Release Images
@@ -432,7 +469,7 @@ jobs:
   sign-attest-provenance:
     name: Sign, Attest & Provenance
     runs-on: ubuntu-latest
-    needs: [validate-release, build-release, build-images, package-helm, generate-sbom, security-scan]
+    needs: [validate-release, build-release, build-policy-bundle, build-images, package-helm, generate-sbom, security-scan]
     # Only sign on a real version TAG push. Keyless Fulcio mints a certificate
     # whose SAN is the workflow ref; signing on a branch (e.g. a workflow_dispatch
     # run from main) would produce a `@refs/heads/...` identity that FAILS the
@@ -524,6 +561,40 @@ jobs:
             "${f}"
         done
 
+    - name: Sign policy bundle manifest + digest (keyless sign-blob)
+      # POL-WU-27 (SLSA L3 / SR-3 / SR-4 / SI-7): sign the shipped policy-library
+      # manifest and its digest so deployers can verify the Rego rule set's
+      # integrity and origin against the documented OIDC identity. See
+      # docs/policy-bundle-verification.md.
+      run: |
+        set -euo pipefail
+        find artifacts/policy-bundle -type f \
+          \( -name 'policy-bundle-manifest.json' -o -name 'policy-bundle.sha256' \) \
+          ! -name '*.sig' ! -name '*.pem' -print | while read -r f; do
+          cosign sign-blob --yes \
+            --output-signature "${f}.sig" \
+            --output-certificate "${f}.pem" \
+            "${f}"
+        done
+
+    - name: Verify policy bundle signature (cosign verify-blob)
+      # POL-WU-27 done-when: prove the sign→verify round-trip in CI by verifying
+      # the just-produced signature against the release workflow's OIDC identity,
+      # mirroring docs/policy-bundle-verification.md. A verification failure fails
+      # the release (no `if: always()`).
+      env:
+        IDENTITY_REGEXP: ^https://github.com/${{ github.repository }}/.github/workflows/release.yml@refs/tags/v.*
+      run: |
+        set -euo pipefail
+        for f in artifacts/policy-bundle/policy-bundle-manifest.json artifacts/policy-bundle/policy-bundle.sha256; do
+          cosign verify-blob \
+            --certificate "${f}.pem" \
+            --signature "${f}.sig" \
+            --certificate-identity-regexp "$IDENTITY_REGEXP" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+            "${f}"
+        done
+
     - name: Generate SLSA provenance attestation — release binaries
       # SDL-WU-28 (SLSA L3): SLSA provenance also covers the loose binary
       # artifacts, not only the container images. Stored in the GitHub
@@ -533,6 +604,13 @@ jobs:
         subject-path: |
           artifacts/binaries-*/admission-webhook-*
           artifacts/binaries-*/policy-manager-*
+
+    - name: Generate SLSA provenance attestation — policy bundle
+      # POL-WU-27: SLSA provenance over the policy-library manifest.
+      uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be  # v2
+      with:
+        subject-path: |
+          artifacts/policy-bundle/policy-bundle-manifest.json
 
     - name: Upload signed blob artifacts
       uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4

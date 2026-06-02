@@ -38,6 +38,15 @@ spec:
   # match (e.g. several containers violate the same rule) each rule reports the
   # lowest-indexed violation deterministically so the engine receives exactly
   # one verdict per rule and no complete-doc conflict is raised.
+  #
+  # SHARED LIBRARY (POL-WU-01): every rule the engine compiles — bundled or
+  # customer-authored — is compiled alongside data.kube_policies.lib
+  # (internal/policy/rego/podspec.rego). Importing it lets a rule evaluate the
+  # EFFECTIVE pod spec across workload controllers (Deployment/DaemonSet/
+  # StatefulSet/Job/CronJob), initContainers, and ephemeralContainers instead of
+  # only input.object.spec.containers. Helpers: lib.pod_spec, lib.all_containers,
+  # lib.containers_with_paths (container + kind-correct JSONPath), lib.volumes,
+  # lib.pod_security_context, lib.container_path_prefix.
   rules:
     # 1. No privileged containers
     - name: no-privileged-containers
@@ -49,31 +58,34 @@ spec:
 
         import rego.v1
 
+        import data.kube_policies.lib as lib
+
         default evaluate := {"allowed": true}
 
         evaluate := {
           "allowed": false,
           "message": "Pod must not run in privileged mode",
-          "path": "spec.securityContext.privileged",
+          "path": sprintf("%s.securityContext.privileged", [lib.container_path_prefix]),
         } if {
-          input.object.spec.securityContext.privileged == true
+          lib.pod_security_context.privileged == true
         }
 
         evaluate := {
           "allowed": false,
-          "message": "Container must not run in privileged mode",
-          "path": sprintf("spec.containers[%d].securityContext.privileged", [i]),
+          "message": sprintf("Container '%s' must not run in privileged mode", [entry.container.name]),
+          "path": sprintf("%s.securityContext.privileged", [entry.path]),
         } if {
           not pod_privileged
           indexes := [j |
             some j
-            input.object.spec.containers[j].securityContext.privileged == true
+            lib.containers_with_paths[j].container.securityContext.privileged == true
           ]
           count(indexes) > 0
           i := indexes[0]
+          entry := lib.containers_with_paths[i]
         }
 
-        pod_privileged if input.object.spec.securityContext.privileged == true
+        pod_privileged if lib.pod_security_context.privileged == true
 
     # 2. No hostPath volumes
     - name: no-host-path-volumes
@@ -85,16 +97,18 @@ spec:
 
         import rego.v1
 
+        import data.kube_policies.lib as lib
+
         default evaluate := {"allowed": true}
 
         evaluate := {
           "allowed": false,
           "message": "hostPath volumes are not allowed",
-          "path": sprintf("spec.volumes[%d].hostPath", [i]),
+          "path": sprintf("%s.volumes[%d].hostPath", [lib.container_path_prefix, i]),
         } if {
           indexes := [j |
             some j
-            input.object.spec.volumes[j].hostPath
+            lib.volumes[j].hostPath
           ]
           count(indexes) > 0
           i := indexes[0]
@@ -110,19 +124,22 @@ spec:
 
         import rego.v1
 
+        import data.kube_policies.lib as lib
+
         default evaluate := {"allowed": true}
 
         evaluate := {
           "allowed": false,
-          "message": sprintf("Container image '%s' must specify an explicit non-':latest' tag", [input.object.spec.containers[i].image]),
-          "path": sprintf("spec.containers[%d].image", [i]),
+          "message": sprintf("Container image '%s' must specify an explicit non-':latest' tag", [entry.container.image]),
+          "path": sprintf("%s.image", [entry.path]),
         } if {
           indexes := [j |
             some j
-            bad_image(input.object.spec.containers[j].image)
+            bad_image(lib.containers_with_paths[j].container.image)
           ]
           count(indexes) > 0
           i := indexes[0]
+          entry := lib.containers_with_paths[i]
         }
 
         bad_image(image) if endswith(image, ":latest")
@@ -139,19 +156,22 @@ spec:
 
         import rego.v1
 
+        import data.kube_policies.lib as lib
+
         default evaluate := {"allowed": true}
 
         evaluate := {
           "allowed": false,
-          "message": sprintf("Container at index %d must declare runAsNonRoot=true and allowPrivilegeEscalation!=true in securityContext", [i]),
-          "path": sprintf("spec.containers[%d].securityContext", [i]),
+          "message": sprintf("Container '%s' must declare runAsNonRoot=true and allowPrivilegeEscalation!=true in securityContext", [entry.container.name]),
+          "path": sprintf("%s.securityContext", [entry.path]),
         } if {
           indexes := [j |
             some j
-            missing_required_sc(input.object.spec.containers[j])
+            missing_required_sc(lib.containers_with_paths[j].container)
           ]
           count(indexes) > 0
           i := indexes[0]
+          entry := lib.containers_with_paths[i]
         }
 
         missing_required_sc(c) if not c.securityContext
@@ -193,8 +213,9 @@ spec:
       policy: "security-baseline"
       category: "security"
 
-# NOTE: The previous 4 non-Playground rules (no-root-user, no-host-network,
-# no-host-pid, no-host-ipc, required-resource-limits) used the legacy `deny[msg]`
-# contract and are non-functional under the current engine. They are deferred to
-# M3 — rewrite alongside these in a single PR, or move to
-# examples/policies/extras-pending-rewrite.yaml.
+# NOTE: The controls once deferred here (host-network/PID/IPC, run-as-root,
+# resource limits) SHIPPED in P10 as first-class bundled rules on the current
+# engine contract — see the pss-baseline (deny-host-namespaces), pss-restricted
+# (require-run-as-nonroot), and nsa-hardening (require-resource-limits) packs in
+# internal/policy/bundled_rules.go, the full catalog in docs/policy-library.md,
+# and the enforcement profiles in docs/policy-profiles.md.

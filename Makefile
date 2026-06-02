@@ -162,6 +162,23 @@ test-unit: ## Run unit tests
 		echo "$(GREEN)Unit test coverage report: coverage-unit.html$(NC)"; \
 	fi
 
+.PHONY: test-policy
+test-policy: ## Run the policy library suite (per-rule coverage, control matrix, profiles, compile gate, bundle digest) — POL-WU-25
+	@echo "$(BLUE)Running policy library tests...$(NC)"
+	go test -race -count=1 ./internal/policy/...
+	@echo "$(BLUE)Verifying policy bundle digest is reproducible...$(NC)"
+	@d1="$$(go run ./cmd/policybundle digest)"; d2="$$(go run ./cmd/policybundle digest)"; \
+		if [ "$$d1" != "$$d2" ]; then echo "$(RED)policy bundle digest not reproducible: $$d1 != $$d2$(NC)"; exit 1; fi; \
+		echo "$(GREEN)Policy bundle digest: $$d1$(NC)"
+
+.PHONY: policy-bundle-manifest
+policy-bundle-manifest: ## Emit the canonical policy-bundle manifest JSON (POL-WU-27)
+	@go run ./cmd/policybundle manifest
+
+.PHONY: policy-bundle-digest
+policy-bundle-digest: ## Emit the SHA-256 digest of the policy bundle (POL-WU-27)
+	@go run ./cmd/policybundle digest
+
 .PHONY: test-integration
 test-integration: ## Run integration tests
 	@echo "$(BLUE)Running integration tests...$(NC)"

@@ -137,7 +137,7 @@ This system is being driven toward **FIPS-199 Moderate** under **NIST SP 800-53 
 ### Target frameworks and current status
 - **NIST SP 800-53 Rev 5 / FedRAMP Moderate**: target baseline. Control-by-control status (Implemented | Partial | Planned | Inherited | Customer | Not-Applicable) is recorded in the [control matrix](docs/compliance/control-matrix.csv) and summarized in [control-matrix.md](docs/compliance/control-matrix.md).
 - **FIPS-199**: categorized **Moderate** — see the [FIPS-199 / FIPS-200 categorization](docs/compliance/categorization/FIPS-199.md).
-- **CIS Kubernetes Benchmark / NIST SP 800-190**: a self-assessment crosswalk (DOC-WU-29) is **planned for phase P10**; it is not yet authored. The bundled default Pod guardrails (privileged containers, `hostPath`, `:latest` images, missing security context) are illustrative starting points, not a verified benchmark implementation.
+- **CIS Kubernetes Benchmark v1.8 / NIST SP 800-190**: the per-control self-assessment crosswalk (DOC-WU-29) is authored at [`docs/compliance/cis-k8s-800-190-mapping.md`](docs/compliance/cis-k8s-800-190-mapping.md). kube-policies covers CIS Section 5 (Policies) via its 30 bundled Rego admission rules; CIS Sections 1–4 (control-plane/etcd/node config) are cluster-operator responsibilities outside the admission-controller boundary. Summary: **20 Covered, 6 Partial, 5 Not-Covered** across CIS Section 5 leaf controls (see the mapping document for per-control status and POA&M entries).
 
 ### Open weaknesses and remediation
 - Known foundational gaps are tracked in the [POA&M](docs/compliance/POAM.md) and remediated across phases **P1–P12** (see `.omc/plans/PRODUCTION-READINESS-FEDRAMP-CIS.md`).

@@ -43,8 +43,15 @@ type Policy struct {
 	Enabled     bool                   `json:"enabled"`
 	Rules       []Rule                 `json:"rules"`
 	Metadata    map[string]interface{} `json:"metadata"`
-	CreatedAt   time.Time              `json:"created_at"`
-	UpdatedAt   time.Time              `json:"updated_at"`
+	// Parameters are operator-supplied configuration for the policy's rules
+	// (e.g. an image-registry allowlist or the set of mandatory labels). They
+	// are exposed to every rule in the policy at input.parameters so a single
+	// rule body can be reused with different configuration (POL-WU-13/POL-WU-20)
+	// instead of hardcoding values. Mirrors the Policy CRD spec.parameters
+	// (map[string]string).
+	Parameters map[string]string `json:"parameters,omitempty"`
+	CreatedAt  time.Time         `json:"created_at"`
+	UpdatedAt  time.Time         `json:"updated_at"`
 }
 
 // Rule represents a policy rule
@@ -57,6 +64,17 @@ type Rule struct {
 	Category    string                 `json:"category"`
 	Frameworks  []string               `json:"frameworks"`
 	Metadata    map[string]interface{} `json:"metadata"`
+
+	// TargetKinds restricts which Kubernetes object Kinds this rule is
+	// evaluated against (POL-WU-21). An empty/nil slice means the rule applies
+	// to every kind (back-compatible default). A non-empty slice means the rule
+	// is only evaluated when the admitted object's Kind matches one entry
+	// (case-insensitive). This prevents a pod-shaped rule from firing — or, for
+	// a malformed rule, erroring and fail-closing the whole request — on an
+	// unrelated kind such as a ClusterRole, and it is what lets RBAC,
+	// NetworkPolicy, Ingress, Secret, and ConfigMap rule packs coexist with the
+	// pod rules in one engine.
+	TargetKinds []string `json:"targetKinds,omitempty"`
 }
 
 // EvaluationRequest represents a policy evaluation request
@@ -117,6 +135,18 @@ func NewEngine(config *config.PolicyConfig, logger *zap.Logger) (*Engine, error)
 		}
 	}
 
+	// Apply enforcement profiles (POL-WU-23): when profiles are configured, the
+	// enabled set becomes exactly the union of the selected profiles' policies.
+	if len(config.Profiles) > 0 {
+		if err := engine.applyProfiles(config.Profiles); err != nil {
+			return nil, fmt.Errorf("failed to apply enforcement profiles: %w", err)
+		}
+		logger.Info("enforcement profiles applied",
+			zap.Strings("profiles", config.Profiles),
+			zap.Strings("enabled_policies", engine.EnabledPolicyIDs()),
+		)
+	}
+
 	return engine, nil
 }
 
@@ -163,6 +193,11 @@ func (e *Engine) Evaluate(ctx context.Context, req *EvaluationRequest) (*Evaluat
 		Metadata:   make(map[string]interface{}),
 	}
 
+	// The admitted object's Kind drives per-rule kind routing (POL-WU-21).
+	// req.AdmissionRequest is guaranteed non-nil here: prepareInput returns an
+	// error above when it (or req) is nil.
+	kind := req.AdmissionRequest.Kind.Kind
+
 	e.mutex.RLock()
 	defer e.mutex.RUnlock()
 
@@ -172,7 +207,7 @@ func (e *Engine) Evaluate(ctx context.Context, req *EvaluationRequest) (*Evaluat
 			continue
 		}
 
-		policyResult, err := e.evaluatePolicy(ctx, policy, input)
+		policyResult, err := e.evaluatePolicy(ctx, policy, input, kind)
 		if err != nil {
 			e.logger.Error("Failed to evaluate policy",
 				zap.String("policy_id", policy.ID),
@@ -292,8 +327,41 @@ func distinctExceptionCount(refs []ExceptionRef) int {
 	return len(seen)
 }
 
-// evaluatePolicy evaluates a single policy
-func (e *Engine) evaluatePolicy(ctx context.Context, policy *Policy, input map[string]interface{}) (*EvaluationResult, error) {
+// podWorkloadKinds is the set of Kubernetes kinds whose spec carries (or
+// templates) a PodSpec. The shared podspec library (rego/podspec.rego) extracts
+// the effective pod spec for each of these, so pod-shaped rules target them all.
+var podWorkloadKinds = []string{
+	"Pod",
+	"Deployment",
+	"ReplicaSet",
+	"DaemonSet",
+	"StatefulSet",
+	"Job",
+	"CronJob",
+	"ReplicationController",
+}
+
+// ruleAppliesToKind reports whether a rule should be evaluated against an object
+// of the given Kubernetes Kind (POL-WU-21). A rule with no TargetKinds applies
+// to every kind (back-compatible default). A rule with TargetKinds applies only
+// when kind matches one entry (case-insensitive). An empty kind — a request
+// that does not carry a Kind — matches every rule so behavior is unchanged in
+// that edge case.
+func ruleAppliesToKind(rule *Rule, kind string) bool {
+	if len(rule.TargetKinds) == 0 || kind == "" {
+		return true
+	}
+	for _, k := range rule.TargetKinds {
+		if strings.EqualFold(k, kind) {
+			return true
+		}
+	}
+	return false
+}
+
+// evaluatePolicy evaluates a single policy. kind is the admitted object's
+// Kubernetes Kind; rules whose TargetKinds do not match are skipped (POL-WU-21).
+func (e *Engine) evaluatePolicy(ctx context.Context, policy *Policy, input map[string]interface{}, kind string) (*EvaluationResult, error) {
 	result := &EvaluationResult{
 		Allowed:    true,
 		Violations: []PolicyViolation{},
@@ -301,8 +369,33 @@ func (e *Engine) evaluatePolicy(ctx context.Context, policy *Policy, input map[s
 		Metadata:   make(map[string]interface{}),
 	}
 
-	for _, rule := range policy.Rules {
-		ruleResult, err := e.evaluateRule(ctx, policy, &rule, input)
+	// Expose this policy's parameters to its rules at input.parameters
+	// (POL-WU-13/POL-WU-20). input.parameters is ALWAYS set (at least an empty
+	// object): a rule's object.get(input.parameters, key, default) only returns
+	// its in-Rego default when input.parameters is a defined object — if the key
+	// is absent entirely, object.get over an UNDEFINED value yields undefined,
+	// silently disabling a parameter-defaulted rule (e.g. require-labels would
+	// fail OPEN). The base input is shared across policies and is never mutated;
+	// policyInput is a fresh shallow copy.
+	policyInput := make(map[string]interface{}, len(input)+1)
+	for k, v := range input {
+		policyInput[k] = v
+	}
+	params := make(map[string]interface{}, len(policy.Parameters))
+	for k, v := range policy.Parameters {
+		params[k] = v
+	}
+	policyInput["parameters"] = params
+
+	for i := range policy.Rules {
+		rule := policy.Rules[i]
+		// Kind routing: skip rules that do not target this object's Kind so a
+		// pod rule never evaluates (and never errors) against an RBAC/Network/
+		// Secret object, and vice versa.
+		if !ruleAppliesToKind(&rule, kind) {
+			continue
+		}
+		ruleResult, err := e.evaluateRule(ctx, policy, &rule, policyInput)
 		if err != nil {
 			e.logger.Error("Failed to evaluate rule",
 				zap.String("policy_id", policy.ID),
@@ -500,31 +593,34 @@ func (e *Engine) loadDefaultPolicies() error {
 
 import rego.v1
 
+import data.kube_policies.lib as lib
+
 default evaluate := {"allowed": true}
 
 evaluate := {
 	"allowed": false,
 	"message": "Pod must not run in privileged mode",
-	"path": "spec.securityContext.privileged",
+	"path": sprintf("%s.securityContext.privileged", [lib.container_path_prefix]),
 } if {
-	input.object.spec.securityContext.privileged == true
+	lib.pod_security_context.privileged == true
 }
 
 evaluate := {
 	"allowed": false,
-	"message": "Container must not run in privileged mode",
-	"path": sprintf("spec.containers[%d].securityContext.privileged", [i]),
+	"message": sprintf("Container '%s' must not run in privileged mode", [entry.container.name]),
+	"path": sprintf("%s.securityContext.privileged", [entry.path]),
 } if {
 	not pod_privileged
 	indexes := [j |
 		some j
-		input.object.spec.containers[j].securityContext.privileged == true
+		lib.containers_with_paths[j].container.securityContext.privileged == true
 	]
 	count(indexes) > 0
 	i := indexes[0]
+	entry := lib.containers_with_paths[i]
 }
 
-pod_privileged if input.object.spec.securityContext.privileged == true
+pod_privileged if lib.pod_security_context.privileged == true
 `,
 				},
 				{
@@ -538,16 +634,18 @@ pod_privileged if input.object.spec.securityContext.privileged == true
 
 import rego.v1
 
+import data.kube_policies.lib as lib
+
 default evaluate := {"allowed": true}
 
 evaluate := {
 	"allowed": false,
 	"message": "hostPath volumes are not allowed",
-	"path": sprintf("spec.volumes[%d].hostPath", [i]),
+	"path": sprintf("%s.volumes[%d].hostPath", [lib.container_path_prefix, i]),
 } if {
 	indexes := [j |
 		some j
-		input.object.spec.volumes[j].hostPath
+		lib.volumes[j].hostPath
 	]
 	count(indexes) > 0
 	i := indexes[0]
@@ -565,19 +663,22 @@ evaluate := {
 
 import rego.v1
 
+import data.kube_policies.lib as lib
+
 default evaluate := {"allowed": true}
 
 evaluate := {
 	"allowed": false,
-	"message": sprintf("Container image '%s' must specify an explicit non-':latest' tag", [input.object.spec.containers[i].image]),
-	"path": sprintf("spec.containers[%d].image", [i]),
+	"message": sprintf("Container image '%s' must specify an explicit non-':latest' tag", [entry.container.image]),
+	"path": sprintf("%s.image", [entry.path]),
 } if {
 	indexes := [j |
 		some j
-		bad_image(input.object.spec.containers[j].image)
+		bad_image(lib.containers_with_paths[j].container.image)
 	]
 	count(indexes) > 0
 	i := indexes[0]
+	entry := lib.containers_with_paths[i]
 }
 
 bad_image(image) if endswith(image, ":latest")
@@ -596,19 +697,22 @@ bad_image(image) if not contains(image, ":")
 
 import rego.v1
 
+import data.kube_policies.lib as lib
+
 default evaluate := {"allowed": true}
 
 evaluate := {
 	"allowed": false,
-	"message": sprintf("Container at index %d must declare runAsNonRoot=true and allowPrivilegeEscalation!=true in securityContext", [i]),
-	"path": sprintf("spec.containers[%d].securityContext", [i]),
+	"message": sprintf("Container '%s' must declare runAsNonRoot=true and allowPrivilegeEscalation!=true in securityContext", [entry.container.name]),
+	"path": sprintf("%s.securityContext", [entry.path]),
 } if {
 	indexes := [j |
 		some j
-		missing_required_sc(input.object.spec.containers[j])
+		missing_required_sc(lib.containers_with_paths[j].container)
 	]
 	count(indexes) > 0
 	i := indexes[0]
+	entry := lib.containers_with_paths[i]
 }
 
 missing_required_sc(c) if not c.securityContext
@@ -626,6 +730,17 @@ missing_required_sc(c) if c.securityContext.allowPrivilegeEscalation == true
 		},
 	}
 
+	// Route the bundled pod-shaped rules to pod-bearing kinds (POL-WU-21) so
+	// they never evaluate against an RBAC/Network/Secret/ConfigMap object once
+	// those rule packs and webhook coverage land.
+	for _, p := range defaultPolicies {
+		if p.ID == "security-baseline" {
+			for i := range p.Rules {
+				p.Rules[i].TargetKinds = podWorkloadKinds
+			}
+		}
+	}
+
 	for _, policy := range defaultPolicies {
 		e.policies[policy.ID] = policy
 	}
@@ -636,6 +751,23 @@ missing_required_sc(c) if c.securityContext.allowPrivilegeEscalation == true
 	// registry allowlist) once images are published and digest-pinned.
 	ip := imageProvenancePolicy()
 	e.policies[ip.ID] = ip
+
+	// P10 rule packs (POL-WU-03..20). All ship DISABLED by default; an
+	// enforcement profile (POL-WU-23) activates the curated set an operator
+	// selects, so a deploy that only wants security-baseline is never broken on
+	// upgrade.
+	for _, p := range []*Policy{
+		pssBaselinePolicy(),
+		pssRestrictedPolicy(),
+		nsaHardeningPolicy(),
+		governanceBaselinePolicy(),
+		rbacBaselinePolicy(),
+		secretsBaselinePolicy(),
+		networkBaselinePolicy(),
+		mutatingHardeningPolicy(),
+	} {
+		e.policies[p.ID] = p
+	}
 
 	return nil
 }
@@ -663,6 +795,13 @@ func imageProvenancePolicy() *Policy {
 		Description: "Require images from an allowlisted registry and pinned by immutable digest",
 		Version:     "1.0.0",
 		Enabled:     false, // opt-in; see CFG-WU-15 / docs/policies/image-signing.md
+		// allowedRegistries is a comma-separated allowlist of trusted registry
+		// prefixes (POL-WU-13). Operators override it via the Policy CRD
+		// spec.parameters to match the registries they trust; it defaults to this
+		// project's own published registry so the bundled policy is usable as-is.
+		Parameters: map[string]string{
+			"allowedRegistries": "ghcr.io/jibbscript/",
+		},
 		Rules: []Rule{
 			{
 				ID:          "allowed-registries",
@@ -670,38 +809,47 @@ func imageProvenancePolicy() *Policy {
 				Description: "Container images must come from an allowlisted registry",
 				Severity:    "HIGH",
 				Category:    "SupplyChain",
-				Frameworks:  []string{"NIST-800-53", "NIST-800-190", "CIS-1.8.0"},
+				Frameworks:  []string{"NIST-800-53", "NIST-800-190", "CIS-1.8.0", "NSA-Hardening-SupplyChain", "NIST SP 800-190 4.1.1"},
+				TargetKinds: podWorkloadKinds,
 				Rego: `package kube_policies
 
 import rego.v1
 
+import data.kube_policies.lib as lib
+
 default evaluate := {"allowed": true}
 
-# Allowlisted registry prefixes. Operators override this set in their own copy
-# of the policy (examples/policies/image-provenance.yaml) to match the registries
-# they trust. Defaults to this project's own published registry.
-allowed_registries := {"ghcr.io/jibbscript/"}
+# Allowlisted registry prefixes are parameter-driven (POL-WU-13): operators set
+# spec.parameters.allowedRegistries (comma-separated) in their Policy CR. With no
+# allowlist configured the set is empty and every image is denied (fail-secure);
+# the bundled default ships this project's own published registry.
+allowed_registries := {trim_space(p) |
+	some p in split(object.get(input.parameters, "allowedRegistries", ""), ",")
+	trim_space(p) != ""
+}
 
 evaluate := {
 	"allowed": false,
-	"message": sprintf("Container image '%s' is not from an allowed registry", [input.object.spec.containers[i].image]),
-	"path": sprintf("spec.containers[%d].image", [i]),
+	"message": sprintf("Container image '%s' is not from an allowed registry", [entry.container.image]),
+	"path": sprintf("%s.image", [entry.path]),
 } if {
-	indexes := [j |
-		some j
-		container := input.object.spec.containers[j]
-		not registry_allowed(container.image)
+	offending := [e |
+		some e in lib.containers_with_paths
+		not registry_allowed(e.container.image)
 	]
-	count(indexes) > 0
-	i := indexes[0]
+	count(offending) > 0
+	entry := offending[0]
 }
 
 registry_allowed(image) if {
 	some prefix in allowed_registries
-	# Case-insensitive: registry/repository paths are case-insensitive on GHCR,
-	# so normalize before matching the lowercase allowlist prefixes (otherwise
-	# ghcr.io/Jibbscript/... would be falsely denied against ghcr.io/jibbscript/).
-	startswith(lower(image), prefix)
+	# Match on a path-segment boundary so a registry/namespace that merely STARTS
+	# WITH an allowed prefix cannot satisfy it (e.g. ghcr.io/jibbscript.evil.com/x
+	# must NOT pass an allowlist of ghcr.io/jibbscript/). Normalize the prefix to a
+	# single trailing slash, then require the image to begin with "<prefix>/".
+	# Case-insensitive: registry/repository paths are case-insensitive on GHCR.
+	norm := trim_suffix(lower(prefix), "/")
+	startswith(lower(image), concat("", [norm, "/"]))
 }
 `,
 			},
@@ -711,25 +859,27 @@ registry_allowed(image) if {
 				Description: "Container images must be pinned by immutable digest (@sha256:...)",
 				Severity:    "HIGH",
 				Category:    "SupplyChain",
-				Frameworks:  []string{"NIST-800-53", "NIST-800-190", "SLSA"},
+				Frameworks:  []string{"NIST-800-53", "NIST-800-190", "SLSA", "NSA-Hardening-SupplyChain", "NIST SR-4"},
+				TargetKinds: podWorkloadKinds,
 				Rego: `package kube_policies
 
 import rego.v1
+
+import data.kube_policies.lib as lib
 
 default evaluate := {"allowed": true}
 
 evaluate := {
 	"allowed": false,
-	"message": sprintf("Container image '%s' must be pinned by immutable digest (@sha256:...) for verifiable provenance", [input.object.spec.containers[i].image]),
-	"path": sprintf("spec.containers[%d].image", [i]),
+	"message": sprintf("Container image '%s' must be pinned by immutable digest (@sha256:...) for verifiable provenance", [entry.container.image]),
+	"path": sprintf("%s.image", [entry.path]),
 } if {
-	indexes := [j |
-		some j
-		container := input.object.spec.containers[j]
-		not contains(container.image, "@sha256:")
+	offending := [e |
+		some e in lib.containers_with_paths
+		not contains(e.container.image, "@sha256:")
 	]
-	count(indexes) > 0
-	i := indexes[0]
+	count(offending) > 0
+	entry := offending[0]
 }
 `,
 			},
@@ -782,11 +932,17 @@ func (e *Engine) preparedQueryFor(ctx context.Context, policy *Policy, rule *Rul
 			return q, nil
 		}
 	}
-	q, err := rego.New(
+	// Compile the rule together with the shared Rego library modules
+	// (POL-WU-01) so rules can `import data.kube_policies.lib as lib` and
+	// evaluate the effective pod spec across workload controllers,
+	// initContainers, and ephemeralContainers.
+	opts := []func(*rego.Rego){
 		rego.Query("data.kube_policies.evaluate"),
 		rego.Module(fmt.Sprintf("%s_%s", policy.ID, rule.ID), rule.Rego),
 		rego.Store(e.store),
-	).PrepareForEval(ctx)
+	}
+	opts = append(opts, libModuleOptions()...)
+	q, err := rego.New(opts...).PrepareForEval(ctx)
 	if err != nil {
 		return rego.PreparedEvalQuery{}, err
 	}

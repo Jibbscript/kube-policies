@@ -152,6 +152,51 @@ jobs:
     - name: Build with GOFIPS140 and assert the marker on every binary
       run: make verify-fips GOFIPS140=v1.0.0
 
+  # Policy library gate (POL-WU-25/27): per-rule allow+deny coverage, control
+  # traceability, the customer-policy compile gate, profile selection, bundle
+  # SemVer, and a reproducible signed-bundle digest. The full ./internal/policy/...
+  # suite compiles every bundled rule WITH the shared library, so a Rego
+  # regression or an uncovered new rule fails CI here.
+  policy-library:
+    name: Policy Library
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+
+    - name: Set up Go
+      uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff  # v5
+      with:
+        go-version: ${{ env.GO_VERSION }}
+
+    - name: Run policy library test suite
+      run: go test -race -count=1 ./internal/policy/...
+
+    - name: Verify policy-bundle digest is reproducible (POL-WU-27)
+      run: |
+        set -euo pipefail
+        d1="$(go run ./cmd/policybundle digest)"
+        d2="$(go run ./cmd/policybundle digest)"
+        if [ "$d1" != "$d2" ]; then
+          echo "::error::policy bundle digest is not reproducible: $d1 != $d2" >&2
+          exit 1
+        fi
+        echo "policy bundle digest: $d1"
+
+    - name: Verify policy library artifacts are present
+      run: |
+        set -euo pipefail
+        for f in \
+          internal/policy/control_matrix.yaml \
+          docs/policy-control-matrix.md \
+          docs/policy-library.md \
+          docs/policy-profiles.md \
+          docs/policy-bundle-verification.md \
+          docs/compliance/cis-k8s-800-190-mapping.md \
+          CHANGELOG-policies.md; do
+          test -f "$f" || { echo "::error::missing policy artifact $f" >&2; exit 1; }
+        done
+
   # Build and test Docker images
   build-images:
     name: Build Docker Images

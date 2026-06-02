@@ -1,0 +1,152 @@
+# Control-traceability matrix (POL-WU-28).
+#
+# Maps every shipped bundled rule to specific, numbered control IDs across CIS
+# Kubernetes Benchmark, Pod Security Standards, the NSA/CISA Kubernetes Hardening
+# Guide, NIST SP 800-190, and NIST 800-53r5. This is the machine-checkable ATO
+# evidence artifact for the "what the product enforces" dimension.
+#
+# Invariants enforced by control_matrix_test.go:
+#   - every bundled rule appears here exactly once (no missing, no orphan);
+#   - every rule lists at least one NUMBERED control ID;
+#   - the rendered doc (docs/policy-control-matrix.md) is generated from this file.
+bundleVersion: "1.0.0"
+rules:
+  # --- security-baseline (default-on) ---
+  - id: no-privileged-containers
+    policy: security-baseline
+    severity: HIGH
+    controls: ["CIS 5.2.2", "PSS Baseline: Privileged Containers", "NIST SP 800-190 4.4.2", "NIST AC-6"]
+  - id: no-host-path-volumes
+    policy: security-baseline
+    severity: HIGH
+    controls: ["CIS 5.2.12", "PSS Baseline: HostPath Volumes", "NIST SP 800-190 4.3.4", "NIST CM-7"]
+  - id: no-latest-image-tag
+    policy: security-baseline
+    severity: MEDIUM
+    controls: ["CIS 5.7.4", "NIST SP 800-190 4.1.2", "NIST CM-2"]
+  - id: required-security-context
+    policy: security-baseline
+    severity: MEDIUM
+    controls: ["CIS 5.2.6", "PSS Restricted: Running as Non-root", "NIST SP 800-190 4.4.2", "NIST AC-6"]
+
+  # --- image-provenance (opt-in) ---
+  - id: allowed-registries
+    policy: image-provenance
+    severity: HIGH
+    controls: ["NSA Hardening: Supply Chain", "NIST SP 800-190 4.1.1", "NIST CM-7", "NIST SR-3"]
+  - id: require-image-digest
+    policy: image-provenance
+    severity: HIGH
+    controls: ["NSA Hardening: Supply Chain", "NIST SP 800-190 4.1.1", "SLSA L2", "NIST SR-4"]
+
+  # --- pss-baseline (opt-in) ---
+  - id: deny-host-namespaces
+    policy: pss-baseline
+    severity: HIGH
+    controls: ["CIS 5.2.3", "CIS 5.2.4", "CIS 5.2.5", "PSS Baseline: Host Namespaces", "NIST SP 800-190 4.3.4"]
+  - id: restrict-capabilities
+    policy: pss-baseline
+    severity: HIGH
+    controls: ["CIS 5.2.8", "CIS 5.2.9", "PSS Baseline: Capabilities", "NIST SP 800-190 4.4.2", "NIST AC-6"]
+  - id: deny-host-port
+    policy: pss-baseline
+    severity: MEDIUM
+    controls: ["CIS 5.2.4", "PSS Baseline: HostPorts", "NSA Hardening: Pod"]
+  - id: seccomp-not-unconfined
+    policy: pss-baseline
+    severity: HIGH
+    controls: ["CIS 5.2.7", "PSS Baseline: Seccomp", "NIST SP 800-190 4.4.4"]
+  - id: deny-unsafe-sysctls
+    policy: pss-baseline
+    severity: MEDIUM
+    controls: ["CIS 5.2.7", "PSS Baseline: Sysctls", "NIST SP 800-190 4.4.4"]
+  - id: deny-apparmor-unconfined
+    policy: pss-baseline
+    severity: HIGH
+    controls: ["CIS 5.2.7", "PSS Baseline: AppArmor", "NIST SP 800-190 4.4.4"]
+
+  # --- pss-restricted (opt-in) ---
+  - id: require-no-privilege-escalation
+    policy: pss-restricted
+    severity: HIGH
+    controls: ["CIS 5.2.5", "PSS Restricted: Privilege Escalation", "NIST SP 800-190 4.4.2", "NIST AC-6"]
+  - id: require-drop-all-capabilities
+    policy: pss-restricted
+    severity: HIGH
+    controls: ["CIS 5.2.9", "PSS Restricted: Capabilities", "NIST SP 800-190 4.4.2", "NIST AC-6"]
+  - id: require-readonly-rootfs
+    policy: pss-restricted
+    severity: MEDIUM
+    controls: ["PSS Restricted: Read-only Root Filesystem", "NSA Hardening: Pod", "NIST SP 800-190 4.4.1", "NIST CM-7"]
+  - id: require-run-as-nonroot
+    policy: pss-restricted
+    severity: HIGH
+    controls: ["CIS 5.2.6", "PSS Restricted: Running as Non-root", "NIST SP 800-190 4.4.2", "NIST AC-6"]
+  - id: restrict-volume-types
+    policy: pss-restricted
+    severity: MEDIUM
+    controls: ["CIS 5.2.4", "PSS Restricted: Volume Types", "NIST SP 800-190 4.3.4"]
+
+  # --- nsa-hardening (opt-in) ---
+  - id: require-resource-limits
+    policy: nsa-hardening
+    severity: MEDIUM
+    controls: ["CIS 5.7.3", "NSA Hardening: Resource Limits", "NIST SP 800-190 4.3.3", "NIST SC-6"]
+  - id: require-automount-token-disabled
+    policy: nsa-hardening
+    severity: MEDIUM
+    controls: ["CIS 5.1.5", "CIS 5.1.6", "NSA Hardening: RBAC", "NIST SP 800-190 4.2.4", "NIST AC-6"]
+
+  # --- governance-baseline (opt-in) ---
+  - id: require-labels
+    policy: governance-baseline
+    severity: LOW
+    controls: ["CIS 5.7.1", "NIST CM-8", "NIST CM-8(1)", "NIST SP 800-190 4.3.1"]
+  - id: deny-default-namespace
+    policy: governance-baseline
+    severity: LOW
+    controls: ["CIS 5.7.1", "NSA Hardening: Namespaces", "NIST SP 800-190 4.3.1", "NIST CM-8"]
+
+  # --- rbac-baseline (opt-in) ---
+  - id: deny-wildcard-rbac
+    policy: rbac-baseline
+    severity: HIGH
+    controls: ["CIS 5.1.3", "NSA Hardening: RBAC", "NIST SP 800-190 4.2.4", "NIST AC-6", "NIST AC-6(1)"]
+  - id: deny-dangerous-verbs
+    policy: rbac-baseline
+    severity: HIGH
+    controls: ["CIS 5.1.1", "CIS 5.1.4", "NSA Hardening: RBAC", "NIST AC-6", "NIST AC-6(1)"]
+  - id: deny-cluster-admin-binding
+    policy: rbac-baseline
+    severity: HIGH
+    controls: ["CIS 5.1.1", "CIS 5.1.2", "NSA Hardening: RBAC", "NIST AC-6", "NIST AC-3"]
+  - id: deny-broad-subject-binding
+    policy: rbac-baseline
+    severity: HIGH
+    controls: ["CIS 5.1.1", "CIS 5.1.6", "NSA Hardening: RBAC", "NIST AC-6", "NIST AC-6(1)"]
+
+  # --- secrets-baseline (opt-in) ---
+  - id: deny-secret-env
+    policy: secrets-baseline
+    severity: MEDIUM
+    controls: ["CIS 5.4.1", "NSA Hardening: Secrets", "NIST SP 800-190 4.5.2", "NIST IA-5", "NIST SC-28"]
+  - id: flag-configmap-sensitive
+    policy: secrets-baseline
+    severity: MEDIUM
+    controls: ["CIS 5.4.1", "NSA Hardening: Secrets", "NIST SP 800-190 4.5.2", "NIST IA-5", "NIST SC-28"]
+
+  # --- network-baseline (opt-in) ---
+  - id: deny-overly-broad-netpol
+    policy: network-baseline
+    severity: MEDIUM
+    controls: ["CIS 5.3.2", "NSA Hardening: Network Separation", "NIST SP 800-190 4.3.2", "NIST SC-7"]
+  - id: ingress-require-tls-no-wildcard
+    policy: network-baseline
+    severity: MEDIUM
+    controls: ["CIS 5.3.1", "NSA Hardening: Network Separation", "NIST SC-7", "NIST SC-7(5)", "NIST SC-8"]
+
+  # --- mutating-hardening (opt-in) ---
+  - id: harden-pod-securitycontext
+    policy: mutating-hardening
+    severity: MEDIUM
+    controls: ["PSS Restricted: SecurityContext Defaults", "NSA Hardening: Pod", "NIST SP 800-190 4.4.2", "NIST CM-6", "NIST CM-7"]
