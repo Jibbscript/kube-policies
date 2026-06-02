@@ -13,7 +13,9 @@ on:
 
 env:
   GO_VERSION: '1.25'
-  GOTOOLCHAIN: local
+  # GOTOOLCHAIN=auto: download + enforce the go.mod-pinned toolchain (go1.25.11)
+  # even when setup-go's release manifest lags a new Go patch (SI-2 / VUL-WU-03).
+  GOTOOLCHAIN: auto
   GOFLAGS: -mod=readonly
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
@@ -132,7 +134,7 @@ jobs:
         # from the commit timestamp (SOURCE_DATE_EPOCH), NOT wall-clock `date`,
         # so two independent builds of the same commit produce byte-identical
         # binaries. -trimpath strips machine-specific paths; CGO_ENABLED=0 and a
-        # toolchain pinned to go.mod (GOTOOLCHAIN=local, GO_VERSION) complete the
+        # toolchain pinned to go.mod (GOTOOLCHAIN=auto downloads that exact pin) complete the
         # determinism contract. Verified by scripts/verify-reproducible-build.sh.
         SOURCE_DATE_EPOCH="$(git log -1 --pretty=%ct)"
         export SOURCE_DATE_EPOCH

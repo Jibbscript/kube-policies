@@ -12,7 +12,9 @@ on:
 
 env:
   GO_VERSION: '1.25'
-  GOTOOLCHAIN: local
+  # GOTOOLCHAIN=auto: download + enforce the go.mod-pinned toolchain (go1.25.11)
+  # even when setup-go's release manifest lags a new Go patch (SI-2 / VUL-WU-03).
+  GOTOOLCHAIN: auto
   GOFLAGS: -mod=readonly
   KUBERNETES_VERSION: 'v1.28.15'
   REGISTRY: ghcr.io
