@@ -1,0 +1,307 @@
+# IAM-WU-15 / NET-WU-01..09: network segmentation for the raw-manifest install path.
+#
+# This mirrors the Helm chart's NetworkPolicy set for the kube-policies-system
+# namespace so operators who apply the base manifests directly (kubectl apply -f)
+# get the same default-deny + least-privilege allow-list as a `helm install`.
+#
+# Pods are selected by the base manifests' stable `component` label
+# (component: admission-webhook | policy-manager | dashboard). The base ships only
+# the admission-webhook today; the policy-manager/dashboard policies are inert
+# until those components are deployed into this namespace with the matching label.
+#
+# Your CNI MUST enforce NetworkPolicy (Calico, Cilium, Antrea, ...) for these to
+# have effect. Two placeholders below MUST be tuned for your cluster:
+#   * egress-apiserver ipBlock — set to your kube-apiserver / control-plane CIDR(s).
+#   * ingress-webhook from — set to the control-plane source CIDR(s) the apiserver
+#     connects from. As shipped both DENY (fail-closed empty/placeholder), matching
+#     the chart's secure-by-default posture.
+---
+# Default-deny baseline: every pod in the namespace, all ingress + egress denied
+# unless an allow policy below permits it.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: kube-policies-default-deny
+  namespace: kube-policies-system
+  labels:
+    app: kube-policies
+    component: network-policy
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+    - Egress
+---
+# DNS egress: every kube-policies pod may resolve names via kube-dns.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: kube-policies-egress-dns
+  namespace: kube-policies-system
+  labels:
+    app: kube-policies
+    component: network-policy
+spec:
+  podSelector: {}
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+---
+# kube-apiserver egress for the webhook (leader election + TokenReview) and the
+# policy-manager (TokenReview). PLACEHOLDER ipBlock — replace 10.96.0.1/32 with
+# your apiserver/control-plane CIDR(s). As shipped this allows only the in-cluster
+# `kubernetes` Service ClusterIP (the common default-service-CIDR first IP).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: kube-policies-egress-apiserver
+  namespace: kube-policies-system
+  labels:
+    app: kube-policies
+    component: network-policy
+spec:
+  podSelector:
+    matchExpressions:
+      - key: component
+        operator: In
+        values:
+          - admission-webhook
+          - policy-manager
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - ipBlock:
+            cidr: 10.96.0.1/32
+      ports:
+        - protocol: TCP
+          port: 443
+        - protocol: TCP
+          port: 6443
+---
+# admission-webhook ingress on :8443 from the control plane. PLACEHOLDER: as
+# shipped there is NO `from`, which DENIES all ingress (fail-closed). Add an
+# ipBlock for your control-plane source CIDR(s) to admit the apiserver.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: kube-policies-ingress-webhook
+  namespace: kube-policies-system
+  labels:
+    app: kube-policies
+    component: admission-webhook
+spec:
+  podSelector:
+    matchLabels:
+      component: admission-webhook
+  policyTypes:
+    - Ingress
+  ingress:
+    - ports:
+        - protocol: TCP
+          port: 8443
+      # from:
+      #   - ipBlock:
+      #       cidr: 10.0.0.0/24
+---
+# policy-manager ingress on :8080 only from the webhook + dashboard pods.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: kube-policies-ingress-policy-manager
+  namespace: kube-policies-system
+  labels:
+    app: kube-policies
+    component: policy-manager
+spec:
+  podSelector:
+    matchLabels:
+      component: policy-manager
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              component: admission-webhook
+        - podSelector:
+            matchLabels:
+              component: dashboard
+      ports:
+        - protocol: TCP
+          port: 8080
+---
+# Metrics ingress from the monitoring scraper (Prometheus in `monitoring`).
+# One rule per component metrics port (webhook 9090, policy-manager 9091,
+# dashboard 9092). Adjust the selectors to your observability stack.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: kube-policies-ingress-metrics-webhook
+  namespace: kube-policies-system
+  labels:
+    app: kube-policies
+    component: admission-webhook
+spec:
+  podSelector:
+    matchLabels:
+      component: admission-webhook
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: prometheus
+      ports:
+        - protocol: TCP
+          port: 9090
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: kube-policies-ingress-metrics-policy-manager
+  namespace: kube-policies-system
+  labels:
+    app: kube-policies
+    component: policy-manager
+spec:
+  podSelector:
+    matchLabels:
+      component: policy-manager
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: prometheus
+      ports:
+        - protocol: TCP
+          port: 9091
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: kube-policies-ingress-metrics-dashboard
+  namespace: kube-policies-system
+  labels:
+    app: kube-policies
+    component: dashboard
+spec:
+  podSelector:
+    matchLabels:
+      component: dashboard
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: prometheus
+      ports:
+        - protocol: TCP
+          port: 9092
+---
+# dashboard ingress on :8090 from the ingress controller (ingress-nginx).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: kube-policies-ingress-dashboard
+  namespace: kube-policies-system
+  labels:
+    app: kube-policies
+    component: dashboard
+spec:
+  podSelector:
+    matchLabels:
+      component: dashboard
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ingress-nginx
+      ports:
+        - protocol: TCP
+          port: 8090
+---
+# webhook -> policy-manager egress on :8080 (decisions channel).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: kube-policies-egress-internal
+  namespace: kube-policies-system
+  labels:
+    app: kube-policies
+    component: admission-webhook
+spec:
+  podSelector:
+    matchLabels:
+      component: admission-webhook
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              component: policy-manager
+      ports:
+        - protocol: TCP
+          port: 8080
+---
+# dashboard -> policy-manager (:8080 API/SSE + :9091 metrics) and
+# dashboard -> admission-webhook (:9090 metrics) egress.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: kube-policies-egress-dashboard
+  namespace: kube-policies-system
+  labels:
+    app: kube-policies
+    component: dashboard
+spec:
+  podSelector:
+    matchLabels:
+      component: dashboard
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              component: policy-manager
+      ports:
+        - protocol: TCP
+          port: 8080
+        - protocol: TCP
+          port: 9091
+    - to:
+        - podSelector:
+            matchLabels:
+              component: admission-webhook
+      ports:
+        - protocol: TCP
+          port: 9090

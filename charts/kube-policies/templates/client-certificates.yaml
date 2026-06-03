@@ -1,0 +1,79 @@
+{{- if and .Values.policyManager.enabled .Values.policyManager.tls.mtls.enabled .Values.certManager.enabled }}
+{{- /*
+  Client certificates the admission-webhook and dashboard PRESENT to the
+  policy-manager for mutual TLS (IAM-WU-03). Both are issued by the SAME shared
+  cert-manager issuer as the serving certs, so they chain to the CA the
+  policy-manager trusts — the ca.crt already present in its serving Secret,
+  mounted at /etc/certs/ca.crt and passed via --client-ca-path. usages is
+  "client auth" only (caller identities, not serving certs); the CN/dnsName is an
+  identifier the policy-manager logs, not a hostname it verifies.
+*/ -}}
+{{- $ns := .Release.Namespace -}}
+{{- $issuerName := printf "%s-webhook-issuer" (include "kube-policies.fullname" .) -}}
+{{- $issuerKind := "Issuer" -}}
+{{- $issuerGroup := "cert-manager.io" -}}
+{{- if eq .Values.certManager.issuerType "existing" -}}
+{{- $issuerName = required "certManager.issuerRef.name is required when certManager.issuerType=existing" .Values.certManager.issuerRef.name -}}
+{{- $issuerKind = .Values.certManager.issuerRef.kind | default "Issuer" -}}
+{{- $issuerGroup = .Values.certManager.issuerRef.group | default "cert-manager.io" -}}
+{{- end -}}
+{{- if .Values.admissionWebhook.enabled }}
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ include "kube-policies.fullname" . }}-admission-webhook-client
+  namespace: {{ $ns }}
+  labels:
+    {{- include "kube-policies.labels" . | nindent 4 }}
+spec:
+  secretName: {{ include "kube-policies.webhookClientCertSecretName" . }}
+  duration: {{ .Values.certManager.duration | quote }}
+  renewBefore: {{ .Values.certManager.renewBefore | quote }}
+  privateKey:
+    algorithm: {{ .Values.certManager.privateKey.algorithm }}
+    size: {{ .Values.certManager.privateKey.size }}
+    rotationPolicy: {{ .Values.certManager.privateKey.rotationPolicy | default "Always" }}
+  # No commonName: the service name (appended after the fullname's 63-char
+  # truncation) can exceed the RFC 5280 64-char CN limit for long release names,
+  # which cert-manager rejects so the Cert never becomes Ready and the (non-
+  # optional) client-cert mount blocks the pod. The identity lives in the dnsName
+  # SAN (bounded by the 253-char DNS limit); the policy-manager logs it but does
+  # not verify it (mTLS only checks the chain).
+  usages:
+    - client auth
+  dnsNames:
+    - {{ include "kube-policies.admissionWebhookName" . }}
+  issuerRef:
+    name: {{ $issuerName }}
+    kind: {{ $issuerKind }}
+    group: {{ $issuerGroup }}
+{{- end }}
+{{- if .Values.dashboard.enabled }}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ include "kube-policies.fullname" . }}-dashboard-client
+  namespace: {{ $ns }}
+  labels:
+    {{- include "kube-policies.labels" . | nindent 4 }}
+spec:
+  secretName: {{ include "kube-policies.dashboardClientCertSecretName" . }}
+  duration: {{ .Values.certManager.duration | quote }}
+  renewBefore: {{ .Values.certManager.renewBefore | quote }}
+  privateKey:
+    algorithm: {{ .Values.certManager.privateKey.algorithm }}
+    size: {{ .Values.certManager.privateKey.size }}
+    rotationPolicy: {{ .Values.certManager.privateKey.rotationPolicy | default "Always" }}
+  # No commonName (see the webhook client cert above): the dnsName SAN carries
+  # the identity within the 253-char DNS limit, avoiding the 64-char CN cap.
+  usages:
+    - client auth
+  dnsNames:
+    - {{ printf "%s-dashboard" (include "kube-policies.fullname" .) }}
+  issuerRef:
+    name: {{ $issuerName }}
+    kind: {{ $issuerKind }}
+    group: {{ $issuerGroup }}
+{{- end }}
+{{- end }}

@@ -1,5 +1,37 @@
 Thank you for installing {{ .Chart.Name }} {{ .Chart.Version }}.
 
+## Decisions-channel authentication (IAM-WU-11)
+
+The webhook -> policy-manager decisions channel (/api/v1/decisions/internal)
+defaults to **TokenReview** mode: the webhook presents an audience-bound,
+short-TTL projected ServiceAccount token; the policy-manager validates it via
+the Kubernetes TokenReview API. This works on any real cluster (including kind).
+
+Set policyManager.internalAuth.mode=static ONLY for non-cluster/demo deployments
+where no kubeconfig is available — this falls back to the shared internalToken
+(below) as the sole credential.
+
+## FIPS 140-3 and the internal token
+
+Images are built with the Go FIPS 140-3 module and default to fips140=on. For
+production set FIPS as mandatory:
+
+    helm upgrade --install {{ .Release.Name }} <chart> -f values-production.yaml
+
+This injects REQUIRE_FIPS=true so each binary aborts at startup if the validated
+module is not active.
+
+To rotate the shared internal bearer token with no downtime, follow
+docs/runbooks/internal-token-rotation.md (two-token window: current + previous).
+
+Tamper-evident audit log (AU-9): set audit.integrity.enabled=true and supply a
+CSPRNG-generated audit.integrity.key (or pre-create the {{ include "kube-policies.fullname" . }}-audit-integrity
+Secret). Each record then carries a sequence + HMAC chain; verify a log offline
+with audit.VerifyChain. To rotate the HMAC key, update the Secret/value and
+helm upgrade — the checksum/audit-integrity annotation rolls the pod so the new
+key is loaded. NOTE: records written under the old key still verify only with the
+old key; archive the retiring key alongside the segment it signed.
+
 ## TLS Configuration — Admission Webhook
 
 Four modes are supported for webhook TLS bootstrap (evaluated in order):
@@ -15,13 +47,25 @@ Four modes are supported for webhook TLS bootstrap (evaluated in order):
    and leaf certificate (365-day expiry, 5 DNS SANs + IP 127.0.0.1). On the first
    install a one-time extra rolling restart occurs as the checksum/webhook-certs
    annotation transitions from "initial-install" to the stable Secret hash.
+   DEMO-ONLY: this path uses sprig genCA/genSignedCert (fixed RSA-2048/SHA-256,
+   below the FedRAMP-Moderate bar — see docs/compliance/crypto-standards.md).
+   Do not use it in production.
 
-4. **cert-manager managed**: create a cert-manager Certificate CR targeting Secret
-   {{ include "kube-policies.fullname" . }}-admission-webhook-certs BEFORE helm install,
-   then set tls.autoGenerate=false. Branch 1 (lookup-preserve) picks up the Secret.
+4. **cert-manager (recommended for production, certManager.enabled=true)**: the chart
+   renders an Issuer + Certificate (ECDSA P-256, CRY-WU-09/11) that provisions Secret
+   {{ include "kube-policies.fullname" . }}-admission-webhook-certs, and annotates the
+   ValidatingWebhookConfiguration with cert-manager.io/inject-ca-from so ca-injector
+   populates the caBundle (no inline Secret or caBundle is rendered). cert-manager MUST
+   be pre-installed in the cluster; `helm template` renders the CRs without it, but a
+   real install/upgrade will hang until the Certificate goes Ready. See
+   values-production.yaml.
 
 If none of the above applies, the chart fails at render time with a remediation
 message pointing at scripts/gen-webhook-cert.sh (manual certificate generation).
+
+Mutual TLS (CRY-WU-04): set admissionWebhook.tls.clientCA to the PEM of the CA that
+signs the kube-apiserver's webhook client certificate to enforce RequireAndVerifyClientCert
+on the :8443 listener. Empty (default) leaves the listener server-auth-only.
 
 ## Cert Rotation
 
@@ -45,3 +89,92 @@ Two image conventions are used in this chart:
   and the registry is SUPPRESSED to prevent double-prefixing. To use a mirror, set
   dashboard.image.registry=<mirror> AND dashboard.image.repository=kube-policies/dashboard
   (host-less), or leave registry empty and override the full repository instead.
+{{- if .Values.networkPolicy.enabled }}
+
+## Network segmentation (NetworkPolicy)
+
+networkPolicy.enabled=true: a default-deny baseline plus least-privilege allow
+policies are installed (SC-7 / CIS 5.3.1-5.3.2). Your CNI MUST enforce
+NetworkPolicy (Calico, Cilium, Antrea, ...) or these objects are inert. The
+default kind CNI (kindnet) does NOT enforce NetworkPolicy — the objects install
+but block nothing there.
+
+  Verify your CNI actually enforces NetworkPolicy (deny-all probe):
+    kubectl create ns np-test
+    kubectl -n np-test run a --image=busybox --restart=Never -- sleep 3600
+    kubectl -n np-test run b --image=busybox --restart=Never -- sleep 3600
+    kubectl -n np-test wait --for=condition=Ready pod/a pod/b
+    kubectl -n np-test apply -f - <<'EOF'
+    apiVersion: networking.k8s.io/v1
+    kind: NetworkPolicy
+    metadata: { name: deny-all, namespace: np-test }
+    spec: { podSelector: {}, policyTypes: [Ingress, Egress] }
+    EOF
+    # Enforcing CNI -> the call TIMES OUT (blocked). kindnet -> it SUCCEEDS.
+    kubectl -n np-test exec a -- wget -qO- --timeout=3 \
+      "http://$(kubectl -n np-test get pod b -o jsonpath='{.status.podIP}')"
+    kubectl delete ns np-test
+
+  Full SC-7 flow map + honest CNI/config caveats:
+    docs/compliance/network-architecture.md
+{{- if not .Values.networkPolicy.apiServerCIDRs }}
+
+  ⚠ networkPolicy.apiServerCIDRs is EMPTY. The apiserver-egress policy is rendered
+    fail-closed (no egress peers), so the admission-webhook and policy-manager
+    CANNOT reach the kube-apiserver — leader election and TokenReview auth will
+    FAIL. Set networkPolicy.apiServerCIDRs to your control-plane CIDR(s), e.g.:
+      --set 'networkPolicy.apiServerCIDRs={10.96.0.1/32}'
+{{- end }}
+{{- if and .Values.admissionWebhook.enabled (not (or .Values.networkPolicy.webhook.ingressFrom.ipBlocks .Values.networkPolicy.webhook.ingressFrom.namespaceSelectors)) }}
+
+  ⚠ networkPolicy.webhook.ingressFrom is EMPTY. The webhook-ingress policy is
+    rendered fail-closed (no `from`), so the kube-apiserver CANNOT reach the
+    webhook on :8443 and admission requests will FAIL (failurePolicy=Fail).
+    Set networkPolicy.webhook.ingressFrom.ipBlocks to the control-plane CIDR(s):
+      --set 'networkPolicy.webhook.ingressFrom.ipBlocks={10.0.0.0/24}'
+{{- end }}
+{{- end }}
+
+{{- if .Values.audit.persistence.enabled }}
+{{- if and (gt (int .Values.admissionWebhook.replicaCount) 1) (ne .Values.audit.persistence.accessMode "ReadWriteMany") }}
+  ⚠ AUDIT PERSISTENCE WARNING (AUD-WU-08):
+    audit.persistence.enabled=true with replicaCount={{ .Values.admissionWebhook.replicaCount }} and
+    accessMode={{ .Values.audit.persistence.accessMode }}.
+    A ReadWriteOnce PVC can only be mounted on ONE node at a time. If the
+    {{ .Values.admissionWebhook.replicaCount }} webhook replicas land on different nodes, the second pod
+    will fail to schedule with a VolumeMount conflict.
+    Solutions:
+      a) Set audit.persistence.accessMode=ReadWriteMany (requires RWX StorageClass).
+      b) Set admissionWebhook.replicaCount=1.
+      c) Preferred at scale: set audit.forwarder.enabled=true (DaemonSet log-shipping
+         requires no shared storage and works with any replicaCount).
+{{- end }}
+{{- end }}
+
+Node time synchronization prerequisite (AUD-WU-03, NIST AU-8/AU-8(1)): every
+cluster node MUST run NTP/chrony so container clocks are accurate. Audit
+timestamps are RFC 3339 UTC. See docs/audit/time-synchronization.md.
+
+Workload hardening (CFG-WU-01/02/03/05/10/21 — restricted Pod Security Standard):
+  All three workloads render seccompProfile=RuntimeDefault, runAsGroup (non-root),
+  drop ALL capabilities, readOnlyRootFilesystem, runAsNonRoot, and CPU/memory
+  requests+limits by default. Two operator knobs:
+
+  • Higher-assurance seccomp (CFG-WU-21): override the RuntimeDefault profile with
+    a Localhost profile, e.g. for the webhook:
+      --set 'admissionWebhook.podSecurityContext.seccompProfile.type=Localhost' \
+      --set 'admissionWebhook.podSecurityContext.seccompProfile.localhostProfile=profiles/kube-policies.json'
+
+  • Immutable image pinning (CFG-WU-10, recommended for production): set image.digest
+    to pin by sha256 (the mutable tag is then dropped):
+      --set 'admissionWebhook.image.digest=sha256:<digest>'
+
+  Restricted-namespace install (CFG-WU-05): the chart can create + PSA-label its
+  namespace as restricted (namespace.create, default false). Choose EITHER
+  `--set namespace.create=true` (chart creates+labels it) OR
+  `helm install --create-namespace` (you label it) — not both.
+{{- if .Values.dashboard.enabled }}
+
+  The dashboard securityContext is values-driven (dashboard.podSecurityContext /
+  dashboard.securityContext) and overridable like the other components.
+{{- end }}

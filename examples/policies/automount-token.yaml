@@ -1,0 +1,47 @@
+# Illustrative example mirroring the bundled automount-token policy (internal/policy). NOT loaded automatically; copy/adapt into your own Policy CR. The engine compiles every rule alongside data.kube_policies.lib (internal/policy/rego/podspec.rego).
+apiVersion: policies.kube-policies.io/v1
+kind: Policy
+metadata:
+  name: automount-token
+  namespace: kube-policies-system
+  labels:
+    category: security
+    severity: medium
+spec:
+  description: "Require automountServiceAccountToken to be explicitly disabled"
+  enabled: false
+
+  targets:
+    kinds:
+      - apiGroup: ""
+        kinds: ["Pod"]
+      - apiGroup: "apps"
+        kinds: ["Deployment", "ReplicaSet", "DaemonSet", "StatefulSet"]
+      - apiGroup: "batch"
+        kinds: ["Job", "CronJob"]
+
+  rules:
+    - name: require-automount-token-disabled
+      severity: MEDIUM
+      description: "automountServiceAccountToken must be explicitly false unless the workload opts in"
+      frameworks: ["CIS-5.1.5", "CIS-5.1.6", "NSA-Hardening-RBAC", "NIST SP 800-190 4.2.4", "NIST AC-6"]
+      rego: |
+        package kube_policies
+
+        import rego.v1
+
+        import data.kube_policies.lib as lib
+
+        default evaluate := {"allowed": true}
+
+        # Escape hatch for workloads that legitimately call the API server.
+        opt_in if object.get(object.get(lib.pod_meta, "annotations", {}), "policy.kube-policies.io/allow-automount-token", "") == "true"
+
+        evaluate := {
+        	"allowed": false,
+        	"message": "automountServiceAccountToken must be explicitly set to false (or opt in via the policy.kube-policies.io/allow-automount-token annotation)",
+        	"path": sprintf("%s.automountServiceAccountToken", [lib.container_path_prefix]),
+        } if {
+        	not opt_in
+        	object.get(lib.pod_spec, "automountServiceAccountToken", true) != false
+        }

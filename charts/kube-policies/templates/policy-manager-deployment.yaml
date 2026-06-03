@@ -1,4 +1,8 @@
+{{- include "kube-policies.validateValues" . -}}
 {{- if .Values.policyManager.enabled }}
+{{- if and .Values.policyManager.tls.mtls.enabled (not .Values.certManager.enabled) }}
+{{- fail "policyManager.tls.mtls.enabled=true requires certManager.enabled=true: demo self-signed certs cannot establish a shared client-CA trust chain for the webhook/dashboard -> policy-manager mTLS path (IAM-WU-03). Enable cert-manager or disable policyManager.tls.mtls." }}
+{{- end }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -17,6 +21,7 @@ spec:
     metadata:
       annotations:
         checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        checksum/pm-certs: {{ include (print $.Template.BasePath "/policy-manager-tls.yaml") . | sha256sum }}
         {{- with .Values.policyManager.podAnnotations }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
@@ -28,14 +33,26 @@ spec:
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
       {{- end }}
-      serviceAccountName: {{ include "kube-policies.serviceAccountName" . }}
+      serviceAccountName: {{ include "kube-policies.policyManagerServiceAccountName" . }}
+      # IAM-WU-10 (CIS 5.1.5/5.1.6): the SA defaults automount off; the policy-manager
+      # opts the token back in here because the controller-runtime client + leader
+      # election authenticate to the apiserver with it.
+      automountServiceAccountToken: {{ dig "automountServiceAccountToken" true .Values.policyManager }}
+      # RES-WU-07 (CP-10): bound the graceful-shutdown window; --shutdown-drain-delay
+      # (below) plus the 30s server Shutdown fit inside this.
+      terminationGracePeriodSeconds: {{ .Values.policyManager.terminationGracePeriodSeconds | default 30 }}
+      {{- if .Values.priorityClass.enabled }}
+      # RES-WU-20 (CP-10/CP-2): preserve the policy-manager ahead of lower-priority
+      # workloads under node pressure.
+      priorityClassName: {{ include "kube-policies.priorityClassName" . }}
+      {{- end }}
       securityContext:
         {{- toYaml .Values.policyManager.podSecurityContext | nindent 8 }}
       containers:
         - name: policy-manager
           securityContext:
             {{- toYaml .Values.policyManager.securityContext | nindent 12 }}
-          image: "{{ include "kube-policies.image" (dict "registry" (.Values.global.imageRegistry | default .Values.policyManager.image.registry) "repository" .Values.policyManager.image.repository "tag" .Values.policyManager.image.tag "defaultTag" .Chart.AppVersion) }}"
+          image: "{{ include "kube-policies.image" (dict "registry" (.Values.global.imageRegistry | default .Values.policyManager.image.registry) "repository" .Values.policyManager.image.repository "tag" .Values.policyManager.image.tag "digest" .Values.policyManager.image.digest "defaultTag" .Chart.AppVersion) }}"
           imagePullPolicy: {{ .Values.policyManager.image.pullPolicy }}
           # cmd/policy-manager/main.go reads only flags (not env vars). The
           # HTTP_PORT/METRICS_PORT env vars previously set here were ignored
@@ -46,6 +63,24 @@ spec:
             - --port=8080
             - --metrics-port=9091
             - --config=/etc/config/config.yaml
+            {{- if .Values.metrics.tls.enabled }}
+            # Serve /metrics over TLS 1.3 with bearer-token auth (CRY-WU-08).
+            - --metrics-tls
+            {{- end }}
+            {{- if .Values.policyManager.tls.mtls.enabled }}
+            # Mutual TLS on the :8080 API (IAM-WU-03): require + verify a client
+            # certificate from the webhook/dashboard callers. The trust anchor is
+            # the shared issuer CA already published as ca.crt in the serving
+            # Secret (cert-manager populates it), mounted at /etc/certs.
+            - --require-client-cert
+            - --client-ca-path=/etc/certs/ca.crt
+            {{- end }}
+            {{- if gt (int (.Values.policyManager.preStopDrainSeconds | default 5)) 0 }}
+            # RES-WU-07 (CP-10): in-binary graceful drain — keep serving for this
+            # delay after SIGTERM so endpoints removal propagates. Distroless +
+            # k8s<1.29 safe; pairs with the native preStop below.
+            - --shutdown-drain-delay={{ .Values.policyManager.preStopDrainSeconds | default 5 | int }}s
+            {{- end }}
           ports:
             - name: http
               containerPort: 8080
@@ -56,21 +91,55 @@ spec:
           env:
             - name: LOG_LEVEL
               value: "info"
+            {{- include "kube-policies.fipsEnv" . | nindent 12 }}
             - name: POD_NAMESPACE
               valueFrom:
                 fieldRef:
                   fieldPath: metadata.namespace
+            {{- if eq (include "kube-policies.internalAuthMode" .) "tokenreview" }}
+            # Validate the inbound webhook token via the Kubernetes TokenReview
+            # API, bound to this audience AND subject (IAM-WU-11). Subject pinning
+            # ties acceptance to the webhook's specific SA identity, preventing any
+            # other SA that happens to obtain the same audience token from passing
+            # (AU-2/AU-3). The PM calls TokenReview with its already-automounted
+            # apiserver SA token — no extra volume.
+            - name: POLICY_MANAGER_INTERNAL_AUTH_MODE
+              value: "tokenreview"
+            - name: POLICY_MANAGER_INTERNAL_AUDIENCE
+              value: {{ include "kube-policies.internalAuthAudience" . | quote }}
+            - name: POLICY_MANAGER_INTERNAL_SUBJECT
+              value: "system:serviceaccount:{{ .Release.Namespace }}:{{ include "kube-policies.webhookServiceAccountName" . }}"
+            # Read side of the decisions plane (GET /stream + /recent): pin the
+            # TokenReview to the DASHBOARD SA so the dashboard's upstream
+            # subscriber authenticates to the read feeds without weakening the
+            # webhook-SA pin on /internal (IAM-WU-11, Inc7 Stream A). Same audience
+            # as POLICY_MANAGER_INTERNAL_AUDIENCE above.
+            - name: POLICY_MANAGER_DECISIONS_READER_SUBJECT
+              value: "system:serviceaccount:{{ .Release.Namespace }}:{{ include "kube-policies.fullname" . }}-dashboard"
+            {{- else }}
+            # Static shared bearer token (IAM-WU-11 escape hatch, mode=static
+            # only). The binary defaults to tokenreview, so mode=static must be
+            # set explicitly here for the PM to consult this token.
+            - name: POLICY_MANAGER_INTERNAL_AUTH_MODE
+              value: "static"
             - name: POLICY_MANAGER_INTERNAL_TOKEN
               valueFrom:
                 secretKeyRef:
                   name: {{ include "kube-policies.fullname" . }}-internal-token
                   key: token
                   optional: true
+            {{- end }}
+          # Probes target the plain-HTTP metrics port (9091) where /healthz and
+          # /readyz are mounted (NewMetricsRouter). The :8080 API now serves
+          # TLS (CRY-WU-05), so an HTTP probe against it would fail the
+          # handshake — mirror the admission-webhook pattern and probe :9091.
           livenessProbe:
             httpGet:
               path: /healthz
-              port: 8080
-              scheme: HTTP
+              port: 9091
+              # HTTPS when /metrics serves TLS (CRY-WU-08); /healthz + /readyz
+              # stay token-exempt and the kubelet HTTPS probe skips cert verify.
+              scheme: {{ if .Values.metrics.tls.enabled }}HTTPS{{ else }}HTTP{{ end }}
             initialDelaySeconds: 30
             periodSeconds: 10
             timeoutSeconds: 5
@@ -78,29 +147,78 @@ spec:
           readinessProbe:
             httpGet:
               path: /readyz
-              port: 8080
-              scheme: HTTP
+              port: 9091
+              scheme: {{ if .Values.metrics.tls.enabled }}HTTPS{{ else }}HTTP{{ end }}
             initialDelaySeconds: 5
             periodSeconds: 5
             timeoutSeconds: 3
             failureThreshold: 3
+          {{- if .Values.policyManager.startupProbe.enabled }}
+          # RES-WU-05 (CP-10): gate liveness/readiness behind startup so a slow
+          # cold start (CRD cache sync, leader-election lease acquisition) cannot
+          # trip the livenessProbe. Max startup window = periodSeconds*failureThreshold.
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: 9091
+              scheme: {{ if .Values.metrics.tls.enabled }}HTTPS{{ else }}HTTP{{ end }}
+            periodSeconds: {{ .Values.policyManager.startupProbe.periodSeconds | default 5 }}
+            failureThreshold: {{ .Values.policyManager.startupProbe.failureThreshold | default 30 }}
+            timeoutSeconds: {{ .Values.policyManager.startupProbe.timeoutSeconds | default 3 }}
+          {{- end }}
+          {{- if and (gt (int (.Values.policyManager.preStopDrainSeconds | default 5)) 0) (semverCompare ">= 1.29-0" .Capabilities.KubeVersion.GitVersion) }}
+          # RES-WU-07 (CP-10): native sleep preStop. The `sleep` lifecycle action is
+          # a k8s >= 1.29 feature; on k8s < 1.29 the API server REJECTS an empty
+          # preStop handler, so it is rendered ONLY on >= 1.29. On older clusters the
+          # in-binary --shutdown-drain-delay performs the drain. Holds the pod in
+          # Terminating while it leaves the Service endpoints.
+          lifecycle:
+            preStop:
+              sleep:
+                seconds: {{ .Values.policyManager.preStopDrainSeconds | default 5 | int }}
+          {{- end }}
           resources:
             {{- toYaml .Values.policyManager.resources | nindent 12 }}
           volumeMounts:
+            - name: certs
+              mountPath: /etc/certs
+              readOnly: true
             - name: config
               mountPath: /etc/config
               readOnly: true
             - name: tmp
               mountPath: /tmp
+            # AUD-WU-08 (NIST AU-9/AU-11): writable audit-log directory. The
+            # policy-manager constructs the audit logger unconditionally
+            # (cmd/policy-manager/main.go), and the file backend touches the log
+            # at startup to fail fast on an unwritable mount (internal/audit
+            # NewFileBackend). readOnlyRootFilesystem blocks mkdir on the overlay,
+            # so without this volume the container log.Fatals at boot ("Failed to
+            # initialize audit logger") and crash-loops, hanging helm --wait.
+            # Mirrors the admission-webhook's audit-log mount.
+            - name: audit-log
+              mountPath: /var/log/kube-policies
             {{- if .Values.persistence.enabled }}
             - name: data
               mountPath: /var/lib/kube-policies
             {{- end }}
       volumes:
+        - name: certs
+          secret:
+            secretName: {{ include "kube-policies.policyManagerCertSecretName" . }}
         - name: config
           configMap:
             name: {{ include "kube-policies.configMapName" . }}
         - name: tmp
+          emptyDir: {}
+        # AUD-WU-08: writable audit-log dir (see the volumeMount note). emptyDir,
+        # NOT the webhook's <fullname>-audit PVC: a single ReadWriteOnce PVC
+        # cannot be co-mounted by both the webhook and policy-manager Deployments,
+        # and the policy-manager's management-plane ConfigurationChange audit
+        # stream is independent of the webhook's decision audit. With the default
+        # config that stream is EPHEMERAL (emptyDir, lost on pod restart); durable
+        # retention requires enabling the audit forwarder (AUD-WU-10) / SIEM path.
+        - name: audit-log
           emptyDir: {}
         {{- if .Values.persistence.enabled }}
         - name: data
@@ -111,10 +229,21 @@ spec:
       nodeSelector:
         {{- toYaml . | nindent 8 }}
       {{- end }}
-      {{- with .Values.policyManager.affinity }}
+      # RES-WU-04 (CP-2/CP-6/CP-10): default soft pod anti-affinity (one replica
+      # per node) unless the operator overrides policyManager.affinity.
       affinity:
+        {{- with .Values.policyManager.affinity }}
         {{- toYaml . | nindent 8 }}
-      {{- end }}
+        {{- else }}
+        {{- include "kube-policies.defaultPodAntiAffinity" (dict "ctx" . "component" "policy-manager") | nindent 8 }}
+        {{- end }}
+      # RES-WU-04: default zone+host topology spread unless overridden.
+      topologySpreadConstraints:
+        {{- with .Values.policyManager.topologySpreadConstraints }}
+        {{- toYaml . | nindent 8 }}
+        {{- else }}
+        {{- include "kube-policies.defaultTopologySpreadConstraints" (dict "ctx" . "component" "policy-manager") | nindent 8 }}
+        {{- end }}
       {{- with .Values.policyManager.tolerations }}
       tolerations:
         {{- toYaml . | nindent 8 }}

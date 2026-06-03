@@ -37,6 +37,20 @@ func collectCounterValue(t *testing.T, c prometheus.Collector) (float64, []strin
 	return dtm.Counter.GetValue(), names
 }
 
+// collectGaugeValue returns the float value of a single Gauge child series.
+func collectGaugeValue(t *testing.T, c prometheus.Collector) float64 {
+	t.Helper()
+	ch := make(chan prometheus.Metric, 1)
+	c.Collect(ch)
+	close(ch)
+	m, ok := <-ch
+	require.True(t, ok, "expected one Metric sample from the gauge")
+	var dtm dto.Metric
+	require.NoError(t, m.Write(&dtm))
+	require.NotNil(t, dtm.Gauge, "expected a Gauge sample")
+	return dtm.Gauge.GetValue()
+}
+
 var testCollector *Collector
 
 func init() {
@@ -53,6 +67,20 @@ func TestMetricsCollector_IncAdmissionRequests(t *testing.T) {
 	testCollector.IncAdmissionRequests("validate", "allowed", "PolicyCompliant")
 	testCollector.IncAdmissionRequests("validate", "denied", "PolicyViolation")
 	testCollector.IncAdmissionRequests("mutate", "allowed", "PolicyCompliant")
+}
+
+func TestMetricsCollector_IncFailOpen(t *testing.T) {
+	// IRM-WU-08. NewCollector registers against the global registry, so reuse the
+	// package-shared testCollector and assert a before/after delta on the single
+	// "mutate" child series.
+	before, labels := collectCounterValue(t, testCollector.admissionFailOpen.WithLabelValues("mutate"))
+	assert.Equal(t, []string{"operation"}, labels, "fail_open must carry only the operation label")
+
+	testCollector.IncFailOpen("mutate")
+	testCollector.IncFailOpen("mutate")
+
+	after, _ := collectCounterValue(t, testCollector.admissionFailOpen.WithLabelValues("mutate"))
+	assert.Equal(t, before+2, after, "fail_open counter must increment once per fail-open admission")
 }
 
 func TestMetricsCollector_ObserveEvaluationDuration(t *testing.T) {
@@ -169,6 +197,38 @@ func TestCollector_ExceptionSuppression_LabelSetIsBounded(t *testing.T) {
 	_, names := collectCounterValue(t, vec.WithLabelValues(policyID, ruleID))
 	assert.Equal(t, []string{"policy_id", "rule_id"}, names,
 		"label set must be EXACTLY {policy_id, rule_id} — no exception_id, no other high-cardinality labels (plan §5.9.a / OQ-4)")
+}
+
+// TestMetricsCollector_SetCertExpiry asserts the cert-expiry gauge (CRY-WU-12)
+// records the certificate's NotAfter as Unix seconds, per component.
+func TestMetricsCollector_SetCertExpiry(t *testing.T) {
+	exp := time.Now().Add(72 * time.Hour).Truncate(time.Second)
+	testCollector.SetCertExpiry("admission-webhook", exp)
+	g, err := testCollector.certExpiry.GetMetricWithLabelValues("admission-webhook")
+	require.NoError(t, err)
+	assert.InDelta(t, float64(exp.Unix()), collectGaugeValue(t, g), 1e-9)
+}
+
+// TestCollector_IncRateLimited_Increments asserts the HTTP rate-limit rejection
+// counter (NET-WU-14/15, RES-WU-17) increments per (handler, reason) and that
+// its label set is exactly {handler, reason}.
+func TestCollector_IncRateLimited_Increments(t *testing.T) {
+	const handler = "/validate"
+	const reason = "rate"
+
+	testCollector.IncRateLimited(handler, reason)
+
+	vec, ok := testCollector.GetMetrics()["http_rate_limited"].(*prometheus.CounterVec)
+	require.True(t, ok, "http_rate_limited must be a *prometheus.CounterVec")
+
+	val, names := collectCounterValue(t, vec.WithLabelValues(handler, reason))
+	assert.InDelta(t, 1.0, val, 1e-9)
+	assert.Equal(t, []string{"handler", "reason"}, names,
+		"label set must be exactly {handler, reason}")
+
+	testCollector.IncRateLimited(handler, reason)
+	val, _ = collectCounterValue(t, vec.WithLabelValues(handler, reason))
+	assert.InDelta(t, 2.0, val, 1e-9)
 }
 
 func TestMetricsCollector_GetMetrics(t *testing.T) {

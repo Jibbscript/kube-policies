@@ -18,7 +18,7 @@ Standalone configuration for the observability stack: Prometheus scrape config, 
 
 ### Working In This Directory
 - Metric names referenced here must match what `internal/metrics/collector.go` registers (namespace `kube_policies`, subsystems `admission`, `policy`, `audit`, `compliance`, `system`, `cache`). When adding a metric in code, update the relevant dashboard or rule.
-- Alert thresholds (latency, error rate, violation rate) are the SLO contract for the project — change them deliberately.
+- The formal SLO/SLI definitions, numeric objectives, error budgets, and burn-rate alerting are specified in [docs/observability/slo.md](../docs/observability/slo.md) and implemented as code in `charts/kube-policies/files/slo/slo.yaml` (IRM-WU-18). Alert thresholds are not the SLO contract — that document is. Change objectives there deliberately, with a documented rationale.
 
 ### Testing Requirements
 - No automated tests in this directory. Validate by deploying to a Kind cluster and viewing dashboards.

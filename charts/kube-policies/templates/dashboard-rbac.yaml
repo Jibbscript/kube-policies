@@ -7,6 +7,9 @@ metadata:
   labels:
     {{- include "kube-policies.labels" . | nindent 4 }}
     app.kubernetes.io/component: dashboard
+# IAM-WU-10 (CIS 5.1.5/5.1.6): the dashboard does not call the apiserver at runtime,
+# so it never mounts an SA token (the pod also sets automountServiceAccountToken: false).
+automountServiceAccountToken: false
 ---
 # Narrow Role: read-only access to policy-manager and admission-webhook Services only.
 # No access to CRDs, Secrets, or other namespace resources.

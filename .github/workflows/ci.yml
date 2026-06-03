@@ -8,29 +8,40 @@ on:
   schedule:
     # Run nightly tests at 2 AM UTC
     - cron: '0 2 * * *'
+  workflow_call:
 
 env:
-  GO_VERSION: '1.21'
-  KUBERNETES_VERSION: 'v1.28.2'
+  GO_VERSION: '1.25'
+  # GOTOOLCHAIN=auto: download + enforce the go.mod-pinned toolchain (go1.25.11)
+  # even when setup-go's release manifest lags a new Go patch (SI-2 / VUL-WU-03).
+  GOTOOLCHAIN: auto
+  GOFLAGS: -mod=readonly
+  KUBERNETES_VERSION: 'v1.28.15'
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
+
+permissions:
+  contents: read
 
 jobs:
   # Static analysis and linting
   lint:
     name: Lint and Static Analysis
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
     steps:
     - name: Checkout code
-      uses: actions/checkout@v4
+      uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
 
     - name: Set up Go
-      uses: actions/setup-go@v4
+      uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff  # v5
       with:
         go-version: ${{ env.GO_VERSION }}
 
     - name: Cache Go modules
-      uses: actions/cache@v3
+      uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830  # v4
       with:
         path: |
           ~/.cache/go-build
@@ -42,10 +53,19 @@ jobs:
     - name: Install dependencies
       run: go mod download
 
+    - name: Verify module integrity
+      run: |
+        go mod verify
+        go mod tidy
+        git diff --exit-code -- go.mod go.sum
+
     - name: Run golangci-lint
-      uses: golangci/golangci-lint-action@v3
+      uses: golangci/golangci-lint-action@4afd733a84b1f43292c63897423277bb7f4313a9  # v8.0.0
       with:
-        version: latest
+        # golangci-lint v2 is required: v1.x is built with go1.24 and refuses to
+        # run against the go1.25 toolchain (SI-2 pin). The repo's .golangci.yml is
+        # already in v2 schema. action v8 installs golangci-lint v2.
+        version: v2.12.2
         args: --timeout=5m
 
     - name: Run go vet
@@ -59,13 +79,29 @@ jobs:
           exit 1
         fi
 
-    - name: Check for security issues
-      uses: securecodewarrior/github-action-gosec@master
+    # SDL-WU-06 (NIST SA-11(1), SR-3, SSDF PW.8): gosec gates the lint job on
+    # MEDIUM+ severity / MEDIUM+ confidence findings — not just SARIF upload.
+    # gosec writes the SARIF report and then exits non-zero on a qualifying
+    # finding, so the upload step still runs under `if: always()`.
+    - name: Check for security issues (gosec — fail on MEDIUM+)
+      uses: securego/gosec@9e6a9843d7a4a6e3e9a8539b02612c8a4aa3f889  # v2.27.1
+      # v2.25.0 (the old pin's image) G402-false-positives on TLS MinVersion set
+      # via a variable (our mandated TLS 1.3 floor in internal/config/tls.go);
+      # gosec 2.27.1 resolves it. Verified clean locally with the exact args.
       with:
-        args: '-fmt sarif -out gosec.sarif ./...'
+        # -exclude=G204,G304 mirrors the gosec excludes in .golangci.yml (justified
+        # there: subprocess-with-variable in webhook tooling; file-path-as-taint in
+        # fixture/config readers). G124 is also excluded HERE only: the two flagged
+        # dashboard cookies are justified via line-scoped //nolint:gosec (HttpOnly +
+        # SameSite set; Secure tracks a.secure), which the golangci-lint gosec run
+        # honors — but the standalone gosec binary reads #nosec, not //nolint, so it
+        # would re-flag them. G124 remains enforced everywhere else by the in-lint
+        # gosec run, so no net coverage is lost.
+        args: '-severity medium -confidence medium -exclude=G204,G304,G124 -fmt sarif -out gosec.sarif ./...'
 
-    - name: Upload SARIF file
-      uses: github/codeql-action/upload-sarif@v2
+    - name: Upload gosec SARIF file
+      if: always()
+      uses: github/codeql-action/upload-sarif@03e4368ac7daa2bd82b3e85262f3bf87ee112f57  # v3
       with:
         sarif_file: gosec.sarif
 
@@ -75,18 +111,18 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        go-version: ['1.20', '1.21']
+        go-version: ['1.25']
     steps:
     - name: Checkout code
-      uses: actions/checkout@v4
+      uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
 
     - name: Set up Go
-      uses: actions/setup-go@v4
+      uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff  # v5
       with:
         go-version: ${{ matrix.go-version }}
 
     - name: Cache Go modules
-      uses: actions/cache@v3
+      uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830  # v4
       with:
         path: |
           ~/.cache/go-build
@@ -102,41 +138,116 @@ jobs:
       run: |
         go test -v -race -coverprofile=coverage.out -covermode=atomic ./cmd/... ./internal/... ./pkg/...
 
+    # SDL-WU-03 (NIST SA-11, SA-11(1)): hard coverage floor, independent of
+    # Codecov availability. Starts at the current measured floor and ratchets to
+    # 80% per docs/testing.md; CI fails if total unit coverage drops below it.
+    - name: Enforce unit-coverage floor
+      env:
+        MIN_COVERAGE: '60'
+      run: ./scripts/test/cover-gate.sh coverage.out
+
     - name: Generate coverage report
       run: go tool cover -html=coverage.out -o coverage.html
 
     - name: Upload coverage to Codecov
-      uses: codecov/codecov-action@v3
+      uses: codecov/codecov-action@b9fd7d16f6d7d1b5d2bec1a2887e65ceed900238  # v4
       with:
         file: ./coverage.out
         flags: unittests
         name: codecov-umbrella
 
     - name: Upload coverage artifacts
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
       with:
         name: coverage-report-${{ matrix.go-version }}
         path: |
           coverage.out
           coverage.html
 
+  # FIPS 140-3 build verification (CRY-WU-01): build every shipped binary with
+  # the Go native FIPS module and fail if the GOFIPS140 marker is absent.
+  fips-verify:
+    name: FIPS 140-3 Build Verification
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+
+    - name: Set up Go
+      uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff  # v5
+      with:
+        go-version: ${{ env.GO_VERSION }}
+
+    - name: Build with GOFIPS140 and assert the marker on every binary
+      run: make verify-fips GOFIPS140=v1.0.0
+
+  # Policy library gate (POL-WU-25/27): per-rule allow+deny coverage, control
+  # traceability, the customer-policy compile gate, profile selection, bundle
+  # SemVer, and a reproducible signed-bundle digest. The full ./internal/policy/...
+  # suite compiles every bundled rule WITH the shared library, so a Rego
+  # regression or an uncovered new rule fails CI here.
+  policy-library:
+    name: Policy Library
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+
+    - name: Set up Go
+      uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff  # v5
+      with:
+        go-version: ${{ env.GO_VERSION }}
+
+    - name: Run policy library test suite
+      run: go test -race -count=1 ./internal/policy/...
+
+    - name: Verify policy-bundle digest is reproducible (POL-WU-27)
+      run: |
+        set -euo pipefail
+        d1="$(go run ./cmd/policybundle digest)"
+        d2="$(go run ./cmd/policybundle digest)"
+        if [ "$d1" != "$d2" ]; then
+          echo "::error::policy bundle digest is not reproducible: $d1 != $d2" >&2
+          exit 1
+        fi
+        echo "policy bundle digest: $d1"
+
+    - name: Verify policy library artifacts are present
+      run: |
+        set -euo pipefail
+        for f in \
+          internal/policy/control_matrix.yaml \
+          docs/policy-control-matrix.md \
+          docs/policy-library.md \
+          docs/policy-profiles.md \
+          docs/policy-bundle-verification.md \
+          docs/compliance/cis-k8s-800-190-mapping.md \
+          CHANGELOG-policies.md; do
+          test -f "$f" || { echo "::error::missing policy artifact $f" >&2; exit 1; }
+        done
+
   # Build and test Docker images
   build-images:
     name: Build Docker Images
     runs-on: ubuntu-latest
     needs: [lint, unit-tests]
+    permissions:
+      contents: read
+      packages: write
     outputs:
-      admission-webhook-image: ${{ steps.meta-webhook.outputs.tags }}
-      policy-manager-image: ${{ steps.meta-manager.outputs.tags }}
+      # First tag only — meta.outputs.tags is newline-separated (multiple tags),
+      # which is an invalid single image reference for the Trivy scan downstream.
+      admission-webhook-image: ${{ fromJSON(steps.meta-webhook.outputs.json).tags[0] }}
+      policy-manager-image: ${{ fromJSON(steps.meta-manager.outputs.json).tags[0] }}
     steps:
     - name: Checkout code
-      uses: actions/checkout@v4
+      uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
 
     - name: Set up Docker Buildx
-      uses: docker/setup-buildx-action@v3
+      uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f  # v3
 
     - name: Log in to Container Registry
-      uses: docker/login-action@v3
+      uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9  # v3
       with:
         registry: ${{ env.REGISTRY }}
         username: ${{ github.actor }}
@@ -144,17 +255,17 @@ jobs:
 
     - name: Extract metadata for admission webhook
       id: meta-webhook
-      uses: docker/metadata-action@v5
+      uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051  # v5
       with:
         images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/admission-webhook
         tags: |
           type=ref,event=branch
           type=ref,event=pr
-          type=sha,prefix={{branch}}-
+          type=sha
           type=raw,value=latest,enable={{is_default_branch}}
 
     - name: Build and push admission webhook image
-      uses: docker/build-push-action@v5
+      uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8  # v6
       with:
         context: .
         file: ./build/docker/admission-webhook.Dockerfile
@@ -166,17 +277,17 @@ jobs:
 
     - name: Extract metadata for policy manager
       id: meta-manager
-      uses: docker/metadata-action@v5
+      uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051  # v5
       with:
         images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/policy-manager
         tags: |
           type=ref,event=branch
           type=ref,event=pr
-          type=sha,prefix={{branch}}-
+          type=sha
           type=raw,value=latest,enable={{is_default_branch}}
 
     - name: Build and push policy manager image
-      uses: docker/build-push-action@v5
+      uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8  # v6
       with:
         context: .
         file: ./build/docker/policy-manager.Dockerfile
@@ -193,15 +304,15 @@ jobs:
     needs: [build-images]
     steps:
     - name: Checkout code
-      uses: actions/checkout@v4
+      uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
 
     - name: Set up Go
-      uses: actions/setup-go@v4
+      uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff  # v5
       with:
         go-version: ${{ env.GO_VERSION }}
 
     - name: Cache Go modules
-      uses: actions/cache@v3
+      uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830  # v4
       with:
         path: |
           ~/.cache/go-build
@@ -217,15 +328,36 @@ jobs:
       run: |
         # Install test dependencies
         go install github.com/onsi/ginkgo/v2/ginkgo@latest
-        go install sigs.k8s.io/controller-runtime/tools/setup-envtest@latest
+        # setup-envtest: the only TAGGED versions (v0.24.x) declare `go 1.26.0`
+        # (unreleased), which is uninstallable under the go1.25 toolchain. Pin the
+        # release-0.21 pseudo-version, which requires only go >= 1.24.
+        go install sigs.k8s.io/controller-runtime/tools/setup-envtest@v0.0.0-20250626154428-7fd020cb5fc3
 
+    # SDL-WU-04 (NIST SA-11, SA-11(1)): -coverpkg records cross-package coverage
+    # from the integration suite (previously coverage-integration.out held only
+    # the mode line). The merge-coverage script combines it with the unit profile
+    # so the reported/uploaded coverage reflects both tiers.
     - name: Run integration tests
       run: |
-        export KUBEBUILDER_ASSETS=$(setup-envtest use ${{ env.KUBERNETES_VERSION }} --bin-dir /tmp/envtest-bins -p path)
-        go test -v -race -coverprofile=coverage-integration.out ./test/integration/...
+        # envtest control-plane binaries are published only for select k8s patch
+        # releases; 1.28.15 (the kind node version) has no envtest archive, so use
+        # the nearest published 1.28 patch for the apiserver/etcd test binaries.
+        export KUBEBUILDER_ASSETS=$(setup-envtest use 1.28.3 --bin-dir /tmp/envtest-bins -p path)
+        go test -v -race -coverpkg=./cmd/...,./internal/...,./pkg/... -coverprofile=coverage-integration.out ./test/integration/...
+
+    # SDL-WU-04: feed the integration profile to Codecov under the `integration`
+    # flag so reported coverage reflects both tiers (the unit-tests job uploads
+    # the `unittests` flag). The hard cover-gate floor is enforced on the unit
+    # profile in the unit-tests job.
+    - name: Upload integration coverage to Codecov
+      uses: codecov/codecov-action@b9fd7d16f6d7d1b5d2bec1a2887e65ceed900238  # v4
+      with:
+        file: ./coverage-integration.out
+        flags: integration
+        name: codecov-integration
 
     - name: Upload integration test results
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
       with:
         name: integration-test-results
         path: |
@@ -239,16 +371,16 @@ jobs:
     needs: [build-images]
     steps:
     - name: Checkout code
-      uses: actions/checkout@v4
+      uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
 
     - name: Set up Go
-      uses: actions/setup-go@v4
+      uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff  # v5
       with:
         go-version: ${{ env.GO_VERSION }}
 
     - name: Install Kind
       run: |
-        curl -Lo ./kind https://kind.sigs.k8s.io/dl/v0.20.0/kind-linux-amd64
+        curl -Lo ./kind https://kind.sigs.k8s.io/dl/v0.25.0/kind-linux-amd64
         chmod +x ./kind
         sudo mv ./kind /usr/local/bin/kind
 
@@ -277,7 +409,7 @@ jobs:
 
     - name: Upload Kind test artifacts
       if: always()
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
       with:
         name: kind-test-artifacts
         path: artifacts/kind/
@@ -289,10 +421,10 @@ jobs:
     needs: [build-images]
     steps:
     - name: Checkout code
-      uses: actions/checkout@v4
+      uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
 
     - name: Set up Go
-      uses: actions/setup-go@v4
+      uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff  # v5
       with:
         go-version: ${{ env.GO_VERSION }}
 
@@ -321,7 +453,7 @@ jobs:
 
     - name: Upload k3s test artifacts
       if: always()
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
       with:
         name: k3s-test-artifacts
         path: artifacts/k3s/
@@ -331,36 +463,130 @@ jobs:
     name: Security Scanning
     runs-on: ubuntu-latest
     needs: [build-images]
+    permissions:
+      contents: read
+      security-events: write
     steps:
     - name: Checkout code
-      uses: actions/checkout@v4
+      uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
 
-    - name: Run Trivy vulnerability scanner
-      uses: aquasecurity/trivy-action@master
+    # --- SARIF-upload pass (CFG-WU-11): non-gating (exit-code 0) so the GitHub
+    # Security tab always populates with the full finding set, independent of
+    # the .trivyignore suppressions used by the gating pass below. ---
+    - name: Run Trivy vulnerability scanner (fs, SARIF)
+      uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # v0.36.0
       with:
         scan-type: 'fs'
         scan-ref: '.'
         format: 'sarif'
         output: 'trivy-results.sarif'
+        exit-code: '0'
 
     - name: Upload Trivy scan results to GitHub Security tab
-      uses: github/codeql-action/upload-sarif@v2
+      uses: github/codeql-action/upload-sarif@03e4368ac7daa2bd82b3e85262f3bf87ee112f57  # v3
       with:
         sarif_file: 'trivy-results.sarif'
+        # Unique category: codeql/upload-sarif allows only one upload per
+        # tool/category per job, and this job uploads multiple Trivy SARIFs.
+        category: trivy-fs
 
-    - name: Scan admission webhook image
-      uses: aquasecurity/trivy-action@master
+    - name: Scan admission webhook image (SARIF)
+      uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # v0.36.0
       with:
         image-ref: ${{ needs.build-images.outputs.admission-webhook-image }}
         format: 'sarif'
         output: 'trivy-webhook.sarif'
+        exit-code: '0'
 
-    - name: Scan policy manager image
-      uses: aquasecurity/trivy-action@master
+    - name: Scan policy manager image (SARIF)
+      uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # v0.36.0
       with:
         image-ref: ${{ needs.build-images.outputs.policy-manager-image }}
         format: 'sarif'
         output: 'trivy-manager.sarif'
+        exit-code: '0'
+
+    # --- GATING pass (CFG-WU-11): fail the build on a fixable CRITICAL/HIGH.
+    # ignore-unfixed=true avoids failing on CVEs with no upstream fix; the
+    # .trivyignore file carries dated, justified suppressions (none today), so a
+    # seeded fixable HIGH/CRITICAL CVE fails the build until fixed or justified. ---
+    - name: Trivy GATE — filesystem (CRITICAL,HIGH; fail build)
+      uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # v0.36.0
+      with:
+        scan-type: 'fs'
+        scan-ref: '.'
+        format: 'table'
+        severity: 'CRITICAL,HIGH'
+        ignore-unfixed: true
+        trivyignores: '.trivyignore'
+        # fs scan also runs misconfig checks. Exclude: (1) deliberately-insecure
+        # policy/test/demo/UI fixtures (web/src/fixtures/sample-pod-*.json are
+        # privileged/latest-tag pods used as dashboard policy-violation examples,
+        # never deployed); (2) opt-in privileged operational tooling whose elevated
+        # securityContext is REQUIRED by design and is NOT the gated core product —
+        # the Falco runtime-detection DaemonSet (SYS_ADMIN/hostPID/host mounts for
+        # syscall monitoring), the kube-bench CIS Job (hostPID for node assessment),
+        # and the standalone Prometheus (nodes/proxy RBAC). The core chart workloads
+        # remain gated by manifest-hardening-gate (restricted PSS).
+        skip-dirs: 'demo,test,web,examples,deployments/kubernetes/conformance,deployments/kubernetes/runtime-detection,deployments/kubernetes/monitoring'
+        exit-code: '1'
+
+    - name: Trivy GATE — admission webhook image (CRITICAL,HIGH; fail build)
+      uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # v0.36.0
+      with:
+        image-ref: ${{ needs.build-images.outputs.admission-webhook-image }}
+        format: 'table'
+        severity: 'CRITICAL,HIGH'
+        ignore-unfixed: true
+        trivyignores: '.trivyignore'
+        exit-code: '1'
+
+    - name: Trivy GATE — policy manager image (CRITICAL,HIGH; fail build)
+      uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # v0.36.0
+      with:
+        image-ref: ${{ needs.build-images.outputs.policy-manager-image }}
+        format: 'table'
+        severity: 'CRITICAL,HIGH'
+        ignore-unfixed: true
+        trivyignores: '.trivyignore'
+        exit-code: '1'
+
+    # --- VUL-WU-02 (NIST RA-5, SI-2, SP 800-190): IaC misconfiguration scan over
+    # the shipped artifacts (Helm charts, deployment manifests, Dockerfiles). The
+    # deliberately-insecure policy/test/demo/UI fixtures are excluded via skip-dirs
+    # — they exist to prove the engine DENIES them, so gating on them is wrong.
+    # Legitimate operational-infra findings (kube-bench scanner, Prometheus
+    # node-proxy) are path-scoped + dated in .trivyignore.yaml. SARIF (non-gating)
+    # for the Security tab, then a gating pass on CRITICAL/HIGH. ---
+    - name: Run Trivy config (misconfig) scan (SARIF)
+      uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # v0.36.0
+      with:
+        scan-type: 'config'
+        scan-ref: '.'
+        format: 'sarif'
+        output: 'trivy-config.sarif'
+        skip-dirs: 'demo,test,web,examples'
+        trivyignores: '.trivyignore.yaml'
+        exit-code: '0'
+
+    - name: Upload Trivy config scan results to GitHub Security tab
+      if: always()
+      uses: github/codeql-action/upload-sarif@03e4368ac7daa2bd82b3e85262f3bf87ee112f57  # v3
+      with:
+        sarif_file: 'trivy-config.sarif'
+        # Distinct category from the fs SARIF upload (same job, same Trivy tool).
+        category: trivy-config
+
+    - name: Trivy GATE — config/misconfig (CRITICAL,HIGH; fail build)
+      uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # v0.36.0
+      with:
+        scan-type: 'config'
+        scan-ref: '.'
+        format: 'table'
+        severity: 'CRITICAL,HIGH'
+        skip-dirs: 'demo,test,web,examples'
+        trivyignores: '.trivyignore.yaml'
+        exit-code: '1'
 
   # Performance tests
   performance-tests:
@@ -370,16 +596,16 @@ jobs:
     if: github.event_name == 'schedule' || contains(github.event.pull_request.labels.*.name, 'performance')
     steps:
     - name: Checkout code
-      uses: actions/checkout@v4
+      uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
 
     - name: Set up Go
-      uses: actions/setup-go@v4
+      uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff  # v5
       with:
         go-version: ${{ env.GO_VERSION }}
 
     - name: Install Kind
       run: |
-        curl -Lo ./kind https://kind.sigs.k8s.io/dl/v0.20.0/kind-linux-amd64
+        curl -Lo ./kind https://kind.sigs.k8s.io/dl/v0.25.0/kind-linux-amd64
         chmod +x ./kind
         sudo mv ./kind /usr/local/bin/kind
 
@@ -401,7 +627,7 @@ jobs:
         go test -bench=. -benchmem ./cmd/... ./internal/... ./pkg/... > performance-results.txt
 
     - name: Upload performance results
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
       with:
         name: performance-results
         path: performance-results.txt
@@ -410,10 +636,13 @@ jobs:
   helm-tests:
     name: Helm Chart Tests
     runs-on: ubuntu-latest
-    needs: [build-images]
+    # Self-contained: this job builds + kind-loads its own admission-webhook +
+    # policy-manager images (see "Build and load chart images into Kind"), so it
+    # does not consume the build-images job's GHCR output and intentionally has
+    # no `needs: [build-images]` — letting it start in parallel.
     steps:
     - name: Checkout code
-      uses: actions/checkout@v4
+      uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
 
     - name: Install Helm
       run: |
@@ -424,14 +653,21 @@ jobs:
         curl -sSLo ct.tar.gz https://github.com/helm/chart-testing/releases/download/v3.9.0/chart-testing_3.9.0_linux_amd64.tar.gz
         tar -xzf ct.tar.gz
         sudo mv ct /usr/local/bin/
+        # The raw ct binary (unlike the helm/chart-testing image) does not bundle
+        # the python tools it shells out to: yamale (Chart.yaml schema validation,
+        # chart-yaml-schema) and yamllint (lint-conf). Install them pinned.
+        pip3 install --quiet --no-cache-dir yamale==4.0.4 yamllint==1.35.1
 
     - name: Lint Helm charts
       run: |
-        ct lint --config .github/ct.yaml
+        # --all lints every chart regardless of the target-branch diff; the
+        # default changed-charts mode needs the 'main' ref which the shallow CI
+        # checkout does not fetch ("targetBranch 'main' does not exist").
+        ct lint --all --config .github/ct.yaml
 
     - name: Install Kind
       run: |
-        curl -Lo ./kind https://kind.sigs.k8s.io/dl/v0.20.0/kind-linux-amd64
+        curl -Lo ./kind https://kind.sigs.k8s.io/dl/v0.25.0/kind-linux-amd64
         chmod +x ./kind
         sudo mv ./kind /usr/local/bin/kind
 
@@ -439,9 +675,33 @@ jobs:
       run: |
         kind create cluster --name chart-testing
 
+    - name: Build and load chart images into Kind
+      run: |
+        # `ct install` deploys the chart with the values in
+        # charts/kube-policies/ci/ct-install-values.yaml, which pin the
+        # admission-webhook + policy-manager images to node-local :citest tags
+        # (registry: "", pullPolicy: Never). The chart's published default images
+        # (docker.io/kube-policies/*:1.0.0) do not exist, so without locally built
+        # + loaded images every pod sits in ImagePullBackOff until `helm --wait`
+        # times out. Build from the same multi-stage Dockerfiles the release uses
+        # (Go lives in the builder stage — no host Go toolchain needed) and load
+        # them onto the chart-testing nodes.
+        docker build -f build/docker/admission-webhook.Dockerfile -t kube-policies/admission-webhook:citest .
+        docker build -f build/docker/policy-manager.Dockerfile -t kube-policies/policy-manager:citest .
+        kind load docker-image kube-policies/admission-webhook:citest --name chart-testing
+        kind load docker-image kube-policies/policy-manager:citest --name chart-testing
+
     - name: Test Helm charts
       run: |
-        ct install --config .github/ct.yaml
+        # --all installs every chart regardless of the target-branch diff; like
+        # `ct lint --all` above, the default changed-charts mode needs the 'main'
+        # ref which the shallow CI checkout does not fetch ("targetBranch 'main'
+        # does not exist"). --timeout is an install-time arg (helm lint rejects it,
+        # so it can't live in the shared ct.yaml). --debug surfaces the helm
+        # install/wait detail if the chart does not reach Ready. The image
+        # overrides + monitoring-off live in
+        # charts/kube-policies/ci/ct-install-values.yaml, which ct loads automatically.
+        ct install --all --helm-extra-args "--timeout 600s" --debug --config .github/ct.yaml
 
   # Documentation tests
   docs-tests:
@@ -449,10 +709,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - name: Checkout code
-      uses: actions/checkout@v4
+      uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
 
     - name: Check for broken links
-      uses: gaurav-nelson/github-action-markdown-link-check@v1
+      uses: gaurav-nelson/github-action-markdown-link-check@3c3b66f1f7d0900e37b71eca45b63ea9eedfce31  # 1.0.17
       with:
         use-quiet-mode: 'yes'
         use-verbose-mode: 'yes'
@@ -460,11 +720,32 @@ jobs:
 
     - name: Validate YAML files
       run: |
-        find . -name "*.yaml" -o -name "*.yml" | xargs -I {} sh -c 'echo "Validating {}" && python -c "import yaml; yaml.safe_load(open(\"{}\"))"'
+        # safe_load_all handles multi-document manifests (--- separated); plain
+        # safe_load errors on them. Helm templates under charts/*/templates/ are
+        # Go-template sources, not valid YAML until rendered, so they are pruned.
+        find . -path './charts/kube-policies/templates/*' -prune -o \
+          \( -name "*.yaml" -o -name "*.yml" \) -print \
+          | xargs -I {} sh -c 'echo "Validating {}" && python -c "import yaml,sys; list(yaml.safe_load_all(open(sys.argv[1])))" {}'
 
-    - name: Check Helm chart documentation
+    - name: Check Helm chart documentation (helm-docs regenerates README; verify current)
+      env:
+        HELM_DOCS_VERSION: '1.14.2'
+        # sha256 of helm-docs_1.14.2_Linux_x86_64.tar.gz from the release checksums.txt.
+        HELM_DOCS_SHA256: 'a8cf72ada34fad93285ba2a452b38bdc5bd52cc9a571236244ec31022928d6cc'
       run: |
-        helm-docs --check
+        set -euo pipefail
+        # helm-docs has no --check flag; install the pinned binary, regenerate the
+        # chart README, and fail if it differs from the committed copy.
+        asset="helm-docs_${HELM_DOCS_VERSION}_Linux_x86_64.tar.gz"
+        url="https://github.com/norwoodj/helm-docs/releases/download/v${HELM_DOCS_VERSION}/${asset}"
+        curl -fsSL -o "${asset}" "${url}"
+        echo "${HELM_DOCS_SHA256}  ${asset}" | sha256sum -c -
+        tar -xzf "${asset}" helm-docs
+        sudo install -m 0755 helm-docs /usr/local/bin/helm-docs
+        helm-docs --version
+        helm-docs --chart-search-root=charts/kube-policies
+        git diff --exit-code -- charts/kube-policies/README.md \
+          || { echo "::error::charts/kube-policies/README.md is stale — run 'helm-docs --chart-search-root=charts/kube-policies' and commit"; exit 1; }
 
   # Release preparation
   prepare-release:
@@ -472,9 +753,12 @@ jobs:
     runs-on: ubuntu-latest
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     needs: [lint, unit-tests, integration-tests, e2e-kind, e2e-k3s, security-scan, helm-tests, docs-tests]
+    permissions:
+      contents: write
+      pull-requests: write
     steps:
     - name: Checkout code
-      uses: actions/checkout@v4
+      uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
       with:
         fetch-depth: 0
 
@@ -485,7 +769,7 @@ jobs:
 
     - name: Create release PR
       if: contains(github.event.head_commit.message, 'feat:') || contains(github.event.head_commit.message, 'fix:')
-      uses: peter-evans/create-pull-request@v5
+      uses: peter-evans/create-pull-request@22a9089034f40e5a961c8808d113e2c98fb63676  # v7
       with:
         token: ${{ secrets.GITHUB_TOKEN }}
         commit-message: 'chore: update changelog for release'
@@ -500,6 +784,811 @@ jobs:
         branch: prepare-release
         delete-branch: true
 
+  # RBAC / ServiceAccount-token least-privilege gate (IAM-WU-17). Pure static
+  # render-then-scan (no cluster, no images) so it runs in parallel with lint —
+  # NO needs:. Renders the chart in both internal-auth modes and fails the build
+  # on any RBAC wildcard / cluster-wide Secrets grant, any ServiceAccount that
+  # does not disable token automounting, or a shared admission-webhook /
+  # policy-manager ServiceAccount. Mirrors scripts/validate/manifests.sh.
+  rbac-sa-gate:
+    name: RBAC / SA-Token Least-Privilege Gate
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      CONFTEST_VERSION: '0.68.2'
+      # sha256 of conftest_${CONFTEST_VERSION}_Linux_x86_64.tar.gz, from the
+      # published checksums.txt of the pinned release. Verified with sha256sum -c.
+      CONFTEST_SHA256: 'e8144c6d6d2ae0260b869caa60c7c262a1f95ac63ec1e5d2fb19be452d606347'
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+
+    - name: Install Helm
+      uses: azure/setup-helm@dda3372f752e03dde6b3237bc9431cdc2f7a02a2  # v5.0.0
+      with:
+        # Pin Helm v3: the chart, its helm-unittest v0.3.3 suite, and the e2e
+        # get-helm-3 installs all target v3. setup-helm@v5 defaults to Helm v4,
+        # which requires plugin source verification v0.3.3 cannot satisfy.
+        version: v3.16.4
+
+    - name: Install conftest (pinned, checksum-verified)
+      run: |
+        set -euo pipefail
+        asset="conftest_${CONFTEST_VERSION}_Linux_x86_64.tar.gz"
+        url="https://github.com/open-policy-agent/conftest/releases/download/v${CONFTEST_VERSION}/${asset}"
+        curl -fsSL -o "${asset}" "${url}"
+        echo "${CONFTEST_SHA256}  ${asset}" | sha256sum -c -
+        tar -xzf "${asset}" conftest
+        sudo install -m 0755 conftest /usr/local/bin/conftest
+        conftest --version
+
+    - name: Render chart (tokenreview mode, default)
+      run: |
+        ./scripts/ci/helm-deps.sh
+        helm template kube-policies charts/kube-policies \
+          --set policyManager.internalAuth.mode=tokenreview \
+          --set dashboard.enabled=true > rendered-tokenreview.yaml
+
+    - name: Render chart (static mode)
+      run: |
+        helm template kube-policies charts/kube-policies \
+          --set policyManager.internalAuth.mode=static \
+          --set dashboard.enabled=true > rendered-static.yaml
+
+    - name: Conftest — RBAC + SA-token (per-document, both modes)
+      run: |
+        set -euo pipefail
+        for f in rendered-tokenreview.yaml rendered-static.yaml; do
+          echo "==> per-document scan: ${f}"
+          conftest test --policy test/policy \
+            --namespace rbac.leastprivilege --namespace sa.token "${f}"
+        done
+
+    - name: Conftest — shared ServiceAccount (--combine, both modes)
+      run: |
+        set -euo pipefail
+        for f in rendered-tokenreview.yaml rendered-static.yaml; do
+          echo "==> --combine scan: ${f}"
+          conftest test --combine --policy test/policy \
+            --namespace sa.shared "${f}"
+        done
+
+    # CONF-1: Policy self-test — each negative fixture MUST make conftest exit
+    # non-zero. If a fixture exits 0 the deny rule is silently broken and we
+    # must fail the build immediately (a passing fail-fixture == dead gate).
+    - name: Policy self-test (fail fixtures must be denied)
+      run: |
+        set -euo pipefail
+        broken=0
+
+        # Per-document fixtures: rbac.leastprivilege + sa.token
+        for fx in \
+            test/policy/fixtures/fail/secrets-clusterrole.yaml \
+            test/policy/fixtures/fail/secrets-subresource.yaml \
+            test/policy/fixtures/fail/missing-automount.yaml; do
+          echo "==> self-test (per-doc): ${fx}"
+          if conftest test --policy test/policy \
+              --namespace rbac.leastprivilege --namespace sa.token "${fx}"; then
+            echo "::error::POLICY SELF-TEST FAILED: ${fx} produced 0 denies — the deny rule is broken"
+            broken=1
+          else
+            echo "    OK — conftest correctly denied ${fx}"
+          fi
+        done
+
+        # --combine fixtures: sa.shared (shared-SA regression + label-drift guard)
+        for fx in \
+            test/policy/fixtures/fail/shared-sa.yaml \
+            test/policy/fixtures/fail/label-drift.yaml; do
+          echo "==> self-test (--combine): ${fx}"
+          if conftest test --combine --policy test/policy \
+              --namespace sa.shared "${fx}"; then
+            echo "::error::POLICY SELF-TEST FAILED: ${fx} produced 0 denies — the deny rule is broken"
+            broken=1
+          else
+            echo "    OK — conftest correctly denied ${fx}"
+          fi
+        done
+
+        if [ "${broken}" -ne 0 ]; then
+          echo "::error::One or more policy self-tests failed — a deny rule is not firing. Fix the Rego before merging."
+          exit 1
+        fi
+        echo "All policy self-tests passed — every fail fixture was correctly denied."
+
+    - name: Generate conftest report
+      if: always()
+      run: |
+        set -uo pipefail
+        for mode in tokenreview static; do
+          f="rendered-${mode}.yaml"
+          [ -f "${f}" ] || continue
+          conftest test --policy test/policy \
+            --namespace rbac.leastprivilege --namespace sa.token \
+            --output json "${f}" > "report-perdoc-${mode}.json" || true
+          conftest test --combine --policy test/policy \
+            --namespace sa.shared \
+            --output json "${f}" > "report-combine-${mode}.json" || true
+        done
+
+    - name: Upload conftest report
+      if: always()
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+      with:
+        name: rbac-sa-gate-report
+        path: report-*.json
+        if-no-files-found: ignore
+
+  # Network-posture gate (NET-WU-20, NIST SC-7 / CIS 5.3.2). Pure static
+  # render-then-scan (no cluster, no images) so it runs in parallel with lint —
+  # NO needs:. Renders the chart with network-segmentation + namespace creation
+  # on and fails the build when: the fail-closed default-deny NetworkPolicy is
+  # missing, a per-component ingress NetworkPolicy (webhook :8443 / policy-manager
+  # :8080 / metrics) is absent, a shipped Namespace is not PSA-restricted, or a
+  # control-plane inter-service URL is plaintext http://. Mirrors rbac-sa-gate.
+  network-posture-gate:
+    name: Network-Posture Gate
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      CONFTEST_VERSION: '0.68.2'
+      # sha256 of conftest_${CONFTEST_VERSION}_Linux_x86_64.tar.gz, from the
+      # published checksums.txt of the pinned release. Verified with sha256sum -c.
+      CONFTEST_SHA256: 'e8144c6d6d2ae0260b869caa60c7c262a1f95ac63ec1e5d2fb19be452d606347'
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+
+    - name: Install Helm
+      uses: azure/setup-helm@dda3372f752e03dde6b3237bc9431cdc2f7a02a2  # v5.0.0
+      with:
+        # Pin Helm v3: the chart, its helm-unittest v0.3.3 suite, and the e2e
+        # get-helm-3 installs all target v3. setup-helm@v5 defaults to Helm v4,
+        # which requires plugin source verification v0.3.3 cannot satisfy.
+        version: v3.16.4
+
+    - name: Install conftest (pinned, checksum-verified)
+      run: |
+        set -euo pipefail
+        asset="conftest_${CONFTEST_VERSION}_Linux_x86_64.tar.gz"
+        url="https://github.com/open-policy-agent/conftest/releases/download/v${CONFTEST_VERSION}/${asset}"
+        curl -fsSL -o "${asset}" "${url}"
+        echo "${CONFTEST_SHA256}  ${asset}" | sha256sum -c -
+        tar -xzf "${asset}" conftest
+        sudo install -m 0755 conftest /usr/local/bin/conftest
+        conftest --version
+
+    - name: Render chart (network segmentation + namespace on)
+      run: |
+        # Render a realistically-CONFIGURED install: an operator has supplied the
+        # control-plane sources, so the fail-closed-until-configured allow-flows
+        # (webhook ingress :8443, apiserver egress) are populated and the gate can
+        # assert they are present AND scoped. With the shipped empty defaults these
+        # flows render deny (correct fail-closed posture, but nothing for rule 4 to
+        # find). The gate validates a deployable config, not the bare defaults.
+        ./scripts/ci/helm-deps.sh
+        helm template kube-policies charts/kube-policies \
+          --set dashboard.enabled=true \
+          --set namespace.create=true \
+          --set 'networkPolicy.webhook.ingressFrom.ipBlocks={10.0.0.0/24}' \
+          --set 'networkPolicy.apiServerCIDRs={10.0.0.0/24}' > rendered-network.yaml
+
+    - name: Conftest — network posture (per-document)
+      run: |
+        set -euo pipefail
+        echo "==> per-document scan: rendered-network.yaml"
+        conftest test --policy test/policy \
+          --namespace network.posture rendered-network.yaml
+
+    - name: Conftest — network posture (--combine existence checks)
+      run: |
+        set -euo pipefail
+        echo "==> --combine scan: rendered-network.yaml"
+        conftest test --combine --policy test/policy \
+          --namespace network.posture rendered-network.yaml
+
+    # Keystone regression proof: removing the default-deny NetworkPolicy template
+    # MUST fail the build. Strip the default-deny document from the render and
+    # confirm the --combine existence check now denies (non-zero). A passing
+    # default-deny-removed render == dead gate -> fail the build immediately.
+    - name: Default-deny regression proof (removed default-deny MUST be denied)
+      run: |
+        set -euo pipefail
+        awk '
+          /# Source: kube-policies\/templates\/networkpolicy-default-deny.yaml/ {drop=1}
+          drop==1 && /^---$/ && seen==1 {drop=0}
+          drop==1 && /^---$/ {seen=1}
+          drop!=1 {print}
+        ' rendered-network.yaml > rendered-no-default-deny.yaml
+        if grep -q 'podSelector: {}' rendered-no-default-deny.yaml; then
+          echo "::error::test setup error — default-deny doc was not stripped"
+          exit 1
+        fi
+        if conftest test --combine --policy test/policy \
+            --namespace network.posture rendered-no-default-deny.yaml; then
+          echo "::error::NETWORK GATE DEAD: chart without a default-deny NetworkPolicy passed — the keystone existence rule is broken"
+          exit 1
+        fi
+        echo "OK — conftest correctly denied the default-deny-removed render"
+
+    # CONF-1: Policy self-test — each negative fixture MUST make conftest exit
+    # non-zero. If a fixture exits 0 the deny rule is silently broken and we
+    # must fail the build immediately (a passing fail-fixture == dead gate).
+    - name: Policy self-test (fail fixtures must be denied)
+      run: |
+        set -euo pipefail
+        broken=0
+
+        # Per-document fixtures: PSA-restricted + plaintext control-plane URL +
+        # unscoped allow-all-on-port NetworkPolicy rule.
+        for fx in \
+            test/policy/fixtures/fail/namespace-not-restricted.yaml \
+            test/policy/fixtures/fail/plaintext-pm-url.yaml \
+            test/policy/fixtures/fail/unscoped-ingress.yaml; do
+          echo "==> self-test (per-doc): ${fx}"
+          if conftest test --policy test/policy \
+              --namespace network.posture "${fx}"; then
+            echo "::error::POLICY SELF-TEST FAILED: ${fx} produced 0 denies — the deny rule is broken"
+            broken=1
+          else
+            echo "    OK — conftest correctly denied ${fx}"
+          fi
+        done
+
+        # --combine fixture: default-deny / per-component ingress existence.
+        for fx in \
+            test/policy/fixtures/fail/no-default-deny.yaml; do
+          echo "==> self-test (--combine): ${fx}"
+          if conftest test --combine --policy test/policy \
+              --namespace network.posture "${fx}"; then
+            echo "::error::POLICY SELF-TEST FAILED: ${fx} produced 0 denies — the deny rule is broken"
+            broken=1
+          else
+            echo "    OK — conftest correctly denied ${fx}"
+          fi
+        done
+
+        if [ "${broken}" -ne 0 ]; then
+          echo "::error::One or more policy self-tests failed — a deny rule is not firing. Fix the Rego before merging."
+          exit 1
+        fi
+        echo "All policy self-tests passed — every fail fixture was correctly denied."
+
+    - name: Generate conftest report
+      if: always()
+      run: |
+        set -uo pipefail
+        [ -f rendered-network.yaml ] || exit 0
+        conftest test --policy test/policy \
+          --namespace network.posture \
+          --output json rendered-network.yaml > report-network-perdoc.json || true
+        conftest test --combine --policy test/policy \
+          --namespace network.posture \
+          --output json rendered-network.yaml > report-network-combine.json || true
+
+    - name: Upload conftest report
+      if: always()
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+      with:
+        name: network-posture-gate-report
+        path: report-network-*.json
+        if-no-files-found: ignore
+
+  # Manifest-hardening gate (CFG-WU-12, NIST CM-6/CM-7 / CIS 5.2.x / PSS-
+  # Restricted). Pure static render-then-scan (no cluster, no images) so it runs
+  # in parallel with lint — NO needs:. Renders the chart hardened (dashboard on,
+  # namespace.create=true, configured ingress, control-plane seccompProfile +
+  # non-root runAsGroup injected via --set on the values-driven securityContext)
+  # and fails the build when any in-scope control-plane container is missing a
+  # restricted-PSS control (seccomp, drop ALL, readOnlyRootFs, no priv-esc,
+  # runAsNonRoot, non-root runAsGroup, cpu+memory requests+limits) or a shipped
+  # Namespace is not PSA-restricted. Also runs kubeconform -strict for schema
+  # validation. Mirrors rbac-sa-gate: pinned conftest + kubeconform, render,
+  # scan, fail-fixture self-test, JSON artifact.
+  manifest-hardening-gate:
+    name: Manifest-Hardening Gate (restricted PSS)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      CONFTEST_VERSION: '0.68.2'
+      # sha256 of conftest_${CONFTEST_VERSION}_Linux_x86_64.tar.gz, from the
+      # published checksums.txt of the pinned release. Verified with sha256sum -c.
+      CONFTEST_SHA256: 'e8144c6d6d2ae0260b869caa60c7c262a1f95ac63ec1e5d2fb19be452d606347'
+      KUBECONFORM_VERSION: '0.6.7'
+      # sha256 of kubeconform-linux-amd64.tar.gz from the pinned release's
+      # CHECKSUMS file. Verified with sha256sum -c.
+      KUBECONFORM_SHA256: '95f14e87aa28c09d5941f11bd024c1d02fdc0303ccaa23f61cef67bc92619d73'
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+
+    - name: Install Helm
+      uses: azure/setup-helm@dda3372f752e03dde6b3237bc9431cdc2f7a02a2  # v5.0.0
+      with:
+        # Pin Helm v3: the chart, its helm-unittest v0.3.3 suite, and the e2e
+        # get-helm-3 installs all target v3. setup-helm@v5 defaults to Helm v4,
+        # which requires plugin source verification v0.3.3 cannot satisfy.
+        version: v3.16.4
+
+    - name: Install conftest (pinned, checksum-verified)
+      run: |
+        set -euo pipefail
+        asset="conftest_${CONFTEST_VERSION}_Linux_x86_64.tar.gz"
+        url="https://github.com/open-policy-agent/conftest/releases/download/v${CONFTEST_VERSION}/${asset}"
+        curl -fsSL -o "${asset}" "${url}"
+        echo "${CONFTEST_SHA256}  ${asset}" | sha256sum -c -
+        tar -xzf "${asset}" conftest
+        sudo install -m 0755 conftest /usr/local/bin/conftest
+        conftest --version
+
+    - name: Install kubeconform (pinned, checksum-verified)
+      run: |
+        set -euo pipefail
+        asset="kubeconform-linux-amd64.tar.gz"
+        url="https://github.com/yannh/kubeconform/releases/download/v${KUBECONFORM_VERSION}/${asset}"
+        curl -fsSL -o "${asset}" "${url}"
+        echo "${KUBECONFORM_SHA256}  ${asset}" | sha256sum -c -
+        tar -xzf "${asset}" kubeconform
+        sudo install -m 0755 kubeconform /usr/local/bin/kubeconform
+        kubeconform -v
+
+    - name: Manifest-hardening lint (kubeconform -strict + conftest restricted.pss)
+      run: |
+        set -euo pipefail
+        ./scripts/test/lint-manifests.sh
+
+    # Keystone regression proof: stripping seccompProfile from a rendered,
+    # otherwise-hardened workload MUST fail restricted.pss. A passing
+    # seccomp-removed render == dead gate -> fail the build immediately.
+    - name: Seccomp-removed regression proof (stripped seccomp MUST be denied)
+      run: |
+        set -euo pipefail
+        # The chart is hardened natively (seccompProfile + non-root runAsGroup are
+        # values.yaml defaults on webhook, policy-manager, AND dashboard), so no
+        # --set injection is needed; render all three then strip seccomp.
+        helm template kube-policies charts/kube-policies \
+          --set namespace.create=true \
+          --set dashboard.enabled=true \
+          > rendered-hardened.yaml
+        # Drop every seccompProfile: block (the line and its deeper-indented body).
+        awk '
+          $0 ~ /^[[:space:]]*seccompProfile:[[:space:]]*$/ {
+            match($0, /^[[:space:]]*/); base = RLENGTH; drop = 1; next
+          }
+          drop == 1 {
+            match($0, /^[[:space:]]*/)
+            if (RLENGTH > base && $0 ~ /[^[:space:]]/) { next }
+            drop = 0
+          }
+          { print }
+        ' rendered-hardened.yaml > rendered-no-seccomp.yaml
+        if grep -q 'seccompProfile' rendered-no-seccomp.yaml; then
+          echo "::error::test setup error — seccompProfile blocks were not stripped"
+          exit 1
+        fi
+        if conftest test --policy test/policy \
+            --namespace restricted.pss rendered-no-seccomp.yaml; then
+          echo "::error::HARDENING GATE DEAD: a render with no seccompProfile passed restricted.pss — the seccomp rule is broken"
+          exit 1
+        fi
+        echo "OK — conftest correctly denied the seccomp-removed render"
+
+    # CONF-1: Policy self-test — each negative fixture MUST make conftest exit
+    # non-zero. A passing fail-fixture == dead deny rule -> fail the build.
+    - name: Policy self-test (fail fixtures must be denied)
+      run: |
+        set -euo pipefail
+        broken=0
+        for fx in \
+            test/policy/fixtures/fail/no-seccomp.yaml \
+            test/policy/fixtures/fail/privileged-escalation.yaml \
+            test/policy/fixtures/fail/writable-rootfs.yaml \
+            test/policy/fixtures/fail/no-resources.yaml \
+            test/policy/fixtures/fail/root-gid.yaml \
+            test/policy/fixtures/fail/privileged.yaml \
+            test/policy/fixtures/fail/cap-add.yaml \
+            test/policy/fixtures/fail/host-namespace.yaml \
+            test/policy/fixtures/fail/init-container-unhardened.yaml \
+            test/policy/fixtures/fail/container-override-seccomp.yaml \
+            test/policy/fixtures/fail/namespace-not-restricted.yaml; do
+          echo "==> self-test (restricted.pss): ${fx}"
+          if conftest test --policy test/policy \
+              --namespace restricted.pss "${fx}"; then
+            echo "::error::POLICY SELF-TEST FAILED: ${fx} produced 0 denies — the deny rule is broken"
+            broken=1
+          else
+            echo "    OK — conftest correctly denied ${fx}"
+          fi
+        done
+        if [ "${broken}" -ne 0 ]; then
+          echo "::error::One or more restricted.pss self-tests failed — a deny rule is not firing. Fix the Rego before merging."
+          exit 1
+        fi
+        echo "All restricted.pss self-tests passed — every fail fixture was correctly denied."
+
+    - name: Generate conftest report
+      if: always()
+      run: |
+        set -uo pipefail
+        [ -f rendered-hardened.yaml ] || exit 0
+        conftest test --policy test/policy \
+          --namespace restricted.pss \
+          --output json rendered-hardened.yaml > report-restricted-pss.json || true
+
+    - name: Upload conftest report
+      if: always()
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+      with:
+        name: manifest-hardening-gate-report
+        path: report-restricted-pss.json
+        if-no-files-found: ignore
+
+  # helm-unittest gate (CFG-WU-22, NIST CM-6 / CIS 5.2.x). Installs the
+  # helm-unittest plugin (pinned) and runs charts/kube-policies/tests/*_test.yaml,
+  # asserting every control-plane pod + container carries the restricted PSS
+  # control set. Deleting a hardening attribute from a template fails a test.
+  helm-unittest:
+    name: Helm Unit Tests (hardening)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      HELM_UNITTEST_VERSION: 'v0.3.3'
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+
+    - name: Install Helm
+      uses: azure/setup-helm@dda3372f752e03dde6b3237bc9431cdc2f7a02a2  # v5.0.0
+      with:
+        # Pin Helm v3: the chart, its helm-unittest v0.3.3 suite, and the e2e
+        # get-helm-3 installs all target v3. setup-helm@v5 defaults to Helm v4,
+        # which requires plugin source verification v0.3.3 cannot satisfy.
+        version: v3.16.4
+
+    - name: Install helm-unittest plugin (pinned)
+      run: |
+        set -euo pipefail
+        helm plugin install https://github.com/helm-unittest/helm-unittest --version "${HELM_UNITTEST_VERSION}"
+        helm plugin list
+
+    - name: Run helm unittest
+      run: |
+        set -euo pipefail
+        ./scripts/ci/helm-deps.sh
+        helm unittest charts/kube-policies
+
+  # CIS Kubernetes Benchmark assessment (CFG-WU-13, NIST CA-2 / CIS 5.x).
+  # Runs kube-bench against the kind e2e cluster and uploads the report as a CI
+  # artifact. NON-GATING by design: node/control-plane controls are operator-
+  # owned and cannot be remediated on a kind node (the chart-owned 5.1/5.2/5.3
+  # controls are gated separately by rbac-sa-gate / manifest-hardening-gate /
+  # network-posture-gate). See docs/compliance/cis-benchmark-results.md.
+  cis-benchmark:
+    name: CIS Benchmark (kube-bench, assessment)
+    runs-on: ubuntu-latest
+    needs: [e2e-kind]
+    if: always() && needs.e2e-kind.result == 'success'
+    permissions:
+      contents: read
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+
+    - name: Install Kind
+      run: |
+        curl -Lo ./kind https://kind.sigs.k8s.io/dl/v0.25.0/kind-linux-amd64
+        chmod +x ./kind
+        sudo mv ./kind /usr/local/bin/kind
+
+    - name: Install kubectl
+      run: |
+        curl -LO "https://dl.k8s.io/release/${{ env.KUBERNETES_VERSION }}/bin/linux/amd64/kubectl"
+        chmod +x kubectl
+        sudo mv kubectl /usr/local/bin/
+
+    - name: Install Helm
+      run: |
+        curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+
+    - name: Stand up kind cluster and run kube-bench assessment
+      run: |
+        set -euo pipefail
+        # Re-create the e2e kind cluster (the e2e-kind job runs on a separate
+        # runner, so its cluster is not reachable here). CLEANUP=false keeps it
+        # up for the assessment.
+        export CLEANUP=false
+        ./scripts/test/test-kind.sh || true
+        KIND_CLUSTER_NAME=kube-policies-test ./scripts/validate/cis-conformance.sh
+
+    - name: Upload CIS benchmark report
+      if: always()
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+      with:
+        name: cis-benchmark-report
+        path: test-results/cis-benchmark/
+        if-no-files-found: ignore
+
+  # Monitoring-rules gate (NET-WU-23, NIST SI-4). Validates every standalone
+  # Prometheus rule file under monitoring/prometheus/rules/ with promtool, and
+  # runs the promtool unit tests (*_test.yml) that drive each alert. Catches a
+  # syntactically-broken rule or an alert whose expression no longer fires.
+  # promtool ships in the official Prometheus release tarball (pinned + checksum-
+  # verified). `go install` is intentionally NOT used: the prometheus go.mod
+  # carries replace directives that make `go install .../cmd/promtool` fail.
+  monitoring-rules:
+    name: Monitoring Rules & Alertmanager (promtool/amtool)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      PROMETHEUS_VERSION: '2.53.5'
+      # sha256 of prometheus-${PROMETHEUS_VERSION}.linux-amd64.tar.gz, from the
+      # published sha256sums.txt of the pinned LTS release. Verified with
+      # sha256sum -c against the upstream checksum file.
+      PROMETHEUS_SHA256: '456eb31530484d181e860e329fa0c6628e79eb388fac670cdeb4fa5d57c74ed9'
+      ALERTMANAGER_VERSION: '0.27.0'
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+
+    - name: Install Helm
+      uses: azure/setup-helm@dda3372f752e03dde6b3237bc9431cdc2f7a02a2  # v5.0.0
+      with:
+        # Pin Helm v3: the chart, its helm-unittest v0.3.3 suite, and the e2e
+        # get-helm-3 installs all target v3. setup-helm@v5 defaults to Helm v4,
+        # which requires plugin source verification v0.3.3 cannot satisfy.
+        version: v3.16.4
+
+    - name: Install yq (pinned)
+      run: |
+        set -euo pipefail
+        YQ_VERSION=v4.45.1
+        sudo curl -fsSL -o /usr/local/bin/yq \
+          "https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/yq_linux_amd64"
+        sudo chmod +x /usr/local/bin/yq
+        yq --version
+
+    - name: Install promtool (pinned, checksum-verified)
+      run: |
+        set -euo pipefail
+        asset="prometheus-${PROMETHEUS_VERSION}.linux-amd64.tar.gz"
+        url="https://github.com/prometheus/prometheus/releases/download/v${PROMETHEUS_VERSION}/${asset}"
+        curl -fsSL -o "${asset}" "${url}"
+        echo "${PROMETHEUS_SHA256}  ${asset}" | sha256sum -c -
+        tar -xzf "${asset}" "prometheus-${PROMETHEUS_VERSION}.linux-amd64/promtool"
+        sudo install -m 0755 "prometheus-${PROMETHEUS_VERSION}.linux-amd64/promtool" /usr/local/bin/promtool
+        promtool --version
+
+    - name: Install amtool (pinned, checksum-verified against upstream sha256sums)
+      run: |
+        set -euo pipefail
+        asset="alertmanager-${ALERTMANAGER_VERSION}.linux-amd64.tar.gz"
+        base="https://github.com/prometheus/alertmanager/releases/download/v${ALERTMANAGER_VERSION}"
+        curl -fsSL -o "${asset}" "${base}/${asset}"
+        curl -fsSL -o sha256sums.txt "${base}/sha256sums.txt"
+        grep "  ${asset}\$" sha256sums.txt | sha256sum -c -
+        tar -xzf "${asset}" "alertmanager-${ALERTMANAGER_VERSION}.linux-amd64/amtool"
+        sudo install -m 0755 "alertmanager-${ALERTMANAGER_VERSION}.linux-amd64/amtool" /usr/local/bin/amtool
+        amtool --version
+
+    # IRM-WU-14/15: charts/kube-policies/files/{alerts,slo}/*.yaml is the SINGLE SOURCE.
+    - name: Promtool — check rules (chart single source)
+      run: |
+        set -euo pipefail
+        if [ "$(find charts/kube-policies/files/alerts charts/kube-policies/files/slo -name '*.yaml' | wc -l)" -eq 0 ]; then
+          echo "::error::no chart rule files found under charts/kube-policies/files/{alerts,slo}"
+          exit 1
+        fi
+        find charts/kube-policies/files/alerts charts/kube-policies/files/slo -name '*.yaml' -print0 \
+          | sort -z | xargs -0 promtool check rules
+
+    - name: Promtool — render chart PrometheusRule and check it
+      run: |
+        set -euo pipefail
+        ./scripts/ci/helm-deps.sh
+        helm template kp charts/kube-policies \
+          --set monitoring.prometheusRule.enabled=true \
+          --show-only templates/prometheusrule.yaml \
+          --show-only templates/slo-prometheusrule.yaml \
+          | yq ea '[.] | {"groups": [.[] | select(.kind=="PrometheusRule") | .spec.groups[]]}' \
+          > rendered-rules.yaml
+        promtool check rules rendered-rules.yaml
+
+    - name: Promtool — run unit tests (tests/monitoring)
+      run: |
+        set -euo pipefail
+        if [ "$(find tests/monitoring -name '*_test.yaml' | wc -l)" -eq 0 ]; then
+          echo "::error::no promtool unit-test files (*_test.yaml) found under tests/monitoring"
+          exit 1
+        fi
+        find tests/monitoring -name '*_test.yaml' -print0 \
+          | sort -z | xargs -0 promtool test rules
+
+    - name: Metric-name drift check (rules reference only metrics collector.go emits)
+      run: |
+        set -euo pipefail
+        find charts/kube-policies/files/alerts charts/kube-policies/files/slo -name '*.yaml' -print0 \
+          | sort -z | xargs -0 ./scripts/validate/metric-name-drift.sh
+
+    - name: Falco ruleset copies in sync (chart vs canonical)
+      run: |
+        set -euo pipefail
+        diff -q monitoring/falco/kube-policies-rules.yaml \
+          charts/kube-policies/files/falco/kube-policies-rules.yaml \
+          || { echo "::error::Falco rule copies diverged — sync monitoring/falco/ and charts/kube-policies/files/falco/"; exit 1; }
+
+    - name: Standalone rules freshness (generated file == chart single source)
+      run: |
+        set -euo pipefail
+        git ls-files --error-unmatch monitoring/prometheus/rules/kube-policies.rules.yml >/dev/null 2>&1 \
+          || { echo "::error::monitoring/prometheus/rules/kube-policies.rules.yml is untracked — git add it"; exit 1; }
+        make gen-monitoring-rules
+        git diff --exit-code -- monitoring/prometheus/rules/kube-policies.rules.yml \
+          || { echo "::error::monitoring/prometheus/rules/kube-policies.rules.yml is stale — run 'make gen-monitoring-rules' and commit"; exit 1; }
+
+    - name: Amtool — check Alertmanager config (standalone + chart-rendered)
+      run: |
+        set -euo pipefail
+        amtool check-config monitoring/alertmanager/alertmanager.yaml
+        helm template kp charts/kube-policies \
+          --set monitoring.alertmanager.config.enabled=true \
+          --set monitoring.alertmanager.config.existingSecret=am-secrets \
+          --set monitoring.alertmanager.config.receivers.pagerduty.enabled=true \
+          --set monitoring.alertmanager.config.receivers.slack.enabled=true \
+          --set monitoring.alertmanager.config.receivers.email.enabled=true \
+          --set monitoring.alertmanager.config.receivers.email.to=secops@example.com \
+          --set monitoring.alertmanager.config.receivers.email.smarthost=smtp.example.com:587 \
+          --set monitoring.alertmanager.config.heartbeat.enabled=true \
+          --show-only templates/alertmanager-config.yaml \
+          | yq ea 'select(.kind=="Secret") | .stringData."alertmanager.yml"' > rendered-am.yml
+        amtool check-config rendered-am.yml
+
+  # GAP 2: actionlint workflow linter — gates on actionlint's own native rules.
+  # shellcheck is intentionally disabled (-shellcheck=) because GitHub-hosted
+  # runners ship shellcheck on PATH and actionlint would otherwise surface 20
+  # pre-existing SC-style nits inside run: blocks (e.g. SC2086 quoting, SC2162
+  # read -r). Those are non-security-critical style items tracked separately;
+  # actionlint's native rules (expression/syntax/permissions validation) are the
+  # gate here and they pass on all workflows.
+  actionlint:
+    name: Actionlint (workflow lint)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      ACTIONLINT_VERSION: '1.7.12'
+      # sha256 of actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz, from the
+      # published checksums.txt of the pinned release. Verified with sha256sum -c.
+      ACTIONLINT_SHA256: '8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8'
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+
+    - name: Install actionlint (pinned, checksum-verified)
+      run: |
+        set -euo pipefail
+        asset="actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+        url="https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/${asset}"
+        curl -fsSL -o "${asset}" "${url}"
+        echo "${ACTIONLINT_SHA256}  ${asset}" | sha256sum -c -
+        tar -xzf "${asset}" actionlint
+        sudo install -m 0755 actionlint /usr/local/bin/actionlint
+        actionlint --version
+
+    - name: Run actionlint (shellcheck disabled — see job comment)
+      run: |
+        set -euo pipefail
+        actionlint -shellcheck= -color
+
+  # GAP 3 / CRY-WU-16: govulncheck — fails the build on known vulnerable deps.
+  govulncheck:
+    name: Govulncheck (vulnerable dependency scan)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+
+    - name: Set up Go
+      uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff  # v5
+      with:
+        go-version: ${{ env.GO_VERSION }}
+        cache-dependency-path: go.sum
+
+    - name: Install govulncheck (pinned)
+      run: go install golang.org/x/vuln/cmd/govulncheck@v1.3.0
+
+    # VUL-WU-03 (NIST RA-5, SI-2, SI-2(2)): emit SARIF for the Security tab
+    # (non-gating; `|| true` so a finding still uploads), then a gating text
+    # run that fails the build on any reachable known vulnerability.
+    - name: Run govulncheck (SARIF for Security tab)
+      run: govulncheck -format sarif ./... > govulncheck.sarif || true
+
+    - name: Upload govulncheck SARIF
+      if: always()
+      uses: github/codeql-action/upload-sarif@03e4368ac7daa2bd82b3e85262f3bf87ee112f57  # v3
+      with:
+        sarif_file: govulncheck.sarif
+
+    - name: Run govulncheck (gate — fail on reachable vulnerability)
+      run: govulncheck ./...
+
+  # SUP-WU-11 (SI-7 / SLSA reproducible builds): prove the binaries are a pure
+  # function of (commit, GOOS, GOARCH) — two independent builds must yield an
+  # identical SHA-256. Guards against any reintroduction of wall-clock `date`
+  # ldflags or non-deterministic build inputs.
+  reproducible-build:
+    name: Reproducible Build (binary determinism)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+      with:
+        fetch-depth: 0
+
+    - name: Set up Go
+      uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff  # v5
+      with:
+        go-version: ${{ env.GO_VERSION }}
+        cache-dependency-path: go.sum
+
+    - name: Verify reproducible build
+      env:
+        GOOS: linux
+        GOARCH: amd64
+      run: ./scripts/verify-reproducible-build.sh
+
+  # Fuzz smoke (SDL-WU-12 / NIST SA-11(8), SI-10, SSDF PW.8): run each Go native
+  # fuzz target for a short duration on every PR/push to catch newly-introduced
+  # crashers. Extended nightly fuzzing with corpus persistence lives in
+  # fuzz-nightly.yml. The two targets prove fail-closed/defined-verdict behavior
+  # of the AdmissionReview parser and the OPA/Rego evaluator under arbitrary input.
+  fuzz-smoke:
+    name: Fuzz Smoke
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+
+    - name: Set up Go
+      uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff  # v5
+      with:
+        go-version: ${{ env.GO_VERSION }}
+        cache-dependency-path: go.sum
+
+    - name: Fuzz admission request parser (smoke)
+      run: go test -run='^$' -fuzz=FuzzAdmissionRequest -fuzztime=40s ./internal/admission/
+
+    - name: Fuzz policy engine evaluator (smoke)
+      run: go test -run='^$' -fuzz=FuzzEngineEvaluate -fuzztime=40s ./internal/policy/
+
+  # Aggregate gate — single required check for branch protection.
+  ci-gate:
+    name: CI Gate
+    runs-on: ubuntu-latest
+    if: always()
+    needs: [lint, unit-tests, fips-verify, build-images, integration-tests, e2e-kind, e2e-k3s, security-scan, helm-tests, docs-tests, rbac-sa-gate, network-posture-gate, manifest-hardening-gate, helm-unittest, monitoring-rules, actionlint, govulncheck, reproducible-build, fuzz-smoke]
+    steps:
+    - name: Verify all required jobs succeeded
+      run: |
+        results="${{ needs.lint.result }} ${{ needs.unit-tests.result }} ${{ needs.fips-verify.result }} ${{ needs.build-images.result }} ${{ needs.integration-tests.result }} ${{ needs.e2e-kind.result }} ${{ needs.e2e-k3s.result }} ${{ needs.security-scan.result }} ${{ needs.helm-tests.result }} ${{ needs.docs-tests.result }} ${{ needs.rbac-sa-gate.result }} ${{ needs.network-posture-gate.result }} ${{ needs.manifest-hardening-gate.result }} ${{ needs.helm-unittest.result }} ${{ needs.monitoring-rules.result }} ${{ needs.actionlint.result }} ${{ needs.govulncheck.result }} ${{ needs.reproducible-build.result }} ${{ needs.fuzz-smoke.result }}"
+        echo "job results: ${results}"
+        # shellcheck disable=SC2086
+        for r in ${results}; do
+          if [ "$r" != "success" ]; then echo "::error::a required CI job did not succeed (${r})"; exit 1; fi
+        done
+        echo "All required CI gates passed."
+
   # Notification
   notify:
     name: Notify Results
@@ -509,18 +1598,20 @@ jobs:
     steps:
     - name: Notify Slack on failure
       if: failure()
-      uses: 8398a7/action-slack@v3
+      uses: 8398a7/action-slack@77eaa4f1c608a7d68b38af4e3f739dcd8cba273e  # v3
       with:
         status: failure
         channel: '#kube-policies-ci'
-        webhook_url: ${{ secrets.SLACK_WEBHOOK }}
         fields: repo,message,commit,author,action,eventName,ref,workflow
+      env:
+        SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK }}
 
     - name: Notify Slack on success
       if: success() && github.ref == 'refs/heads/main'
-      uses: 8398a7/action-slack@v3
+      uses: 8398a7/action-slack@77eaa4f1c608a7d68b38af4e3f739dcd8cba273e  # v3
       with:
         status: success
         channel: '#kube-policies-ci'
-        webhook_url: ${{ secrets.SLACK_WEBHOOK }}
         fields: repo,message,commit,author,action,eventName,ref,workflow
+      env:
+        SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK }}

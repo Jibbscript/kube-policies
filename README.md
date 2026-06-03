@@ -1,312 +1,367 @@
 # Kube-Policies
 
-Enterprise-grade Kubernetes policy enforcement system providing comprehensive security guardrails, compliance monitoring, and governance for containerized applications at scale.
+Kube-Policies is a Kubernetes admission-control and policy-management reference
+implementation. It combines an OPA/Rego policy engine, `Policy` and
+`PolicyException` CRDs, a policy-manager API, a read-only dashboard, Helm
+manifests, Prometheus/Grafana assets, and a reproducible demo pipeline.
 
-[![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
-[![Go Report Card](https://goreportcard.com/badge/github.com/jibbscript/kube-policies)](https://goreportcard.com/report/github.com/Jibbscript/kube-policies)
-[![Kubernetes](https://img.shields.io/badge/Kubernetes-1.20%2B-blue.svg)](https://kubernetes.io/)
+[![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
+[![Go Report Card](https://goreportcard.com/badge/github.com/Jibbscript/kube-policies)](https://goreportcard.com/report/github.com/Jibbscript/kube-policies)
+[![Go](https://img.shields.io/badge/Go-1.25-blue.svg)](go.mod)
 [![Helm](https://img.shields.io/badge/Helm-3.8%2B-blue.svg)](https://helm.sh/)
 
-## Overview
+## Compliance & Security Posture
 
-Kube-Policies is a comprehensive policy enforcement platform designed to address the critical security and compliance challenges faced by enterprise organizations operating in cloud-native environments. Built on the foundation of [Block's pioneering implementation](https://developer.squareup.com/blog/kube-policies-guardrails-for-apps-running-in-kubernetes/), this solution extends and enhances the original concept to create a production-ready, enterprise-grade system.
+Kube-Policies is a **Proof-of-Concept / reference implementation**, not an authorized
+production system. It is being driven to **FedRAMP-Moderate** (NIST SP 800-53 Rev 5) and
+**CIS** readiness; it is **not yet authorized** (no ATO) and most security controls are
+currently **Planned** or **Partial**. The honest, evidence-backed status — FIPS-199
+categorization, control matrix, and POA&M of open weaknesses — lives in the compliance
+package: [docs/compliance/](docs/compliance/README.md). To report a vulnerability, see
+[SECURITY.md](SECURITY.md). The vulnerability-management procedure (scan inventory, SLA
+tracking, and evidence retention) is at
+[docs/security/vulnerability-management.md](docs/security/vulnerability-management.md).
 
-### Key Features
+## Current Repo State
 
-- **Real-time Policy Enforcement**: Sub-millisecond policy evaluation with OPA-based engine
-- **Enterprise Security**: Comprehensive security controls with CIS, NIST, and custom compliance frameworks
-- **Multi-Tenant Architecture**: Hierarchical policy inheritance with tenant-specific customizations
-- **Advanced Monitoring**: Prometheus metrics, Grafana dashboards, and comprehensive audit logging
-- **High Performance**: Intelligent caching and horizontal scaling for enterprise workloads
-- **Zero Trust Security**: mTLS communication, encryption at rest/transit, and minimal privilege access
-- **Exception Management**: Structured exception handling with approval workflows
-- **Policy as Code**: GitOps-enabled policy management with version control
+This repository is source-first. Install from the local chart in
+`charts/kube-policies`; no published chart repository or external docs site is
+required for the visitor path.
 
-## Quick Start
+What is present today:
 
-### Prerequisites
+- `cmd/admission-webhook`: TLS 1.3 validating and mutating admission webhook on
+  `:8443`, plus a separate Prometheus metrics server on `:9090`.
+- `cmd/policy-manager`: REST API on `:8080`, metrics on `:9091`, CRD
+  reconciliation for policies and exceptions, and a recent-decisions stream for
+  dashboard consumers.
+- `cmd/dashboard` and `web/`: Svelte dashboard served by a Go BFF. The dashboard
+  is read-only by default; write verbs are blocked unless `ALLOW_WRITES=true`.
+- `internal/policy`: OPA-backed evaluator with bundled default Pod guardrails,
+  per-policy test evaluation, prepared-query caching, and fail-closed exception
+  handling.
+- `deployments/kubernetes/crds`: namespaced `Policy` and `PolicyException` CRDs.
+- `charts/kube-policies`: Helm chart for the webhook, policy manager, optional
+  dashboard, RBAC, services, config, persistence, and webhook TLS bootstrap.
+- `monitoring/`: Prometheus, Grafana, and Alertmanager configuration aligned to
+  the metrics emitted by the services.
+- `demo/`: Kind capture scripts, tracked dashboard screenshots, and a 60-second
+  Remotion video pipeline.
+- `scripts/validate/manifests.sh`: offline validation for Helm render output,
+  YAML, Prometheus, Alertmanager, Grafana JSON, and Kubernetes schemas.
 
-- Kubernetes 1.20+ (recommended 1.24+)
-- Helm 3.8+
-- RBAC enabled cluster
+![Dashboard overview](demo/remotion/public/screenshots/dashboard-overview.png)
 
-### Installation
+## Features Backed By The Current Code
+
+- Admission validation denies policy violations by default.
+- Mutation responses can return JSON Patch operations when rules emit patches.
+- Bundled default Pod rules cover privileged containers, `hostPath` volumes,
+  `:latest` or implicit-latest images, and missing container security context.
+- `Policy` CRDs are reconciled into the in-memory policy engine and manager
+  registry.
+- `PolicyException` CRDs can suppress matching violations while preserving
+  attribution in `suppressed_by`, audit logs, and metrics.
+- Exception registry errors preserve the original denial instead of applying an
+  unsafe suppression.
+- Runtime config validates key contracts: `policy.failure_mode` is
+  `fail-open` or `fail-closed`, audit backend is `file` or `stdout`, and TLS
+  minimum version is `1.3`.
+- The dashboard proxies read paths and playground-style evaluation calls while
+  blocking real writes by default.
+- Demo fixtures and dashboard screenshots are tracked so visitors can inspect
+  the product surface without running a cluster first.
+
+## Quick Start For Visitors
 
 ```bash
-# Add Helm repository
-helm repo add kube-policies https://charts.kube-policies.io
-helm repo update
+git clone https://github.com/Jibbscript/kube-policies.git
+cd kube-policies
 
-# Create namespace
-kubectl create namespace kube-policies-system
+# Fast behavior check used by the repo cleanup workflow.
+TEST_COVERAGE=false make test-unit
 
-# Install with monitoring enabled
-helm install kube-policies kube-policies/kube-policies \
+# Build the two core service binaries.
+make build
+
+# Inspect the local Helm chart.
+make helm-lint
+helm template kube-policies charts/kube-policies --include-crds
+```
+
+For a live local walkthrough with Kind, Docker, Helm, kubectl, and openssl
+installed:
+
+```bash
+make demo-up
+# Open http://localhost:8090 after the target reports that the demo is up.
+make demo-down
+```
+
+To regenerate and verify the 60-second video pipeline:
+
+```bash
+make demo
+```
+
+The rendered MP4 is written under `demo/dist/`, which is intentionally ignored.
+The tracked capture manifest and screenshots live under
+`demo/remotion/public/`.
+
+## Deploying Your Own Images
+
+The chart is local to this repository. Build and push images to a registry you
+control, then point the chart at those images:
+
+```bash
+REGISTRY=ghcr.io/your-org IMAGE_TAG=v0.1.0 make docker-build docker-dashboard
+
+helm dependency build charts/kube-policies
+helm upgrade --install kube-policies charts/kube-policies \
   --namespace kube-policies-system \
-  --set monitoring.enabled=true \
-  --set policies.enableDefaults=true
+  --create-namespace \
+  --set admissionWebhook.image.registry=ghcr.io \
+  --set admissionWebhook.image.repository=your-org/admission-webhook \
+  --set admissionWebhook.image.tag=v0.1.0 \
+  --set policyManager.image.registry=ghcr.io \
+  --set policyManager.image.repository=your-org/policy-manager \
+  --set policyManager.image.tag=v0.1.0 \
+  --set dashboard.enabled=true \
+  --set dashboard.image.repository=ghcr.io/your-org/dashboard \
+  --set dashboard.image.tag=v0.1.0 \
+  --wait
 ```
 
-### Verify Installation
+The webhook TLS chart notes are emitted after install. The chart supports
+existing Secret preservation, inline PEM values, generated self-signed
+certificates, and cert-manager-managed Secrets.
+
+## Network Segmentation Prerequisite (CNI / NetworkPolicy)
+
+The chart ships a **default-deny** baseline plus a least-privilege allow-list as
+`NetworkPolicy` objects (`networkPolicy.enabled=true` by default; the raw-manifest
+path is `deployments/kubernetes/base/networkpolicy.yaml`). **These objects only
+take effect on a NetworkPolicy-enforcing CNI** — Calico, Cilium, Antrea, or
+similar. On the default kind CNI (`kindnet`) or any CNI that does not implement
+the `networking.k8s.io/v1` NetworkPolicy API, the policies **install but enforce
+nothing** (they are inert). This is a hard prerequisite for the SC-7 / CIS 5.3.1
+boundary controls, not a guarantee.
+
+Two fail-closed values **must** be set for the policies to permit the traffic the
+system needs (left empty they deny, by design):
+
+- `networkPolicy.apiServerCIDRs` — your control-plane / apiserver CIDR(s); without
+  it the webhook and policy-manager cannot reach the kube-apiserver (leader
+  election and TokenReview fail).
+- `networkPolicy.webhook.ingressFrom.ipBlocks` — the control-plane source CIDR(s)
+  the apiserver connects from; without it admission requests to `:8443` are denied.
+
+Verify your CNI actually enforces NetworkPolicy before relying on segmentation:
 
 ```bash
-# Check components
-kubectl get pods -n kube-policies-system
-
-# Verify admission webhooks
-kubectl get validatingwebhookconfigurations
-kubectl get mutatingwebhookconfigurations
-
-# Test policy enforcement
-kubectl apply -f examples/policies/security-baseline.yaml
+# Apply a deny-all in a throwaway namespace and prove a pod-to-pod call is blocked.
+kubectl create ns np-test
+kubectl -n np-test run a --image=busybox --restart=Never -- sleep 3600
+kubectl -n np-test run b --image=busybox --restart=Never -- sleep 3600
+kubectl -n np-test wait --for=condition=Ready pod/a pod/b
+kubectl -n np-test apply -f - <<'EOF'
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: { name: deny-all, namespace: np-test }
+spec: { podSelector: {}, policyTypes: [Ingress, Egress] }
+EOF
+# Enforcing CNI: the call TIMES OUT (blocked). Non-enforcing CNI (kindnet): it SUCCEEDS.
+kubectl -n np-test exec a -- wget -qO- --timeout=3 \
+  "http://$(kubectl -n np-test get pod b -o jsonpath='{.status.podIP}')" \
+  && echo "NOT enforced (CNI does not implement NetworkPolicy)" \
+  || echo "blocked (CNI enforces NetworkPolicy — expected)"
+kubectl delete ns np-test
 ```
 
-## Repository Structure
+The full SC-7 boundary narrative — every allowed flow mapped to its NetworkPolicy
+template, plus the honest CNI-dependency and config-gated caveats — is in
+[docs/compliance/network-architecture.md](docs/compliance/network-architecture.md).
 
-```
-kube-policies/
-├── cmd/                           # Application entry points
-│   ├── admission-webhook/         # Admission webhook service
-│   └── policy-manager/            # Policy management service
-├── internal/                      # Internal application code
-│   ├── admission/                 # Admission controller logic
-│   ├── config/                    # Configuration management
-│   ├── metrics/                   # Metrics collection
-│   ├── policy/                    # Policy engine
-│   └── policymanager/             # Policy manager implementation
-├── pkg/                           # Public packages
-│   ├── audit/                     # Audit logging
-│   └── logger/                    # Structured logging
-├── charts/                        # Helm charts
-│   └── kube-policies/             # Main Helm chart
-│       ├── templates/             # Kubernetes manifests
-│       ├── Chart.yaml             # Chart metadata
-│       └── values.yaml            # Default configuration
-├── deployments/                   # Deployment manifests
-│   └── kubernetes/                # Kubernetes deployments
-│       ├── base/                  # Base manifests
-│       ├── crds/                  # Custom Resource Definitions
-│       └── monitoring/            # Monitoring stack
-├── monitoring/                    # Monitoring configurations
-│   ├── grafana/                   # Grafana dashboards
-│   │   └── dashboards/            # Dashboard definitions
-│   ├── prometheus/                # Prometheus configuration
-│   └── alertmanager/              # Alertmanager configuration
-├── examples/                      # Example configurations
-│   ├── policies/                  # Sample policies
-│   └── exceptions/                # Sample exceptions
-├── build/                         # Build configurations
-│   └── docker/                    # Dockerfiles
-├── docs/                          # Documentation
-├── scripts/                       # Utility scripts
-├── DEPLOYMENT.md                  # Deployment guide
-├── CONTRIBUTING.md                # Contribution guidelines
-└── README.md                      # This file
-```
+## Policy Authoring
 
-## Architecture
-
-### System Components
-
-1. **Admission Webhook**: Validates and mutates Kubernetes resources in real-time
-2. **Policy Manager**: Manages policy lifecycle, exceptions, and compliance reporting
-3. **Policy Engine**: OPA-based evaluation engine with sub-millisecond performance
-4. **Audit System**: Comprehensive audit logging with multiple backend support
-5. **Monitoring Stack**: Prometheus, Grafana, and Alertmanager integration
-
-### Core Subsystems
-
-- **Policy Engine Subsystem**: Real-time admission control with OPA-based evaluation
-- **Policy Management Subsystem**: Comprehensive policy lifecycle management
-- **Audit & Compliance Subsystem**: Tamper-evident audit logging and compliance reporting
-- **Exception Management Subsystem**: Structured exception handling with approval workflows
-- **Observability Subsystem**: Comprehensive monitoring, metrics, and alerting
-
-## Monitoring & Observability
-
-### Grafana Dashboards
-
-- **Overview Dashboard**: System health, performance, and policy enforcement metrics
-- **Security Dashboard**: Policy violations, threat detection, and compliance metrics
-- **Performance Dashboard**: Resource usage, latency, and throughput monitoring
-
-### Prometheus Metrics
-
-- Policy evaluation latency and throughput
-- Admission webhook performance metrics
-- Policy violation rates by severity
-- System resource utilization
-- Compliance framework scores
-
-### Alerting Rules
-
-- High latency alerts (>100ms 95th percentile)
-- High error rate alerts (>5% error rate)
-- Service availability monitoring
-- Policy violation rate monitoring
-- Resource usage alerts
-
-## Configuration
-
-### Basic Policy Example
+Policies are namespaced CRDs in `policies.kube-policies.io/v1`. Rules are Rego
+modules that expose `data.kube_policies.evaluate` and return an object with at
+least `allowed`. When `allowed` is `false`, include `message` and `path` so the
+API, audit stream, and dashboard can point at the offending field.
 
 ```yaml
 apiVersion: policies.kube-policies.io/v1
 kind: Policy
 metadata:
   name: security-baseline
+  namespace: kube-policies-system
 spec:
-  description: "Basic security requirements"
+  description: "Basic Pod security requirements"
   enabled: true
+  severity: HIGH
   rules:
     - name: no-privileged-containers
       severity: HIGH
       rego: |
-        deny[msg] {
-          input.spec.securityContext.privileged
-          msg := "Privileged containers are not allowed"
+        package kube_policies
+
+        import rego.v1
+
+        default evaluate := {"allowed": true}
+
+        evaluate := {
+          "allowed": false,
+          "message": "Container must not run in privileged mode",
+          "path": sprintf("spec.containers[%d].securityContext.privileged", [i]),
+        } if {
+          indexes := [j |
+            some j
+            input.object.spec.containers[j].securityContext.privileged == true
+          ]
+          count(indexes) > 0
+          i := indexes[0]
         }
 ```
 
-### Exception Management
+The full sample policy is in
+[`examples/policies/security-baseline.yaml`](examples/policies/security-baseline.yaml).
 
-A `PolicyException` CR grants a targeted carve-out from a Policy. The webhook
-consults its in-cluster exception index on every admission request; matching
-exceptions suppress otherwise-denied verdicts. Suppressions are observable via
-the Prometheus counter `kube_policies_policy_exception_suppressions_total{policy_id, rule_id}`,
-the structured audit log (`suppressed_by` field), and an `info`-level
-admission log line.
+## Exception Management
+
+A `PolicyException` grants a scoped carve-out from a policy violation. Matching
+exceptions suppress otherwise-denied verdicts, but the suppression remains
+visible through:
+
+- `EvaluationResult.suppressed_by`
+- audit log `suppressed_by`
+- dashboard decision events
+- `kube_policies_policy_exception_suppressions_total{policy_id, rule_id}`
 
 ```yaml
 apiVersion: policies.kube-policies.io/v1
 kind: PolicyException
 metadata:
-  name: emergency-deployment
-  namespace: emergency-ns       # exception is namespaced; create it in the
-                                # same namespace as the workload or in
-                                # kube-policies-system
+  name: emergency-deployment-latest-tag
+  namespace: production
 spec:
-  policy_id: security-baseline           # required: id of the Policy to waive
-  rule_id: no-privileged-containers      # optional: empty = applies to all
-                                         # rules of the parent policy
-  justification: "Emergency security patch deployment"
-  approver: security-team
-  expires_at: "2030-01-01T00:00:00Z"     # RFC3339, e.g. far-future or
-                                         # `<incident-end>+24h`; omit for no expiry
+  policy_id: security-baseline
+  rule_id: no-latest-image-tag
+  justification: "Temporary emergency deployment while an immutable image is promoted"
+  approver: security-oncall
+  expires_at: "2030-01-01T00:00:00Z"
   scope:
-    # All four dimensions act as strict allow-lists; an unset dimension is
-    # unconstrained but does not widen the match. Omitting `scope` entirely
-    # produces a wildcard match for the named policy/rule.
-    namespaces: ["emergency-ns"]
-    resources:  ["pods"]
-    # users / groups also supported.
+    namespaces: ["production"]
+    resources: ["pods", "deployments"]
+    groups: ["system:serviceaccounts:production"]
 ```
 
-**Eventual-consistency note.** Exception propagation runs through the
-controller-runtime watch in each webhook replica; there is a brief window
-(typically < 1 s on healthy clusters, longer under load) between
-`kubectl apply` and the webhook honoring the exception. Operators applying an
-emergency carve-out should either re-apply the affected workload after a short
-pause, or wait for `status.phase=Active` on the `PolicyException` CR before
-proceeding. The CRD intentionally does NOT support a synchronous "wait for
-suppression" mode — blocking admission until the index converges would create
-a worse failure mode (admission stalls on reconciler outages).
+Use the bundled policy id, such as `security-baseline`, when suppressing a
+bundled default rule. For CRD-authored policies, the reconciler stores the
+internal policy id as `crd:<namespace>:<name>`.
 
-**Scope semantics (security-sensitive).** An exception whose `scope` is
-entirely absent (no `namespaces`, `resources`, `users`, or `groups` set)
-matches **every** request for the named policy/rule. An explicitly-empty
-list inside an otherwise-populated `scope` (e.g. `namespaces: []`) is treated
-as "this dimension is unconstrained" — NOT "no namespaces match." Operators
-who genuinely want "no resources match" must omit the CR entirely rather
-than create one with empty allow-lists. See `cmd/admission-webhook/AGENTS.md`
-for the full matcher predicate documentation.
+Exception propagation is eventually consistent. The webhook watches
+`PolicyException` resources through controller-runtime, so there can be a short
+window between `kubectl apply` and every webhook replica honoring the new
+exception. Re-apply the affected workload after a short pause, or wait for
+`status.phase=Active` on the exception before proceeding.
 
-## Development
+Scope semantics are security-sensitive:
 
-### Building from Source
+- An absent `scope` matches every request for the named policy and rule.
+- An empty list inside a present `scope` leaves that dimension unconstrained.
+- Rule id is exact when set; an empty rule id applies to every rule in the
+  policy.
+- Resource matching is case-insensitive plural matching. Namespace, user, and
+  group matching are case-sensitive.
+
+See
+[`examples/exceptions/emergency-deployment.yaml`](examples/exceptions/emergency-deployment.yaml)
+for the tracked sample.
+
+## Dashboard
+
+The dashboard is a Svelte 5 SPA served by `cmd/dashboard`. It provides:
+
+- overview tiles from scraped policy-manager and webhook metrics
+- live and recent admission decisions
+- policy and exception views
+- a playground that submits policy test and validation requests
+- a read-only default posture enforced by the Go BFF
+
+Useful commands:
 
 ```bash
-# Clone repository
-git clone https://github.com/kube-policies/kube-policies.git
-cd kube-policies
-
-# Build binaries
-make build
-
-# Build Docker images
-make docker-build
-
-# Run tests
-make test
-
-# Run linting
-make lint
+make ui-deps
+make ui-test
+make ui-lint
+make ui-build
+NO_UI=1 make build-dashboard
 ```
 
-### Local Development
+Use `make ui-dev` for local SPA development. It runs `cmd/dashboard` on
+`:8091` and Vite on `:5173`.
+
+## Verification Commands
+
+High-signal checks for this repository:
 
 ```bash
-# Start local development environment
-make dev-setup
+TEST_COVERAGE=false make test-unit
+make test-integration
+make test-e2e
+make helm-lint
+make validate-manifests
+make ui-test
+make ui-lint
+make demo-verify
+```
 
-# Run admission webhook locally
-make run-webhook
+`make validate-manifests` expects `helm`, `yq`, `jq`, `promtool`, `amtool`, and
+`kubeconform` on `PATH`.
 
-# Run policy manager locally
-make run-policy-manager
+## Repository Layout
+
+```text
+cmd/
+  admission-webhook/   TLS admission webhook and co-located CRD watchers
+  policy-manager/      REST API, CRD reconcilers, metrics, decision stream
+  dashboard/           Go BFF and embedded SPA host
+internal/
+  admission/           AdmissionReview handlers and audit/metrics plumbing
+  audit/               Structured audit events and public decision events
+  config/              Viper-backed config loader and runtime validation
+  metrics/             Prometheus collectors
+  policy/              OPA evaluator, default rules, exception suppression
+  policymanager/       API handlers, CRD conversion, controller setup
+web/                   Svelte dashboard SPA
+charts/kube-policies/  Helm chart
+deployments/           Raw Kubernetes manifests and CRDs
+monitoring/            Prometheus, Grafana, and Alertmanager assets
+examples/              Policy and PolicyException manifests
+demo/                  Kind capture, Remotion render, and demo verification
+test/                  Integration and end-to-end suites
+scripts/               Test, certificate, logger, and manifest validation tools
 ```
 
 ## Documentation
 
-- [Deployment Guide](DEPLOYMENT.md) - Comprehensive deployment instructions
-- [Architecture Documentation](docs/architecture.md) - Detailed system architecture
-- [Policy Development Guide](docs/policy-development.md) - Creating custom policies
-- [API Reference](docs/api-reference.md) - Complete API documentation
-- [Troubleshooting Guide](docs/troubleshooting.md) - Common issues and solutions
-
-## Contributing
-
-We welcome contributions! Please see our [Contributing Guide](CONTRIBUTING.md) for details on:
-
-- Code of conduct
-- Development setup
-- Submission process
-- Testing requirements
-- Documentation standards
-
-### Development Workflow
-
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Add tests and documentation
-5. Submit a pull request
-
-## License
-
-This project is licensed under the Apache License 2.0 - see the [LICENSE](LICENSE) file for details.
-
-## Support
-
-- **Documentation**: [https://docs.kube-policies.io](https://docs.kube-policies.io)
-- **GitHub Issues**: [https://github.com/kube-policies/kube-policies/issues](https://github.com/kube-policies/kube-policies/issues)
-- **Community Slack**: [https://slack.kube-policies.io](https://slack.kube-policies.io)
-- **Email Support**: [support@kube-policies.io](mailto:support@kube-policies.io)
+- [Configuration reference](docs/configuration.md)
+- [Deployment guide](DEPLOYMENT.md)
+- [Testing guide](TESTING.md)
+- [Contributing guide](CONTRIBUTING.md)
+- [Changelog](CHANGELOG.md)
+- [Dashboard README](web/README.md)
+- [Demo verification scripts](demo/verify/)
+- [Supply-chain release verification](docs/supply-chain/verification.md) — verify image signatures, SBOM/SLSA attestations, and signed binaries/chart before deploying (`scripts/verify-release.sh <version>`); see also [image signing & admission enforcement](docs/policies/image-signing.md) and the [supply-chain control narrative](docs/compliance/supply-chain.md)
+- [Compliance evidence package](docs/compliance/README.md) — including the [IAM control narrative](docs/compliance/iam-control-narrative.md) (AC/IA), the [Access Control policy](docs/compliance/policies/AC-policy.md), and the [audit access-control model](docs/audit/access-control.md)
 
 ## Acknowledgments
 
-- Inspired by [Block's Kube-Policies implementation](https://developer.squareup.com/blog/kube-policies-guardrails-for-apps-running-in-kubernetes/)
-- Built on [Open Policy Agent (OPA)](https://www.openpolicyagent.org/)
-- Kubernetes community for admission controller patterns
-- CNCF projects for cloud-native best practices
+This project is inspired by
+[Block's Kube-Policies guardrails write-up](https://developer.squareup.com/blog/kube-policies-guardrails-for-apps-running-in-kubernetes/)
+and builds on Open Policy Agent, Kubernetes admission controllers, Prometheus,
+Grafana, Svelte, and Remotion.
 
-## Related Projects
+## License
 
-- [Open Policy Agent](https://github.com/open-policy-agent/opa)
-- [Gatekeeper](https://github.com/open-policy-agent/gatekeeper)
-- [Falco](https://github.com/falcosecurity/falco)
-- [Polaris](https://github.com/FairwindsOps/polaris)
-
----
-
-**Kube-Policies** - Securing Kubernetes at Enterprise Scale
+Apache License 2.0. See [LICENSE](LICENSE).

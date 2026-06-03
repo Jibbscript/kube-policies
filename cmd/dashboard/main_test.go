@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"runtime"
 	"strings"
 	"sync"
@@ -24,6 +25,7 @@ func newTestRouter(t *testing.T, cfg *Config) *gin.Engine {
 	r := gin.New()
 	r.Use(gin.Recovery())
 	r.Use(cspMiddleware(cfg.CSPUnsafeInlineStyle))
+	r.Use(secureHeadersMiddleware(cfg))
 	r.GET("/healthz", func(c *gin.Context) { c.JSON(http.StatusOK, gin.H{"status": "healthy"}) })
 	r.GET("/readyz", func(c *gin.Context) { c.JSON(http.StatusOK, gin.H{"status": "ready"}) })
 	ring := NewRing(8)
@@ -66,6 +68,55 @@ func TestCSPHeader_DefaultExcludesUnsafeInline(t *testing.T) {
 	if !strings.Contains(csp, "style-src 'self'") {
 		t.Errorf("CSP missing style-src 'self'; got %q", csp)
 	}
+}
+
+func TestSecureHeaders_AlwaysSet(t *testing.T) {
+	r := newTestRouter(t, &Config{})
+	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	cases := map[string]string{
+		"X-Content-Type-Options": "nosniff",
+		"X-Frame-Options":        "DENY",
+		"Referrer-Policy":        "no-referrer",
+	}
+	for h, want := range cases {
+		if got := w.Header().Get(h); got != want {
+			t.Errorf("%s = %q, want %q", h, got, want)
+		}
+	}
+}
+
+func TestCSP_IncludesFrameAncestorsNone(t *testing.T) {
+	r := newTestRouter(t, &Config{})
+	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if csp := w.Header().Get("Content-Security-Policy"); !strings.Contains(csp, "frame-ancestors 'none'") {
+		t.Errorf("CSP missing frame-ancestors 'none'; got %q", csp)
+	}
+}
+
+func TestHSTS_OnlyWhenEnabled(t *testing.T) {
+	t.Run("disabled (default)", func(t *testing.T) {
+		r := newTestRouter(t, &Config{})
+		req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+		if got := w.Header().Get("Strict-Transport-Security"); got != "" {
+			t.Errorf("HSTS must be absent when disabled; got %q", got)
+		}
+	})
+	t.Run("enabled", func(t *testing.T) {
+		r := newTestRouter(t, &Config{HSTSEnabled: true, HSTSMaxAge: 31536000, HSTSIncludeSubdomains: true})
+		req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+		got := w.Header().Get("Strict-Transport-Security")
+		if got != "max-age=31536000; includeSubDomains" {
+			t.Errorf("HSTS = %q, want max-age=31536000; includeSubDomains", got)
+		}
+	})
 }
 
 func TestCSPHeader_UnsafeInlineWhenConfigured(t *testing.T) {
@@ -154,7 +205,7 @@ func TestRecentHandler_EmptyRingReportsDegraded(t *testing.T) {
 
 func TestProxy_VerbGate_RejectsWritesWhenDisabled(t *testing.T) {
 	cfg := &Config{PolicyManagerURL: "http://upstream.invalid", AllowWrites: false}
-	proxy, err := NewProxyHandler(cfg, zap.NewNop())
+	proxy, err := NewProxyHandler(cfg, nil, zap.NewNop(), nil)
 	if err != nil {
 		t.Fatalf("NewProxyHandler: %v", err)
 	}
@@ -185,12 +236,62 @@ func TestProxy_VerbGate_RejectsWritesWhenDisabled(t *testing.T) {
 	}
 }
 
+func TestProxy_ForwardsUserTokenUpstream(t *testing.T) {
+	var gotAuth string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	defer upstream.Close()
+
+	cfg := &Config{PolicyManagerURL: upstream.URL, AllowWrites: true}
+	proxy, err := NewProxyHandler(cfg, nil, zap.NewNop(), nil)
+	if err != nil {
+		t.Fatalf("NewProxyHandler: %v", err)
+	}
+	gin.SetMode(gin.TestMode)
+	routerWith := func(p *principal) *gin.Engine {
+		r := gin.New()
+		r.Use(func(c *gin.Context) {
+			if p != nil {
+				c.Set(principalContextKey, p)
+			}
+			c.Next()
+		})
+		r.Handle(http.MethodGet, "/api/v1/*proxyPath", proxy)
+		return r
+	}
+
+	t.Run("forwards the user's token and strips a client-supplied Authorization", func(t *testing.T) {
+		gotAuth = ""
+		r := routerWith(&principal{Username: "alice", IDToken: "USER-ID-TOKEN"})
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/policies", nil)
+		req.Header.Set("Authorization", "Bearer ATTACKER-SMUGGLED") // must NOT reach upstream
+		r.ServeHTTP(httptest.NewRecorder(), req)
+		if gotAuth != "Bearer USER-ID-TOKEN" {
+			t.Fatalf("upstream Authorization = %q, want the user's token (client-supplied must be stripped)", gotAuth)
+		}
+	})
+
+	t.Run("no authenticated user forwards no Authorization", func(t *testing.T) {
+		gotAuth = "sentinel"
+		r := routerWith(nil)
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/policies", nil)
+		req.Header.Set("Authorization", "Bearer ATTACKER-SMUGGLED")
+		r.ServeHTTP(httptest.NewRecorder(), req)
+		if gotAuth != "" {
+			t.Fatalf("with no authenticated user, no Authorization may reach upstream, got %q", gotAuth)
+		}
+	})
+}
+
 func TestProxy_ReadOnlyRPC_BypassesVerbGate(t *testing.T) {
 	// /policies/<id>/test and /policies/validate are POSTs that perform
 	// no server-side mutation. They MUST bypass the AllowWrites gate so
 	// the Playground UX works in the default read-only deployment.
 	cfg := &Config{PolicyManagerURL: "http://upstream.invalid", AllowWrites: false}
-	proxy, err := NewProxyHandler(cfg, zap.NewNop())
+	proxy, err := NewProxyHandler(cfg, nil, zap.NewNop(), nil)
 	if err != nil {
 		t.Fatalf("NewProxyHandler: %v", err)
 	}
@@ -422,7 +523,7 @@ func TestProxy_VerbGate_AllowsWritesWhenEnabled_ButUpstreamDown(t *testing.T) {
 	// which then fails with 502 because http://upstream.invalid doesn't
 	// resolve. That distinguishes "gate blocked" (403) from "gate passed".
 	cfg := &Config{PolicyManagerURL: "http://upstream.invalid", AllowWrites: true}
-	proxy, err := NewProxyHandler(cfg, zap.NewNop())
+	proxy, err := NewProxyHandler(cfg, nil, zap.NewNop(), nil)
 	if err != nil {
 		t.Fatalf("NewProxyHandler: %v", err)
 	}
@@ -449,7 +550,7 @@ func newStreamTestRouter(ctx context.Context, cfg *Config) (*gin.Engine, *Ring) 
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
 	ring := NewRing(16)
-	sub := NewStreamSubscriber(ctx, cfg, ring, zap.NewNop())
+	sub := NewStreamSubscriber(ctx, cfg, nil, ring, zap.NewNop())
 	sub.Start()
 	r.GET("/api/decisions/stream", sub.Handler())
 	r.GET("/api/decisions/recent", NewRecentHandler(ring, zap.NewNop()))
@@ -731,5 +832,146 @@ func TestStreamHandler_BrowserDisconnect(t *testing.T) {
 	if after > before+tolerance {
 		t.Errorf("possible goroutine leak: before=%d after=%d (delta=%d, tolerance=%d)",
 			before, after, after-before, tolerance)
+	}
+}
+
+// --- Inc7 Stream A: upstream SSE subscriber bearer auth (IAM-WU-11) ---
+
+// TestStreamSubscriber_AttachesBearerWhenTokenConfigured proves the subscriber
+// presents Authorization: Bearer <token> on the upstream SSE connection when a
+// static StreamToken is configured, alongside the existing Accept header.
+func TestStreamSubscriber_AttachesBearerWhenTokenConfigured(t *testing.T) {
+	gotAuth := make(chan string, 1)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case gotAuth <- r.Header.Get("Authorization"):
+		default:
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+		}
+		<-r.Context().Done()
+	}))
+	defer upstream.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	cfg := &Config{PolicyManagerStreamURL: upstream.URL, StreamToken: "dashboard-static-token"}
+	sub := NewStreamSubscriber(ctx, cfg, nil, NewRing(8), zap.NewNop())
+	sub.Start()
+
+	select {
+	case auth := <-gotAuth:
+		if auth != "Bearer dashboard-static-token" {
+			t.Fatalf("upstream Authorization = %q, want %q", auth, "Bearer dashboard-static-token")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("subscriber did not connect upstream within 2s")
+	}
+}
+
+// TestStreamSubscriber_AttachesBearerFromTokenFile proves the projected-token
+// path: with StreamTokenPath set, the subscriber reads the file and presents its
+// contents (trimmed) as the bearer, and re-reads to observe kubelet rotation.
+func TestStreamSubscriber_AttachesBearerFromTokenFile(t *testing.T) {
+	dir := t.TempDir()
+	tokenPath := dir + "/token"
+	if err := os.WriteFile(tokenPath, []byte("projected-token-v1\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	gotAuth := make(chan string, 4)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case gotAuth <- r.Header.Get("Authorization"):
+		default:
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+		}
+		<-r.Context().Done()
+	}))
+	defer upstream.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	cfg := &Config{PolicyManagerStreamURL: upstream.URL, StreamTokenPath: tokenPath}
+	sub := NewStreamSubscriber(ctx, cfg, nil, NewRing(8), zap.NewNop())
+	sub.Start()
+
+	select {
+	case auth := <-gotAuth:
+		if auth != "Bearer projected-token-v1" {
+			t.Fatalf("upstream Authorization = %q, want %q (trimmed file contents)", auth, "Bearer projected-token-v1")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("subscriber did not connect upstream within 2s")
+	}
+}
+
+// TestStreamSubscriber_MissingTokenFileIsNonFatal proves a transiently absent
+// projected token file does NOT crash the subscriber: it connects without an
+// Authorization header (the upstream then returns 401, which drives the normal
+// backoff in runUpstream — exercised here via a direct fetchAndStream call).
+func TestStreamSubscriber_MissingTokenFileIsNonFatal(t *testing.T) {
+	requireAuth := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") == "" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		<-r.Context().Done()
+	}))
+	defer requireAuth.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Point at a token file that does not exist.
+	cfg := &Config{PolicyManagerStreamURL: requireAuth.URL, StreamTokenPath: t.TempDir() + "/does-not-exist"}
+	sub := NewStreamSubscriber(ctx, cfg, nil, NewRing(8), zap.NewNop())
+
+	// fetchAndStream must not panic; the absent token yields no header, the
+	// upstream 401s, and we get (false, err) which feeds the backoff path.
+	connected, err := sub.fetchAndStream()
+	if connected {
+		t.Fatalf("expected connected=false on a 401 upstream, got true")
+	}
+	if err == nil {
+		t.Fatalf("expected a non-nil error on the 401 upstream (drives backoff)")
+	}
+	if !strings.Contains(err.Error(), "401") {
+		t.Fatalf("expected the upstream-status error to mention 401, got %v", err)
+	}
+}
+
+// TestStreamSubscriber_401YieldsBackoffSignal proves a 401 upstream (token
+// rejected) returns (false, err) so runUpstream applies its connection-failed
+// backoff rather than treating it as a clean close.
+func TestStreamSubscriber_401YieldsBackoffSignal(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	defer upstream.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	cfg := &Config{PolicyManagerStreamURL: upstream.URL, StreamToken: "rejected-token"}
+	sub := NewStreamSubscriber(ctx, cfg, nil, NewRing(8), zap.NewNop())
+
+	connected, err := sub.fetchAndStream()
+	if connected {
+		t.Fatalf("a 401 must be reported as connected=false (dial/non-200), got true")
+	}
+	if err == nil || !strings.Contains(err.Error(), "401") {
+		t.Fatalf("expected a 401 upstream-status error, got %v", err)
 	}
 }

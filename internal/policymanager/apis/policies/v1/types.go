@@ -139,6 +139,11 @@ type PolicyExceptionScope struct {
 // PolicyExceptionStatus mirrors the structure of PolicyStatus so that the
 // controller can use the same condition-publishing helpers for both kinds.
 type PolicyExceptionStatus struct {
-	Phase      string             `json:"phase,omitempty"`
-	Conditions []metav1.Condition `json:"conditions,omitempty"`
+	Phase string `json:"phase,omitempty"`
+	// ObservedGeneration is the .metadata.generation the controller last
+	// reconciled. The reconciler audits an UPSERT only when the spec generation
+	// advances past this (AUD-WU-12), so periodic resyncs of an unchanged
+	// exception do not flood the audit log.
+	ObservedGeneration int64              `json:"observedGeneration,omitempty"`
+	Conditions         []metav1.Condition `json:"conditions,omitempty"`
 }

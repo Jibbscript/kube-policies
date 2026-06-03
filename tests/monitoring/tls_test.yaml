@@ -1,0 +1,67 @@
+# promtool unit tests for the kube-policies-tls cert-expiry alerts (IRM-WU-09 /
+# CRY-WU-12). Metric kube_policies_tls_cert_expiry_seconds is the cert NotAfter
+# as Unix seconds; alerts compare (expiry - time()). promtool time() advances
+# from epoch 0, so a constant expiry value encodes "seconds of validity left".
+rule_files:
+  - ../../charts/kube-policies/files/alerts/tls.yaml
+
+evaluation_interval: 1m
+
+tests:
+  # ~11.5 days left (1_000_000s): in (7d, 30d) -> CertExpiringSoon (warning)
+  # fires, CertExpiringCritical and CertExpired do NOT.
+  - interval: 1m
+    input_series:
+      - series: 'kube_policies_tls_cert_expiry_seconds{component="admission-webhook"}'
+        values: '1001200x25'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: KubePoliciesCertExpiringSoon
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              component: admission-webhook
+            exp_annotations:
+              description: "The serving certificate for admission-webhook has under 30 days of validity. Rotate it (cert-manager renews automatically; for the demo/self-signed path, regenerate the Secret)."
+              runbook_url: "https://github.com/Jibbscript/kube-policies/blob/main/docs/security/runbooks/cert-expiry.md"
+              summary: "kube-policies admission-webhook TLS certificate expires in under 30 days"
+      - eval_time: 20m
+        alertname: KubePoliciesCertExpiringCritical
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: KubePoliciesCertExpired
+        exp_alerts: []
+
+  # ~6.9 days left (<7d): CertExpiringCritical (critical) fires.
+  - interval: 1m
+    input_series:
+      - series: 'kube_policies_tls_cert_expiry_seconds{component="policy-manager"}'
+        values: '601200x25'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: KubePoliciesCertExpiringCritical
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              component: policy-manager
+            exp_annotations:
+              description: "The serving certificate for policy-manager has under 7 days of validity. An expired caBundle silently breaks all admissions under failurePolicy=Fail — rotate now."
+              runbook_url: "https://github.com/Jibbscript/kube-policies/blob/main/docs/security/runbooks/cert-expiry.md"
+              summary: "kube-policies policy-manager TLS certificate expires in under 7 days"
+
+  # Already expired (expiry far in the past relative to time()): CertExpired fires.
+  - interval: 1m
+    input_series:
+      - series: 'kube_policies_tls_cert_expiry_seconds{component="admission-webhook"}'
+        values: '100x25'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: KubePoliciesCertExpired
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              component: admission-webhook
+            exp_annotations:
+              description: "The serving certificate for admission-webhook is expired; TLS handshakes (and, for the webhook, admission) will fail. Rotate immediately."
+              runbook_url: "https://github.com/Jibbscript/kube-policies/blob/main/docs/security/runbooks/cert-expiry.md"
+              summary: "kube-policies admission-webhook TLS certificate has EXPIRED"

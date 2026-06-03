@@ -10,8 +10,10 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"go.uber.org/zap"
+	authenticationv1 "k8s.io/api/authentication/v1"
 
 	"github.com/Jibbscript/kube-policies/internal/audit"
+	"github.com/Jibbscript/kube-policies/internal/auth"
 	"github.com/Jibbscript/kube-policies/internal/config"
 	"github.com/Jibbscript/kube-policies/internal/policy"
 )
@@ -28,11 +30,60 @@ type Manager struct {
 	cancel     context.CancelFunc
 
 	// M2 live-ticker: fan-out pub-sub bus, bounded recent-event ring, and the
-	// shared bearer secret that guards POST /api/v1/decisions/internal.
+	// constant-time verifier for the shared bearer secret that guards
+	// POST /api/v1/decisions/internal.
 	bus           *audit.Bus
 	recentRing    *Ring
-	internalToken string
+	internalToken *auth.TokenVerifier
+
+	// internalReviewer validates an inbound projected ServiceAccount token on
+	// POST /api/v1/decisions/internal via the Kubernetes TokenReview API
+	// (IAM-WU-11). When non-nil it is the primary, audience-bound authenticator
+	// for that endpoint; internalToken remains the opt-in static fallback for
+	// non-cluster/demo deployments. nil leaves behavior exactly as before
+	// (static-token only).
+	internalReviewer *InternalTokenAuthenticator
+
+	// decisionsReadReviewer validates the inbound projected ServiceAccount token
+	// on the READ side of the decisions plane — GET /api/v1/decisions/stream and
+	// /recent — via the Kubernetes TokenReview API (IAM-WU-11, Inc7 Stream A).
+	// It is a SEPARATE authenticator from internalReviewer: same audience
+	// (policy-manager) but pinned to the DASHBOARD SA rather than the webhook SA,
+	// so the dashboard's upstream subscriber can authenticate to these read feeds
+	// without weakening the /internal ingest pin. When non-nil it is the primary,
+	// audience+subject-bound authenticator for the reads; internalToken remains
+	// the opt-in static fallback (static mode). nil leaves the reads on the
+	// static-token-only path (the DecisionsReadAuth middleware still requires a
+	// configured token, so an unconfigured manager returns 401).
+	decisionsReadReviewer *InternalTokenAuthenticator
+
+	// auditLogger records a ConfigurationChange audit event for every persisting
+	// management-plane mutation (IAM-WU-14, AU-2/AU-3/AC-6). It is installed via
+	// SetAuditLogger after construction so existing NewManager(cfg, log) callers
+	// (tests, alternate entry points) are unaffected. nil disables audit
+	// attribution entirely — every mutation handler guards on it — so a manager
+	// built without an audit logger behaves exactly as before.
+	auditLogger *audit.Logger
+
+	// auditFilename is the path to the local file-backend audit log that the
+	// compliance read/query layer (AUD-WU-19, AU-6/AU-7) aggregates over. It is
+	// resolved from config.Audit.Config["filename"] in NewManager, defaulting to
+	// /var/log/kube-policies/audit.log. The reports read ONLY this local file
+	// backend; records that have been rotated away or forwarded to a remote sink
+	// are not covered — a documented limitation (see compliance.go).
+	auditFilename string
+
+	// controllerNamespace is the namespace woven into the synthesized controller
+	// service-account identity used to attribute background (non-HTTP) audit
+	// events such as the hourly exception-expiry ticker (AUD-WU-12). Resolved
+	// from config (audit.config["controller_namespace"]) when present, else "".
+	controllerNamespace string
 }
+
+// defaultAuditFilename is the file-backend audit log path assumed when the audit
+// config does not set config["filename"]. It mirrors the default the forward
+// backend uses (internal/audit/forward_backend.go).
+const defaultAuditFilename = "/var/log/kube-policies/audit.log"
 
 // PolicyBundle represents a collection of policies
 type PolicyBundle struct {
@@ -109,16 +160,32 @@ type ComplianceViolation struct {
 func NewManager(config *config.Config, logger *zap.Logger) (*Manager, error) {
 	ctx, cancel := context.WithCancel(context.Background())
 
+	// Resolve the local audit file path for the compliance read/query layer
+	// (AUD-WU-19). config.Audit.Config["filename"] is the same key the file
+	// backend reads; default to the well-known path when unset.
+	auditFilename := defaultAuditFilename
+	if config.Audit.Config != nil {
+		if fn := config.Audit.Config["filename"]; fn != "" {
+			auditFilename = fn
+		}
+	}
+	var controllerNS string
+	if config.Audit.Config != nil {
+		controllerNS = config.Audit.Config["controller_namespace"]
+	}
+
 	manager := &Manager{
-		config:     config,
-		logger:     logger,
-		policies:   make(map[string]*policy.Policy),
-		bundles:    make(map[string]*PolicyBundle),
-		exceptions: make(map[string]*Exception),
-		ctx:        ctx,
-		cancel:     cancel,
-		bus:        audit.NewBus(256, logger),
-		recentRing: NewRing(256),
+		config:              config,
+		logger:              logger,
+		policies:            make(map[string]*policy.Policy),
+		bundles:             make(map[string]*PolicyBundle),
+		exceptions:          make(map[string]*Exception),
+		ctx:                 ctx,
+		cancel:              cancel,
+		bus:                 audit.NewBus(256, logger),
+		recentRing:          NewRing(256),
+		auditFilename:       auditFilename,
+		controllerNamespace: controllerNS,
 	}
 
 	// Mirror the engine's bundled defaults into the manager registry so
@@ -146,7 +213,49 @@ func NewManager(config *config.Config, logger *zap.Logger) (*Manager, error) {
 // POST /api/v1/decisions/internal requests from the admission webhook.
 // An empty token disables the endpoint (every request returns 401).
 func (m *Manager) SetInternalToken(token string) {
-	m.internalToken = token
+	m.internalToken = auth.NewTokenVerifier(token)
+}
+
+// SetInternalTokens configures the internal-token verifier with a current and
+// an optional previous token, supporting a zero-downtime rotation window in
+// which both are accepted (CRY-WU-14). An empty previous token is ignored; an
+// empty current token disables the endpoint.
+func (m *Manager) SetInternalTokens(current, previous string) {
+	m.internalToken = auth.NewTokenVerifier(current, previous)
+}
+
+// SetInternalTokenReviewer installs the audience-bound TokenReview authenticator
+// for POST /api/v1/decisions/internal (IAM-WU-11). When set, an inbound bearer
+// is validated against the Kubernetes TokenReview API first; a clean negative
+// verdict (token not authenticated / wrong audience) may then fall through to
+// the static internalToken verifier if one is configured, but a TokenReview API
+// error always rejects (fail closed). A nil reviewer leaves the endpoint on the
+// static-token-only path. Independent of SetInternalTokens, which is left
+// unchanged so the static fallback is always available.
+func (m *Manager) SetInternalTokenReviewer(reviewer *InternalTokenAuthenticator) {
+	m.internalReviewer = reviewer
+}
+
+// SetDecisionsReadAuthenticator installs the audience+subject-bound TokenReview
+// authenticator for the READ side of the decisions plane — GET
+// /api/v1/decisions/stream and /recent (IAM-WU-11, Inc7 Stream A). It mirrors
+// SetInternalTokenReviewer but is pinned to the DASHBOARD SA, so the dashboard's
+// upstream subscriber authenticates to the read feeds while /internal keeps its
+// webhook-SA pin. A clean negative verdict may then fall through to the static
+// internalToken (static mode); a TokenReview API error always rejects (fail
+// closed). A nil reviewer leaves the reads on the static-token-only path.
+func (m *Manager) SetDecisionsReadAuthenticator(reviewer *InternalTokenAuthenticator) {
+	m.decisionsReadReviewer = reviewer
+}
+
+// SetAuditLogger installs the audit.Logger that records a ConfigurationChange
+// event for every persisting management-plane mutation (IAM-WU-14). It is set
+// after construction (mirroring SetInternalToken*/SetInternalTokenReviewer) so
+// no existing NewManager(cfg, log) caller is forced to change. A nil logger —
+// or never calling this — leaves attribution off: every mutation handler guards
+// on m.auditLogger != nil, so behavior is identical to before.
+func (m *Manager) SetAuditLogger(l *audit.Logger) {
+	m.auditLogger = l
 }
 
 // Start starts the policy manager background processes
@@ -203,13 +312,47 @@ func (m *Manager) checkExpiredExceptions() {
 
 	now := time.Now()
 	for id, exception := range m.exceptions {
-		if exception.ExpiresAt != nil && exception.ExpiresAt.Before(now) {
+		// Only the first transition into "expired" should emit an audit event;
+		// the hourly ticker re-scans the whole map, so guard on the prior status
+		// to avoid re-recording an already-expired exception every hour.
+		if exception.ExpiresAt != nil && exception.ExpiresAt.Before(now) && exception.Status != "expired" {
 			exception.Status = "expired"
 			m.logger.Info("Exception expired",
 				zap.String("exception_id", id),
 				zap.String("policy_id", exception.PolicyID),
 			)
+			// Record the in-memory expiry lifecycle event (AUD-WU-12, AU-2). This
+			// is the hourly-ticker half of exception-expiry coverage; the CRD
+			// reconciler (PolicyExceptionReconciler) records the other half. The
+			// expiry is a background system actor, so it is attributed to the
+			// controller service account, not a human principal.
+			if m.auditLogger != nil {
+				m.auditLogger.LogSystemEvent("ExceptionExpired",
+					fmt.Sprintf("policy exception %s expired (ticker)", id),
+					map[string]interface{}{
+						"controller":   "expiry-ticker",
+						"identity":     m.controllerIdentity().Username,
+						"exception_id": id,
+						"policy_id":    exception.PolicyID,
+					})
+			}
 		}
+	}
+}
+
+// controllerIdentity returns the synthesized controller service-account UserInfo
+// used to attribute background (non-HTTP) audit events such as exception expiry
+// (AUD-WU-12). The namespace is sourced from config.Audit's controller hint when
+// available, falling back to kube-system defensively. It is a system actor, not
+// a human principal.
+func (m *Manager) controllerIdentity() authenticationv1.UserInfo {
+	ns := m.controllerNamespace
+	if ns == "" {
+		ns = "kube-system"
+	}
+	return authenticationv1.UserInfo{
+		Username: fmt.Sprintf("system:serviceaccount:%s:kube-policies-controller", ns),
+		Groups:   []string{"system:serviceaccounts", "system:serviceaccounts:" + ns},
 	}
 }
 
@@ -280,6 +423,14 @@ func (m *Manager) CreatePolicy(c *gin.Context) {
 		zap.String("policy_name", newPolicy.Name),
 	)
 
+	if m.auditLogger != nil {
+		m.auditLogger.LogConfigChange(userInfoFromContext(c), "CREATE", "policy", newPolicy.ID, map[string]interface{}{
+			"source_ip":      c.ClientIP(),
+			"policy_name":    newPolicy.Name,
+			"correlation_id": correlationIDFromContext(c),
+		})
+	}
+
 	c.JSON(http.StatusCreated, newPolicy)
 }
 
@@ -294,10 +445,10 @@ func (m *Manager) UpdatePolicy(c *gin.Context) {
 	}
 
 	m.mutex.Lock()
-	defer m.mutex.Unlock()
 
 	existingPolicy, exists := m.policies[id]
 	if !exists {
+		m.mutex.Unlock()
 		c.JSON(http.StatusNotFound, gin.H{"error": "Policy not found"})
 		return
 	}
@@ -309,16 +460,26 @@ func (m *Manager) UpdatePolicy(c *gin.Context) {
 
 	// Validate policy
 	if err := m.validatePolicy(&updatedPolicy); err != nil {
+		m.mutex.Unlock()
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
 	m.policies[id] = &updatedPolicy
+	m.mutex.Unlock()
 
 	m.logger.Info("Policy updated",
 		zap.String("policy_id", id),
 		zap.String("policy_name", updatedPolicy.Name),
 	)
+
+	if m.auditLogger != nil {
+		m.auditLogger.LogConfigChange(userInfoFromContext(c), "UPDATE", "policy", id, map[string]interface{}{
+			"source_ip":      c.ClientIP(),
+			"policy_name":    updatedPolicy.Name,
+			"correlation_id": correlationIDFromContext(c),
+		})
+	}
 
 	c.JSON(http.StatusOK, updatedPolicy)
 }
@@ -328,16 +489,24 @@ func (m *Manager) DeletePolicy(c *gin.Context) {
 	id := c.Param("id")
 
 	m.mutex.Lock()
-	defer m.mutex.Unlock()
 
 	if _, exists := m.policies[id]; !exists {
+		m.mutex.Unlock()
 		c.JSON(http.StatusNotFound, gin.H{"error": "Policy not found"})
 		return
 	}
 
 	delete(m.policies, id)
+	m.mutex.Unlock()
 
 	m.logger.Info("Policy deleted", zap.String("policy_id", id))
+
+	if m.auditLogger != nil {
+		m.auditLogger.LogConfigChange(userInfoFromContext(c), "DELETE", "policy", id, map[string]interface{}{
+			"source_ip":      c.ClientIP(),
+			"correlation_id": correlationIDFromContext(c),
+		})
+	}
 
 	c.JSON(http.StatusNoContent, nil)
 }
@@ -373,6 +542,12 @@ func (m *Manager) ValidatePolicy(c *gin.Context) {
 
 // DeployPolicy handles POST /api/v1/policies/:id/deploy.
 // Stub: cluster deployment is not yet implemented.
+//
+// IAM-WU-14: when this is un-stubbed and begins mutating cluster state, it MUST
+// emit m.auditLogger.LogConfigChange(userInfoFromContext(c), "DEPLOY", "policy",
+// id, ...) in the success path, like the seven CRUD handlers. No audit call is
+// added now because a 501 stub persists nothing — recording a ConfigurationChange
+// for a no-op would be a misleading event.
 func (m *Manager) DeployPolicy(c *gin.Context) {
 	c.JSON(http.StatusNotImplemented, gin.H{"error": "policy deployment is not yet implemented"})
 }
@@ -437,6 +612,14 @@ func (m *Manager) CreateBundle(c *gin.Context) {
 	m.bundles[newBundle.ID] = &newBundle
 	m.mutex.Unlock()
 
+	if m.auditLogger != nil {
+		m.auditLogger.LogConfigChange(userInfoFromContext(c), "CREATE", "bundle", newBundle.ID, map[string]interface{}{
+			"source_ip":      c.ClientIP(),
+			"bundle_name":    newBundle.Name,
+			"correlation_id": correlationIDFromContext(c),
+		})
+	}
+
 	c.JSON(http.StatusCreated, newBundle)
 }
 
@@ -479,6 +662,14 @@ func (m *Manager) CreateException(c *gin.Context) {
 	m.exceptions[newException.ID] = &newException
 	m.mutex.Unlock()
 
+	if m.auditLogger != nil {
+		m.auditLogger.LogConfigChange(userInfoFromContext(c), "CREATE", "exception", newException.ID, map[string]interface{}{
+			"source_ip":      c.ClientIP(),
+			"policy_id":      newException.PolicyID,
+			"correlation_id": correlationIDFromContext(c),
+		})
+	}
+
 	c.JSON(http.StatusCreated, newException)
 }
 
@@ -493,10 +684,10 @@ func (m *Manager) UpdateException(c *gin.Context) {
 	}
 
 	m.mutex.Lock()
-	defer m.mutex.Unlock()
 
 	existingException, exists := m.exceptions[id]
 	if !exists {
+		m.mutex.Unlock()
 		c.JSON(http.StatusNotFound, gin.H{"error": "Exception not found"})
 		return
 	}
@@ -506,6 +697,15 @@ func (m *Manager) UpdateException(c *gin.Context) {
 	updatedException.UpdatedAt = time.Now()
 
 	m.exceptions[id] = &updatedException
+	m.mutex.Unlock()
+
+	if m.auditLogger != nil {
+		m.auditLogger.LogConfigChange(userInfoFromContext(c), "UPDATE", "exception", id, map[string]interface{}{
+			"source_ip":      c.ClientIP(),
+			"policy_id":      updatedException.PolicyID,
+			"correlation_id": correlationIDFromContext(c),
+		})
+	}
 
 	c.JSON(http.StatusOK, updatedException)
 }
@@ -515,35 +715,102 @@ func (m *Manager) DeleteException(c *gin.Context) {
 	id := c.Param("id")
 
 	m.mutex.Lock()
-	defer m.mutex.Unlock()
 
 	if _, exists := m.exceptions[id]; !exists {
+		m.mutex.Unlock()
 		c.JSON(http.StatusNotFound, gin.H{"error": "Exception not found"})
 		return
 	}
 
 	delete(m.exceptions, id)
+	m.mutex.Unlock()
+
+	if m.auditLogger != nil {
+		m.auditLogger.LogConfigChange(userInfoFromContext(c), "DELETE", "exception", id, map[string]interface{}{
+			"source_ip":      c.ClientIP(),
+			"correlation_id": correlationIDFromContext(c),
+		})
+	}
+
 	c.JSON(http.StatusNoContent, nil)
 }
 
 // Compliance reporting handlers
 
-// ListComplianceReports handles GET /api/v1/compliance/reports.
-// Stub: report generation and storage are not yet implemented.
+// ListComplianceReports handles GET /api/v1/compliance/reports (AUD-WU-19,
+// AU-6/AU-7). It returns an on-demand report aggregated from the local file
+// audit backend, honoring optional query filters (since/until/namespace/
+// decision/policy_id). Reports are not persisted server-side, so "list" returns
+// the single freshly-computed report in a `reports` array — a stable shape the
+// dashboard can iterate without special-casing a singleton. This is a read-only
+// query; no audit ConfigurationChange is emitted for a read (only POST generate
+// records one).
 func (m *Manager) ListComplianceReports(c *gin.Context) {
-	c.JSON(http.StatusNotImplemented, gin.H{"error": "compliance reporting is not yet implemented"})
+	q, err := parseComplianceQuery(c)
+	if err != nil {
+		complianceError(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	report, err := m.buildComplianceReport(q)
+	if err != nil {
+		m.logger.Error("failed to build compliance report", zap.Error(err))
+		complianceError(c, http.StatusInternalServerError, "failed to read audit log for compliance report")
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"reports": []*ComplianceReport{report},
+		"total":   1,
+	})
 }
 
-// GenerateComplianceReport handles POST /api/v1/compliance/reports.
-// Stub: report generation is not yet implemented.
+// GenerateComplianceReport handles POST /api/v1/compliance/reports (AUD-WU-19,
+// AU-6/AU-7). It aggregates the local file audit backend into a ComplianceReport
+// using the optional JSON body filters and returns it (201). Per the IAM-WU-14
+// doc contract, a successful generation emits a ConfigurationChange audit event
+// with verb "GENERATE" attributed to the authenticated principal so the act of
+// producing a compliance artifact is itself auditable (AU-6/AU-12).
 func (m *Manager) GenerateComplianceReport(c *gin.Context) {
-	c.JSON(http.StatusNotImplemented, gin.H{"error": "compliance reporting is not yet implemented"})
+	var req generateReportRequest
+	// A body is optional; an empty/no body means "report over everything".
+	if c.Request.Body != nil && c.Request.ContentLength != 0 {
+		if err := c.ShouldBindJSON(&req); err != nil {
+			complianceError(c, http.StatusBadRequest, err.Error())
+			return
+		}
+	}
+	q, err := req.toQuery()
+	if err != nil {
+		complianceError(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	report, err := m.buildComplianceReport(q)
+	if err != nil {
+		m.logger.Error("failed to generate compliance report", zap.Error(err))
+		complianceError(c, http.StatusInternalServerError, "failed to read audit log for compliance report")
+		return
+	}
+
+	if m.auditLogger != nil {
+		m.auditLogger.LogConfigChange(userInfoFromContext(c), "GENERATE", "compliance_report", report.ID, map[string]interface{}{
+			"source_ip":      c.ClientIP(),
+			"framework":      report.Framework,
+			"total_checks":   report.Summary.TotalChecks,
+			"failed_checks":  report.Summary.FailedChecks,
+			"correlation_id": correlationIDFromContext(c),
+		})
+	}
+
+	c.JSON(http.StatusCreated, report)
 }
 
-// ListComplianceFrameworks handles GET /api/v1/compliance/frameworks.
-// Stub: framework catalog is not yet sourced from configuration or a registry.
+// ListComplianceFrameworks handles GET /api/v1/compliance/frameworks
+// (AUD-WU-19). It returns the supported control-framework catalog (CIS, NIST
+// SP 800-53). Read-only; no audit event.
 func (m *Manager) ListComplianceFrameworks(c *gin.Context) {
-	c.JSON(http.StatusNotImplemented, gin.H{"error": "compliance framework catalog is not yet implemented"})
+	c.JSON(http.StatusOK, gin.H{
+		"frameworks": supportedFrameworks,
+		"total":      len(supportedFrameworks),
+	})
 }
 
 // validatePolicy validates a policy configuration. In addition to the field

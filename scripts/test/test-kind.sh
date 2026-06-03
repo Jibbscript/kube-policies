@@ -6,7 +6,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 KIND_CLUSTER_NAME="${KIND_CLUSTER_NAME:-kube-policies-test}"
-KUBERNETES_VERSION="${KUBERNETES_VERSION:-v1.28.0}"
+KUBERNETES_VERSION="${KUBERNETES_VERSION:-v1.28.15}"
 REGISTRY_NAME="${REGISTRY_NAME:-kind-registry}"
 REGISTRY_PORT="${REGISTRY_PORT:-5001}"
 
@@ -53,52 +53,65 @@ run_tests() {
     # Set kubeconfig for tests
     export KUBECONFIG="$(kind get kubeconfig-path --name="${KIND_CLUSTER_NAME}")"
 
-    # Run unit tests
-    log "Running unit tests..."
-    go test -v ./internal/... ./pkg/... -race -coverprofile=coverage-unit.out
+    # Unit + integration tests are SKIPPED here by default (E2E_ONLY=true). They
+    # have dedicated CI jobs (`unit-tests`, `integration-tests`) — the latter runs
+    # the integration suite under envtest — so re-running them on the cluster is
+    # redundant. They are also actively WRONG against this deploy: the chart is
+    # installed with admissionWebhook.disableDefaultPolicies=true (so the e2e
+    # suite's own policies fire in isolation), which makes the bundled integration
+    # suite's "privileged/root pod is denied" assertions fail (no default policy is
+    # loaded to deny them — expected:false got:true). The cluster e2e jobs run only
+    # the e2e suite below. Set E2E_ONLY=false to also run unit+integration locally
+    # (needs setup-envtest; the live-webhook admission assertions require default
+    # policies to be loaded).
+    if [ "${E2E_ONLY:-true}" != "true" ]; then
+        # Run unit tests
+        log "Running unit tests..."
+        go test -v ./internal/... ./pkg/... -race -coverprofile=coverage-unit.out
 
-    # Run integration tests
-    log "Running integration tests..."
-    # envtest needs etcd/kube-apiserver binaries; mirror the test-integration target.
-    # Without KUBEBUILDER_ASSETS, envtest falls back to /usr/local/kubebuilder/bin and
-    # produces a confusing "fork/exec ... no such file or directory" mid-suite failure.
-    local setup_envtest_bin
-    setup_envtest_bin="$(command -v setup-envtest || true)"
-    if [ -z "${setup_envtest_bin}" ] && [ -x "$(go env GOPATH)/bin/setup-envtest" ]; then
-        setup_envtest_bin="$(go env GOPATH)/bin/setup-envtest"
-    fi
-    if [ -z "${setup_envtest_bin}" ]; then
-        error "setup-envtest not found; run 'make setup' first"
-        exit 1
-    fi
-
-    # admission_webhook_test.go probes localhost:8443 (webhookAddr const) and
-    # skips its suite if unreachable. The helm-deployed webhook is a NodePort
-    # inside kind; expose it on the host via kubectl port-forward for the
-    # duration of the integration suite. Without this, the suite is skipped
-    # and admission coverage falls out of test-kind. Mirrors the pattern
-    # already used for policy-manager 8080 below in test_scenarios().
-    log "Setting up port-forward for admission webhook (:8443)..."
-    kubectl port-forward -n kube-policies-system svc/kube-policies-admission-webhook 8443:8443 \
-        > /tmp/webhook-pf.log 2>&1 &
-    local WEBHOOK_PF_PID=$!
-    # Wait until the port-forward is actually answering TLS handshakes, not
-    # just listening — a bare TCP probe succeeds before kubectl is ready to
-    # proxy bytes, which would race the test's probeWebhook() check.
-    local i
-    for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
-        if curl -sk -o /dev/null -m 1 https://localhost:8443/livez 2>/dev/null; then
-            log "Webhook reachable on localhost:8443"
-            break
+        # Run integration tests
+        log "Running integration tests..."
+        # envtest needs etcd/kube-apiserver binaries; mirror the test-integration target.
+        # Without KUBEBUILDER_ASSETS, envtest falls back to /usr/local/kubebuilder/bin and
+        # produces a confusing "fork/exec ... no such file or directory" mid-suite failure.
+        local setup_envtest_bin
+        setup_envtest_bin="$(command -v setup-envtest || true)"
+        if [ -z "${setup_envtest_bin}" ] && [ -x "$(go env GOPATH)/bin/setup-envtest" ]; then
+            setup_envtest_bin="$(go env GOPATH)/bin/setup-envtest"
         fi
-        sleep 1
-    done
-    # The webhook port-forward must be torn down even when go test fails
-    # under set -e. Append to the existing exit trap from main() rather than
-    # racing it with a RETURN trap.
-    KUBEBUILDER_ASSETS="$("${setup_envtest_bin}" use 1.28.0 --bin-dir /tmp/envtest-bins -p path)" \
-        go test -v ./test/integration/... -race -coverprofile=coverage-integration.out
-    kill ${WEBHOOK_PF_PID} 2>/dev/null || true
+        if [ -z "${setup_envtest_bin}" ]; then
+            error "setup-envtest not found; run 'make setup' first"
+            exit 1
+        fi
+
+        # admission_webhook_test.go probes localhost:8443 (webhookAddr const) and
+        # skips its suite if unreachable. The helm-deployed webhook is a NodePort
+        # inside kind; expose it on the host via kubectl port-forward for the
+        # duration of the integration suite. Without this, the suite is skipped
+        # and admission coverage falls out of test-kind. Mirrors the pattern
+        # already used for policy-manager 8080 below in test_scenarios().
+        log "Setting up port-forward for admission webhook (:8443)..."
+        kubectl port-forward -n kube-policies-system svc/kube-policies-admission-webhook 8443:8443 \
+            > /tmp/webhook-pf.log 2>&1 &
+        local WEBHOOK_PF_PID=$!
+        # Wait until the port-forward is actually answering TLS handshakes, not
+        # just listening — a bare TCP probe succeeds before kubectl is ready to
+        # proxy bytes, which would race the test's probeWebhook() check.
+        local i
+        for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
+            if curl -sk -o /dev/null -m 1 https://localhost:8443/livez 2>/dev/null; then
+                log "Webhook reachable on localhost:8443"
+                break
+            fi
+            sleep 1
+        done
+        # The webhook port-forward must be torn down even when go test fails
+        # under set -e. Append to the existing exit trap from main() rather than
+        # racing it with a RETURN trap.
+        KUBEBUILDER_ASSETS="$("${setup_envtest_bin}" use 1.28.0 --bin-dir /tmp/envtest-bins -p path)" \
+            go test -v ./test/integration/... -race -coverprofile=coverage-integration.out
+        kill ${WEBHOOK_PF_PID} 2>/dev/null || true
+    fi
 
     # Run E2E tests
     log "Running E2E tests..."
@@ -191,7 +204,11 @@ spec:
     runAsNonRoot: true
   containers:
   - name: test-container
-    image: nginx:1.20
+    # pause (not nginx): this pod must reach Ready as a NON-root user
+    # (runAsNonRoot/runAsUser 1000), but stock nginx binds privileged port 80 and
+    # crash-loops under a non-root UID. pause idles, needs no port, runs as any
+    # UID, and is pulled from registry.k8s.io (not Docker-Hub-rate-limited).
+    image: registry.k8s.io/pause:3.9
     securityContext:
       runAsUser: 1000
       runAsNonRoot: true
@@ -211,27 +228,31 @@ EOF
     # Test 3: Monitoring endpoints
     log "Test 3: Testing monitoring endpoints"
 
-    # Port forward to access metrics
-    kubectl port-forward -n kube-policies-system svc/kube-policies-policy-manager 8080:8080 &
+    # Port forward to the metrics port (9091, plain HTTP). The :8080 API now
+    # serves TLS 1.3 (CRY-WU-05) and never exposed /metrics; metrics and
+    # /healthz live on :9091 (NewMetricsRouter).
+    kubectl port-forward -n kube-policies-system svc/kube-policies-policy-manager 9091:9091 &
     PORT_FORWARD_PID=$!
     sleep 5
+    # Tear the port-forward down even if a check below returns early.
+    trap 'kill $PORT_FORWARD_PID 2>/dev/null || true' RETURN
 
-    # Test metrics endpoint
-    if curl -s http://localhost:8080/metrics | grep -q "kube_policies"; then
+    # Test metrics endpoint — hard-fail (return non-zero) so a broken endpoint
+    # cannot produce a false PASS.
+    if curl -s http://localhost:9091/metrics | grep -q "kube_policies"; then
         success "Metrics endpoint is working"
     else
         error "Metrics endpoint is not working"
+        return 1
     fi
 
-    # Test health endpoint
-    if curl -s http://localhost:8080/healthz | grep -q "ok"; then
+    # Test health endpoint — the metrics router returns plaintext "OK".
+    if curl -s http://localhost:9091/healthz | grep -q "OK"; then
         success "Health endpoint is working"
     else
         error "Health endpoint is not working"
+        return 1
     fi
-
-    # Clean up port forward
-    kill $PORT_FORWARD_PID 2>/dev/null || true
 
     success "All Kind-specific tests passed"
 }
@@ -280,6 +301,16 @@ main() {
     install_cert_manager
     deploy_kube_policies
     wait_for_deployment
+
+    # DEPLOY_ONLY (DAST): the DAST scan job stands up the stack and then scans it
+    # (port-forward + ZAP) — it does not run the in-cluster go test suite. Stop
+    # here with the stack up and Ready; the EXIT trap leaves the cluster running
+    # when CLEANUP=false so the caller can scan it.
+    if [ "${DEPLOY_ONLY:-false}" = "true" ]; then
+        success "DEPLOY_ONLY=true — stack is up and Ready; skipping the in-cluster test suite"
+        return 0
+    fi
+
     run_tests
     test_scenarios
     collect_diagnostics

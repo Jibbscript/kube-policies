@@ -1,0 +1,19 @@
+{{- /* NET-WU-01: default-deny baseline. Selects EVERY pod in the namespace
+       (podSelector:{}) and declares both policyTypes with no allow rules, so all
+       ingress and egress is denied unless an explicit allow policy permits it.
+       Gated on networkPolicy.enabled AND networkPolicy.defaultDeny. */ -}}
+{{- if and .Values.networkPolicy.enabled .Values.networkPolicy.defaultDeny }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "kube-policies.fullname" . }}-default-deny
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kube-policies.labels" . | nindent 4 }}
+    app.kubernetes.io/component: network-policy
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+    - Egress
+{{- end }}

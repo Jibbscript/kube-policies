@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -14,10 +15,175 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
+	authenticationv1 "k8s.io/api/authentication/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/kubernetes/fake"
+	clienttesting "k8s.io/client-go/testing"
 
 	"github.com/Jibbscript/kube-policies/internal/audit"
 	"github.com/Jibbscript/kube-policies/internal/policy"
 )
+
+// setReviewerReactor installs a TokenReview authenticator on m whose fake
+// "create tokenreviews" reactor is driven by react, exercising the IAM-WU-11
+// validation path with no real apiserver. expectedUsername "" disables subject
+// pinning; pass the webhook SA name to exercise the subject-pin path.
+func setReviewerReactor(m *Manager, audience string, react func() (runtime.Object, error)) {
+	setReviewerReactorWithSubject(m, audience, "", react)
+}
+
+func setReviewerReactorWithSubject(m *Manager, audience, expectedUsername string, react func() (runtime.Object, error)) {
+	cs := fake.NewClientset()
+	cs.PrependReactor("create", "tokenreviews", func(clienttesting.Action) (bool, runtime.Object, error) {
+		obj, err := react()
+		return true, obj, err
+	})
+	m.SetInternalTokenReviewer(NewInternalTokenAuthenticator(cs.AuthenticationV1().TokenReviews(), audience, expectedUsername, zap.NewNop()))
+}
+
+// reviewAuthenticated returns a reactor result for an authenticated token bound
+// to the given audiences.
+func reviewAuthenticated(audiences ...string) func() (runtime.Object, error) {
+	return func() (runtime.Object, error) {
+		return &authenticationv1.TokenReview{
+			Status: authenticationv1.TokenReviewStatus{
+				Authenticated: true,
+				Audiences:     audiences,
+				User:          authenticationv1.UserInfo{Username: "system:serviceaccount:kube-policies:admission-webhook"},
+			},
+		}, nil
+	}
+}
+
+// --- IngestInternal TokenReview (IAM-WU-11) tests ---
+
+func TestIngestInternal_TokenReview_Accepted_204(t *testing.T) {
+	m := newTestManagerTokenized(t, "") // no static token configured
+	setReviewerReactor(m, "policy-manager", reviewAuthenticated("policy-manager"))
+
+	body, _ := json.Marshal(audit.PublicEvent{Decision: "ALLOW", Kind: "Pod"})
+	w := doIngestRequest(t, m, "valid-projected-token", body)
+	require.Equal(t, http.StatusNoContent, w.Code)
+
+	recent := m.recentRing.Recent(1)
+	require.Len(t, recent, 1)
+	assert.Equal(t, "ALLOW", recent[0].Decision)
+}
+
+func TestIngestInternal_TokenReview_GenericSA_401(t *testing.T) {
+	m := newTestManagerTokenized(t, "") // no static fallback
+	// Authenticated but wrong audience: a generic SA token must NOT be admitted.
+	setReviewerReactor(m, "policy-manager", reviewAuthenticated("https://kubernetes.default.svc"))
+
+	body, _ := json.Marshal(audit.PublicEvent{Decision: "ALLOW", Kind: "Pod"})
+	w := doIngestRequest(t, m, "generic-sa-token", body)
+	assert.Equal(t, http.StatusUnauthorized, w.Code)
+}
+
+// TestIngestInternal_TokenReview_APIError_401_FailClosed proves the fail-closed
+// guarantee: when the TokenReview API errors AND a static token is also
+// configured, the request is still rejected — there is NO fall-through to static
+// on an API error.
+func TestIngestInternal_TokenReview_APIError_401_FailClosed(t *testing.T) {
+	m := newTestManagerTokenized(t, "static-fallback-token") // static IS configured
+	setReviewerReactor(m, "policy-manager", func() (runtime.Object, error) {
+		return nil, errors.New("apiserver unreachable")
+	})
+
+	// Present the static token, which WOULD pass the static path if we fell
+	// through. We must still get 401.
+	body, _ := json.Marshal(audit.PublicEvent{Decision: "ALLOW", Kind: "Pod"})
+	w := doIngestRequest(t, m, "static-fallback-token", body)
+	assert.Equal(t, http.StatusUnauthorized, w.Code,
+		"a TokenReview API error must fail closed and never fall through to the static path")
+}
+
+// TestIngestInternal_StaticFallback_WhenNoReviewer_204 proves backward
+// compatibility: with no reviewer set, the static path behaves exactly as before.
+func TestIngestInternal_StaticFallback_WhenNoReviewer_204(t *testing.T) {
+	m := newTestManagerTokenized(t, "static-token") // no reviewer installed
+	body, _ := json.Marshal(audit.PublicEvent{Decision: "DENY", Kind: "Pod"})
+	w := doIngestRequest(t, m, "static-token", body)
+	require.Equal(t, http.StatusNoContent, w.Code)
+}
+
+// TestIngestInternal_TokenReviewPrecedenceOverStatic proves a valid
+// audience-bound TokenReview verdict admits the request even when the presented
+// token is NOT the configured static token — the TokenReview path takes
+// precedence and the static comparison is never reached.
+func TestIngestInternal_TokenReviewPrecedenceOverStatic(t *testing.T) {
+	m := newTestManagerTokenized(t, "some-other-static-token")
+	setReviewerReactor(m, "policy-manager", reviewAuthenticated("policy-manager"))
+
+	body, _ := json.Marshal(audit.PublicEvent{Decision: "ALLOW", Kind: "Pod"})
+	// Token is neither empty nor the static token, but TokenReview accepts it.
+	w := doIngestRequest(t, m, "projected-token-not-matching-static", body)
+	require.Equal(t, http.StatusNoContent, w.Code)
+}
+
+// TestIngestInternal_TokenReviewCleanNegative_FallsToStatic proves a CLEAN
+// negative verdict (err==nil, ok==false) falls through to the static path, which
+// then accepts the correct static token.
+func TestIngestInternal_TokenReviewCleanNegative_FallsToStatic(t *testing.T) {
+	m := newTestManagerTokenized(t, "static-token")
+	// Clean negative: not authenticated. No API error -> may fall through.
+	setReviewerReactor(m, "policy-manager", func() (runtime.Object, error) {
+		return &authenticationv1.TokenReview{
+			Status: authenticationv1.TokenReviewStatus{Authenticated: false},
+		}, nil
+	})
+
+	body, _ := json.Marshal(audit.PublicEvent{Decision: "ALLOW", Kind: "Pod"})
+	w := doIngestRequest(t, m, "static-token", body)
+	require.Equal(t, http.StatusNoContent, w.Code,
+		"a clean negative TokenReview verdict should fall through to a valid static token")
+}
+
+// TestIngestInternal_EmptyBearer_ShortCircuitsBeforeReviewer proves (FIX 9a)
+// that an empty Authorization header returns 401 BEFORE the TokenReview reactor
+// is ever invoked — the empty-bearer short-circuit in IngestInternal must
+// precede the reviewer call.
+func TestIngestInternal_EmptyBearer_ShortCircuitsBeforeReviewer(t *testing.T) {
+	reactorCalled := false
+	m := newTestManagerTokenized(t, "static-token")
+	cs := fake.NewClientset()
+	cs.PrependReactor("create", "tokenreviews", func(clienttesting.Action) (bool, runtime.Object, error) {
+		reactorCalled = true
+		return true, &authenticationv1.TokenReview{
+			Status: authenticationv1.TokenReviewStatus{Authenticated: true, Audiences: []string{"policy-manager"}},
+		}, nil
+	})
+	m.SetInternalTokenReviewer(NewInternalTokenAuthenticator(cs.AuthenticationV1().TokenReviews(), "policy-manager", "", zap.NewNop()))
+
+	body, _ := json.Marshal(audit.PublicEvent{Decision: "ALLOW", Kind: "Pod"})
+	w := doIngestRequest(t, m, "", body) // empty Authorization header
+	assert.Equal(t, http.StatusUnauthorized, w.Code)
+	assert.False(t, reactorCalled, "the TokenReview reactor must NOT be invoked when the Authorization header is empty")
+}
+
+// TestIngestInternal_SubjectPin_WrongSA_401 proves (FIX 3) that a valid
+// audience-bound token from the WRONG ServiceAccount is rejected by the handler
+// when subject pinning is configured.
+func TestIngestInternal_SubjectPin_WrongSA_401(t *testing.T) {
+	m := newTestManagerTokenized(t, "")
+	setReviewerReactorWithSubject(m, "policy-manager", "system:serviceaccount:kube-policies:admission-webhook",
+		func() (runtime.Object, error) {
+			return &authenticationv1.TokenReview{
+				Status: authenticationv1.TokenReviewStatus{
+					Authenticated: true,
+					Audiences:     []string{"policy-manager"},
+					// Different SA — correct audience but wrong subject.
+					User: authenticationv1.UserInfo{Username: "system:serviceaccount:default:other-sa"},
+				},
+			}, nil
+		})
+
+	body, _ := json.Marshal(audit.PublicEvent{Decision: "ALLOW", Kind: "Pod"})
+	w := doIngestRequest(t, m, "other-sa-projected-token", body)
+	assert.Equal(t, http.StatusUnauthorized, w.Code,
+		"correct audience but wrong subject must be rejected when subject pinning is enabled")
+}
 
 // init() for gin.TestMode is already declared in test_handler_test.go.
 

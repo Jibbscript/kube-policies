@@ -1,0 +1,21 @@
+{{- /*
+LimitRange for the kube-policies namespace (RES-WU-17, DoS protection).
+
+OPT-IN (limitRange.enabled defaults false): a LimitRange with a default request
+larger than a pod's actual usage can block scheduling, so operators enable it
+explicitly. When enabled, it applies per-container default requests/limits and
+min/max bounds so a pod created in the release namespace without resource
+constraints cannot consume unbounded CPU/memory.
+*/ -}}
+{{- if .Values.limitRange.enabled }}
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: {{ include "kube-policies.fullname" . }}-limits
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kube-policies.labels" . | nindent 4 }}
+spec:
+  limits:
+    {{- toYaml .Values.limitRange.limits | nindent 4 }}
+{{- end }}

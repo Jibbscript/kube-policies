@@ -1,0 +1,68 @@
+# trivy.yaml — Trivy configuration for kube-policies repository.
+#
+# Controls: VUL-WU-02 | NIST SP 800-53 RA-5 (Vulnerability Monitoring &
+# Scanning), SI-2 (Flaw Remediation) | NIST SP 800-190 §4.4 (Image
+# Vulnerability Management).
+#
+# This file is consumed by `trivy config` / `trivy fs` for misconfiguration and
+# vulnerability scanning of Kubernetes manifests, Helm charts, and
+# Dockerfiles. The CI orchestrator wires the scan step; do NOT edit ci.yml to
+# reference this file — the orchestrator does that.
+
+# ---------------------------------------------------------------------------
+# Global settings
+# ---------------------------------------------------------------------------
+severity:
+  - CRITICAL
+  - HIGH
+
+exit-code: 1
+
+ignorefile: .trivyignore
+
+# Exit 0 when the only findings are unfixed (upstream has no patch yet) so that
+# known-unfixable issues tracked in govulncheck do not stall the gate.
+ignore-unfixed: true
+
+# ---------------------------------------------------------------------------
+# Scan targets and scanners
+# ---------------------------------------------------------------------------
+scan:
+  scanners:
+    - misconfig
+    - vuln
+
+# Directories evaluated by `trivy fs` / `trivy config` in the security-scan
+# job. Listing them here allows local invocation (`trivy fs .`) to pick up the
+# same scope without extra flags.
+target:
+  - deployments/
+  - charts/
+  - build/docker/
+
+# ---------------------------------------------------------------------------
+# Misconfiguration (config) scanner options
+# ---------------------------------------------------------------------------
+misconfiguration:
+  # Include test/example resources in the misconfig scan so Helm chart
+  # defaults and deployment examples are evaluated alongside production
+  # manifests.
+  include-non-failures: false
+
+  # Helm-specific: render charts before scanning so templated values are
+  # evaluated, not raw template syntax.
+  helm:
+    set: []
+    values: []
+
+  # Terraform scanner off — this repo has no HCL sources.
+  tf-exclude-downloaded-modules: true
+
+# ---------------------------------------------------------------------------
+# Output
+# ---------------------------------------------------------------------------
+format: table
+
+# A second invocation with `--format sarif --output trivy-results.sarif` is
+# wired by the CI orchestrator for GitHub Security tab upload (exit-code 0 so
+# SARIF upload always succeeds regardless of gate result).

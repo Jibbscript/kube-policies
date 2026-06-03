@@ -1,0 +1,32 @@
+# .trivyignore — suppressions for the GATING Trivy scans (CFG-WU-11, VUL-WU-02).
+#
+# The CI Trivy steps run with --severity CRITICAL,HIGH --exit-code 1
+# --ignore-unfixed=true --ignorefile .trivyignore, so a CRITICAL/HIGH finding
+# that has a fix available and is NOT listed below FAILS the build (the
+# `security-scan` job "Trivy GATE" steps in ci.yml, mirrored in release.yml). A separate
+# SARIF-upload step runs with --exit-code 0 so the GitHub Security tab still
+# populates with the full finding set regardless of suppressions here.
+#
+# RULES FOR ADDING AN ENTRY (NIST RA-5, SI-2, SP 800-190 §4.4 — every
+# suppression must be justified, dated, and time-boxed; an undated/forever
+# suppression is a silent risk acceptance that violates VUL-WU-02 policy):
+#
+#   CVE-XXXX-NNNNN   # OWNER: <name/team> | JUSTIFICATION: <why not exploitable
+#                    # / why accepted> | ADDED: YYYY-MM-DD | EXPIRES: YYYY-MM-DD
+#                    # | TRACKING: <issue/POA&M id>
+#
+# An expired entry MUST be re-justified or removed; the expiry date is a
+# forcing function for periodic review, not a permanent exemption. Trivy itself
+# does not enforce EXPIRES — review it during the monthly vuln-triage cadence.
+#
+# Example (commented out — there are NO active suppressions today):
+#
+# CVE-2024-00000   # OWNER: platform-sec | JUSTIFICATION: not reachable — the
+#                  # affected codepath (foo.Bar) is never invoked by either
+#                  # shipped binary | ADDED: 2026-06-01 | EXPIRES: 2026-09-01
+#                  # | TRACKING: POAM-123
+#
+# --- ACTIVE SUPPRESSIONS (none) ---
+# Intentionally empty: a clean build must pass the gate with zero suppressions.
+# A seeded HIGH/CRITICAL CVE (e.g. an intentionally vulnerable dependency) will
+# therefore fail the security-scan job until it is fixed or justified above.

@@ -1,0 +1,72 @@
+# promtool unit tests for the kube-policies-availability group (RES-WU-10):
+# component-down and high-error-rate alerts on kube_policies_* and up{} series.
+rule_files:
+  - ../../charts/kube-policies/files/alerts/availability.yaml
+
+evaluation_interval: 1m
+
+tests:
+  # KubePoliciesDown: webhook scrape target down (up==0) for >1m.
+  - interval: 1m
+    input_series:
+      - series: 'up{job="kube-policies-admission-webhook"}'
+        values: '0x10'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: KubePoliciesDown
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              component: admission-webhook
+              job: kube-policies-admission-webhook
+            exp_annotations:
+              description: "The admission webhook (job kube-policies-admission-webhook) has been unscrapeable (up==0) for >1m. Depending on the ValidatingWebhookConfiguration failurePolicy this blocks or bypasses admission cluster-wide."
+              runbook_url: "https://github.com/Jibbscript/kube-policies/blob/main/docs/security/runbooks/webhook-outage.md"
+              summary: "kube-policies admission webhook is down"
+
+  # KubePoliciesPolicyManagerDown: manager scrape target down for >1m.
+  - interval: 1m
+    input_series:
+      - series: 'up{job="kube-policies-policy-manager"}'
+        values: '0x10'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: KubePoliciesPolicyManagerDown
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              component: policy-manager
+              job: kube-policies-policy-manager
+            exp_annotations:
+              description: "The policy-manager (job kube-policies-policy-manager) has been unscrapeable (up==0) for >1m. Policy/PolicyException reconciliation and the policy API are unavailable; the webhook keeps serving its last-loaded bundle."
+              runbook_url: "https://github.com/Jibbscript/kube-policies/blob/main/docs/security/runbooks/webhook-outage.md"
+              summary: "kube-policies policy-manager is down"
+
+  # KubePoliciesHighErrorRate: > 5% of admission requests erroring for >2m.
+  # 10 error/min + 100 allowed/min => ratio ~0.09 > 0.05.
+  - interval: 1m
+    input_series:
+      - series: 'kube_policies_admission_requests_total{operation="validate",status="error",reason="evaluation_error"}'
+        values: '0+10x10'
+      - series: 'kube_policies_admission_requests_total{operation="validate",status="allowed",reason="ok"}'
+        values: '0+100x10'
+    alert_rule_test:
+      - eval_time: 8m
+        alertname: KubePoliciesHighErrorRate
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+            exp_annotations:
+              description: "More than 5% of admission requests are erroring over the last 5m (9.091%). Decode/nil-request/evaluation/patch-marshal errors degrade enforcement; on the mutate path errors fail open."
+              runbook_url: "https://github.com/Jibbscript/kube-policies/blob/main/docs/security/runbooks/high-error-rate.md"
+              summary: "kube-policies high admission error rate"
+
+  # Healthy control: no errors => HighErrorRate must not fire.
+  - interval: 1m
+    input_series:
+      - series: 'kube_policies_admission_requests_total{operation="validate",status="allowed",reason="ok"}'
+        values: '0+100x10'
+    alert_rule_test:
+      - eval_time: 8m
+        alertname: KubePoliciesHighErrorRate
+        exp_alerts: []

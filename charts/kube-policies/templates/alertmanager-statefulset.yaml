@@ -1,0 +1,175 @@
+{{- /*
+IRM-WU-22 (NIST IR-6, CP-10, SI-4(5)): HA Alertmanager so paging is not lost
+during a node failure. Runs >=2 replicas in gossip-cluster mode and replaces the
+standalone manifest's emptyDir with a per-replica PersistentVolumeClaim so
+silences and the notification log survive restarts. Opt-in: most operators point
+the chart's routing config (alertmanager-config.yaml) at an existing HA
+Alertmanager and leave this OFF.
+
+Restricted-PSS: nonroot 65534, drop ALL caps, no privilege escalation,
+readOnlyRootFilesystem (writable state on the PVC + /tmp emptyDir), seccomp
+RuntimeDefault.
+*/ -}}
+{{- if .Values.monitoring.alertmanager.ha.enabled }}
+{{- if not .Values.monitoring.alertmanager.config.enabled }}
+{{- fail "monitoring.alertmanager.ha.enabled=true requires monitoring.alertmanager.config.enabled=true (the HA StatefulSet mounts the chart-rendered Alertmanager config Secret). Enable the config or point Prometheus at an external Alertmanager." }}
+{{- end }}
+{{- $ha := .Values.monitoring.alertmanager.ha }}
+{{- $fullname := include "kube-policies.fullname" . }}
+{{- $headless := printf "%s-alertmanager-headless" $fullname }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $headless }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kube-policies.labels" . | nindent 4 }}
+    app.kubernetes.io/component: alertmanager
+spec:
+  clusterIP: None
+  publishNotReadyAddresses: true
+  selector:
+    {{- include "kube-policies.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: alertmanager
+  ports:
+    - port: 9093
+      targetPort: web
+      name: web
+    - port: 9094
+      targetPort: cluster
+      name: cluster
+    - port: 9094
+      targetPort: cluster
+      protocol: UDP
+      name: cluster-udp
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $fullname }}-alertmanager
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kube-policies.labels" . | nindent 4 }}
+    app.kubernetes.io/component: alertmanager
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "kube-policies.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: alertmanager
+  ports:
+    - port: 9093
+      targetPort: web
+      name: web
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ $fullname }}-alertmanager
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kube-policies.labels" . | nindent 4 }}
+    app.kubernetes.io/component: alertmanager
+spec:
+  serviceName: {{ $headless }}
+  replicas: {{ $ha.replicas }}
+  podManagementPolicy: Parallel
+  selector:
+    matchLabels:
+      {{- include "kube-policies.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: alertmanager
+  template:
+    metadata:
+      labels:
+        {{- include "kube-policies.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: alertmanager
+      annotations:
+        # Roll the pods when the config Secret changes.
+        checksum/config: {{ include (print $.Template.BasePath "/alertmanager-config.yaml") . | sha256sum }}
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        runAsGroup: 65534
+        fsGroup: 65534
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: alertmanager
+          image: "{{ $ha.image.repository }}:{{ $ha.image.tag }}"
+          imagePullPolicy: {{ $ha.image.pullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 65534
+            runAsGroup: 65534
+            capabilities:
+              drop:
+                - ALL
+            seccompProfile:
+              type: RuntimeDefault
+          args:
+            - '--config.file=/etc/alertmanager/alertmanager.yml'
+            - '--storage.path=/alertmanager'
+            - '--cluster.listen-address=0.0.0.0:9094'
+            {{- range $i := until (int $ha.replicas) }}
+            - '--cluster.peer={{ $fullname }}-alertmanager-{{ $i }}.{{ $headless }}.{{ $.Release.Namespace }}.svc:9094'
+            {{- end }}
+            - '--log.level=info'
+          ports:
+            - containerPort: 9093
+              name: web
+            - containerPort: 9094
+              name: cluster
+          volumeMounts:
+            - name: config-volume
+              mountPath: /etc/alertmanager
+              readOnly: true
+            {{- if .Values.monitoring.alertmanager.config.existingSecret }}
+            - name: receiver-secrets
+              mountPath: /etc/alertmanager/secrets
+              readOnly: true
+            {{- end }}
+            - name: storage
+              mountPath: /alertmanager
+            - name: tmp
+              mountPath: /tmp
+          resources:
+            {{- toYaml $ha.resources | nindent 12 }}
+          livenessProbe:
+            httpGet:
+              path: /-/healthy
+              port: web
+            initialDelaySeconds: 30
+            timeoutSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /-/ready
+              port: web
+            initialDelaySeconds: 15
+            timeoutSeconds: 10
+      volumes:
+        - name: config-volume
+          secret:
+            secretName: {{ $fullname }}-alertmanager-config
+        {{- if .Values.monitoring.alertmanager.config.existingSecret }}
+        - name: receiver-secrets
+          secret:
+            secretName: {{ .Values.monitoring.alertmanager.config.existingSecret }}
+        {{- end }}
+        - name: tmp
+          emptyDir: {}
+  volumeClaimTemplates:
+    - metadata:
+        name: storage
+      spec:
+        accessModes:
+          - ReadWriteOnce
+        {{- if $ha.persistence.storageClass }}
+        storageClassName: {{ $ha.persistence.storageClass | quote }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ $ha.persistence.size | quote }}
+{{- end }}

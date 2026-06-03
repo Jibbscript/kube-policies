@@ -1,0 +1,33 @@
+# yamllint configuration for `ct lint` (helm/chart-testing).
+# Referenced from .github/ct.yaml via `lint-conf`. Without it, ct v3.x errors:
+# "failed loading configuration: 'lintconf.yaml' neither specified nor found".
+extends: default
+# Only the hand-authored chart metadata/values should be yamllinted. Helm
+# templates are Go-template sources (not valid YAML), the resolved subchart
+# .tgz under charts/ are upstream, and crds/ are generated — exclude all three.
+ignore: |
+  charts/kube-policies/templates/
+  charts/kube-policies/charts/
+  charts/kube-policies/crds/
+rules:
+  line-length:
+    max: 160
+    level: warning
+  braces:
+    forbid: false
+    min-spaces-inside: 0
+    max-spaces-inside: 1
+  brackets:
+    forbid: false
+    min-spaces-inside: 0
+    max-spaces-inside: 1
+  comments:
+    min-spaces-from-content: 1
+  comments-indentation: disable
+  document-start: disable
+  indentation:
+    spaces: consistent
+    indent-sequences: whatever
+  truthy:
+    allowed-values: ['true', 'false', 'on', 'off', 'yes', 'no']
+    check-keys: false

@@ -1,0 +1,23 @@
+{{- /*
+IRM-WU-23 (NIST SI-4, SI-4(2), SI-4(4), SC-7): opt-in Helm wiring for the Falco
+runtime-detection ruleset. When runtimeDetection.enabled=true the chart ships the
+kube-policies Falco rules as a ConfigMap that an existing Falco DaemonSet can
+mount/load (Falco itself is deployed separately — see docs/security/runtime-
+detection.md). The rule content is the single-source file
+charts/kube-policies/files/falco/kube-policies-rules.yaml (kept in sync with the
+canonical monitoring/falco/kube-policies-rules.yaml). Findings forward to the SIEM
+via falcosidekick or the audit forwarder. Default OFF.
+*/ -}}
+{{- if .Values.runtimeDetection.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "kube-policies.fullname" . }}-falco-rules
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kube-policies.labels" . | nindent 4 }}
+    app.kubernetes.io/component: runtime-detection
+data:
+  kube-policies-rules.yaml: |
+{{ .Files.Get "files/falco/kube-policies-rules.yaml" | indent 4 }}
+{{- end }}

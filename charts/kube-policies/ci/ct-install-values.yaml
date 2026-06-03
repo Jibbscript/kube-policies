@@ -1,0 +1,42 @@
+# CI-only values consumed by `ct install` (the helm-tests job in ci.yml).
+#
+# `ct install` deploys the chart to a fresh Kind cluster with `helm install
+# --wait`, so every workload must reach Ready. The chart's DEFAULT images
+# (docker.io/kube-policies/*:1.0.0) are NOT published, so on default values the
+# pods sit in ImagePullBackOff until the wait times out. The helm-tests job
+# therefore builds the admission-webhook + policy-manager images locally and
+# `kind load`s them into the chart-testing cluster under the :citest tag; these
+# overrides point the chart at those node-local images:
+#   registry: ""        -> the image helper renders just "<repository>:<tag>"
+#   pullPolicy: Never    -> kubelet uses the loaded image, never reaches a registry
+#
+# The prometheus/grafana monitoring subcharts are disabled: helm-tests validates
+# that kube-policies' OWN workloads install and reach Ready, not the upstream
+# monitoring stack, whose large images + StatefulSet would otherwise exhaust the
+# `ct install` wait budget on a single-node Kind runner.
+admissionWebhook:
+  image:
+    registry: ""
+    repository: kube-policies/admission-webhook
+    tag: citest
+    pullPolicy: Never
+
+policyManager:
+  image:
+    registry: ""
+    repository: kube-policies/policy-manager
+    tag: citest
+    pullPolicy: Never
+
+# Disable kube-policies' own monitoring CRs (PrometheusRule/ServiceMonitor) — the
+# helm-tests install validates core workloads, not monitoring wiring.
+monitoring:
+  enabled: false
+
+# Disable the prometheus + grafana subcharts. Chart.yaml gates them on these
+# top-level keys (condition: prometheus.enabled / grafana.enabled), so these are
+# the toggles that actually keep the subchart pods out of the install.
+prometheus:
+  enabled: false
+grafana:
+  enabled: false

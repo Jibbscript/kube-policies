@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"flag"
 	"fmt"
 	"net/http"
@@ -15,6 +16,12 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"go.uber.org/zap"
 
+	"github.com/Jibbscript/kube-policies/internal/audit"
+	"github.com/Jibbscript/kube-policies/internal/auth"
+	"github.com/Jibbscript/kube-policies/internal/config"
+	"github.com/Jibbscript/kube-policies/internal/cryptofips"
+	"github.com/Jibbscript/kube-policies/internal/middleware"
+	"github.com/Jibbscript/kube-policies/internal/tlsreload"
 	"github.com/Jibbscript/kube-policies/pkg/logger"
 )
 
@@ -43,6 +50,10 @@ func main() {
 		zap.String("date", date),
 	)
 
+	// FIPS 140-3 startup self-test (CRY-WU-02): abort before opening any
+	// listener when REQUIRE_FIPS=true but the validated module is not active.
+	cryptofips.MustEnforce(log)
+
 	cfg, err := LoadConfig()
 	if err != nil {
 		log.Fatal("failed to load configuration", zap.Error(err))
@@ -54,29 +65,78 @@ func main() {
 		zap.Bool("csp_unsafe_inline_style", cfg.CSPUnsafeInlineStyle),
 	)
 
-	// svcCtx is canceled on SIGTERM/SIGINT to stop the upstream SSE subscriber.
+	// svcCtx is canceled on SIGTERM/SIGINT to stop the upstream SSE subscriber
+	// and the TLS cert reloader.
 	svcCtx, svcCancel := context.WithCancel(context.Background())
 	defer svcCancel()
 
-	apiServer, err := newAPIServer(svcCtx, cfg, log)
+	apiServer, auditLog, err := newAPIServer(svcCtx, cfg, log)
 	if err != nil {
 		log.Fatal("failed to construct API server", zap.Error(err))
 	}
-	metricsServer := newMetricsServer(*metricsPort)
 
-	go func() {
-		log.Info("starting dashboard API server", zap.Int("port", *port))
-		if err := apiServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Fatal("API server failed", zap.Error(err))
+	// Bearer-token auth for the dashboard /metrics endpoint (IAM-WU-12),
+	// mirroring the webhook (:9090) and policy-manager (:9091) pattern. Bearer
+	// tokens must never cross a plaintext hop, so metrics auth is coupled to
+	// metrics TLS: the verifier is built ONLY when cfg.TLSEnabled (the dashboard
+	// metrics listener gets TLS 1.3 from the same reloader below in that case).
+	// When TLS is off (the default, Ingress-terminated topology), /metrics stays
+	// plain HTTP and UNAUTHENTICATED — a documented dev gap, consistent with the
+	// webhook/PM behavior when their --metrics-tls flag is off.
+	var metricsVerifier *auth.TokenVerifier
+	if cfg.TLSEnabled {
+		metricsVerifier = auth.NewTokenVerifier(cfg.InternalToken, cfg.InternalTokenPrevious)
+		if metricsVerifier.Configured() {
+			log.Info("dashboard /metrics auth ENFORCED (TLS 1.3 + bearer token)")
+		} else {
+			// Fail-closed: an unconfigured verifier 401s every scrape. Surface
+			// the misconfiguration loudly rather than silently breaking scrapes.
+			log.Warn("dashboard /metrics auth ENFORCED but the internal token is UNSET; every scrape will 401 until INTERNAL_TOKEN is provided")
 		}
-	}()
+	} else {
+		log.Warn("dashboard /metrics auth DISABLED (plain HTTP, no bearer token) — dev posture; set DASHBOARD_TLS_ENABLED=true to enforce TLS + bearer auth")
+	}
 
-	go func() {
-		log.Info("starting dashboard metrics server", zap.Int("port", *metricsPort))
-		if err := metricsServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Fatal("metrics server failed", zap.Error(err))
+	metricsServer := newMetricsServer(*metricsPort, metricsVerifier)
+
+	// In-pod TLS serving (CRY-WU-07), gated on DASHBOARD_TLS_ENABLED. One shared
+	// hot-reload cert source backs BOTH listeners (no double watcher). When TLS
+	// is off, the listeners stay plaintext (Ingress-terminated topology).
+	if cfg.TLSEnabled {
+		certReloader, rerr := tlsreload.New(cfg.CertPath, cfg.KeyPath, log.Named("tls-reload"))
+		if rerr != nil {
+			log.Fatal("failed to load dashboard TLS certificate", zap.Error(rerr))
 		}
-	}()
+		go func() {
+			if err := certReloader.Start(svcCtx); err != nil {
+				log.Error("TLS certificate reloader stopped with error", zap.Error(err))
+			}
+		}()
+		for _, srv := range []*http.Server{apiServer, metricsServer} {
+			tc, berr := config.BuildServerTLSConfig(config.TLSConfig{MinVersion: "1.3"}, nil)
+			if berr != nil {
+				log.Fatal("failed to build dashboard TLS config", zap.Error(berr))
+			}
+			tc.GetCertificate = certReloader.GetCertificate
+			srv.TLSConfig = tc
+		}
+	}
+
+	serve := func(name string, srv *http.Server, port int) {
+		log.Info("starting dashboard "+name+" server", zap.Int("port", port), zap.Bool("tls", cfg.TLSEnabled))
+		var serr error
+		if cfg.TLSEnabled {
+			// Cert served via TLSConfig.GetCertificate (the reloader); empty paths.
+			serr = srv.ListenAndServeTLS("", "")
+		} else {
+			serr = srv.ListenAndServe()
+		}
+		if serr != nil && serr != http.ErrServerClosed {
+			log.Fatal("dashboard "+name+" server failed", zap.Error(serr))
+		}
+	}
+	go serve("API", apiServer, *port)
+	go serve("metrics", metricsServer, *metricsPort)
 
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
@@ -93,15 +153,21 @@ func main() {
 	if err := metricsServer.Shutdown(shutdownCtx); err != nil {
 		log.Error("metrics server shutdown error", zap.Error(err))
 	}
+	if err := auditLog.Close(); err != nil {
+		log.Error("audit logger close error", zap.Error(err))
+	}
 	log.Info("dashboard stopped")
 }
 
-func newAPIServer(ctx context.Context, cfg *Config, log *zap.Logger) (*http.Server, error) {
+func newAPIServer(ctx context.Context, cfg *Config, log *zap.Logger) (*http.Server, *audit.Logger, error) {
 	gin.SetMode(gin.ReleaseMode)
 	router := gin.New()
 	router.Use(gin.Recovery())
 	router.Use(cspMiddleware(cfg.CSPUnsafeInlineStyle))
+	router.Use(secureHeadersMiddleware(cfg))
 
+	// Health endpoints are registered BEFORE the rate-limit middleware so the
+	// kubelet probes are never throttled (NET-WU-15).
 	router.GET("/healthz", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"status": "healthy"})
 	})
@@ -109,25 +175,136 @@ func newAPIServer(ctx context.Context, cfg *Config, log *zap.Logger) (*http.Serv
 		c.JSON(http.StatusOK, gin.H{"status": "ready"})
 	})
 
+	// Rate-limiting / DoS-protection (NET-WU-15, RES-WU-17): token-bucket rate
+	// limit + in-flight concurrency cap (429) + request-body cap (413), plus a
+	// dedicated SSE connection gate (NET-WU-15) on /api/decisions/stream so
+	// long-lived browser streams cannot exhaust the general concurrency budget.
+	// The dashboard does not run its own metrics.Collector (it scrapes upstream
+	// /metrics), so a nil metrics is passed — rejections are enforced but not
+	// counted by a dashboard-local counter.
+	limiter := middleware.New(middleware.Config{
+		RequestsPerSecond: cfg.RateLimitRPS,
+		Burst:             cfg.RateLimitBurst,
+		MaxConcurrent:     cfg.RateLimitMaxConcurrent,
+		MaxBodyBytes:      cfg.RateLimitMaxBodyBytes,
+		Enabled:           cfg.RateLimitEnabled,
+	}, nil)
+	requestLimit := limiter.RequestMiddleware()
+	router.Use(requestLimit)
+	var streamGate gin.HandlerFunc
+	if cfg.RateLimitEnabled {
+		streamGate = middleware.NewStreamGate(cfg.MaxSSEConnections, "/api/decisions/stream", nil).Middleware()
+	} else {
+		streamGate = func(c *gin.Context) { c.Next() }
+	}
+	log.Info("dashboard rate-limiting configured",
+		zap.Bool("enabled", cfg.RateLimitEnabled),
+		zap.Float64("requests_per_second", cfg.RateLimitRPS),
+		zap.Int("burst", cfg.RateLimitBurst),
+		zap.Int("max_concurrent", cfg.RateLimitMaxConcurrent),
+		zap.Int64("max_body_bytes", cfg.RateLimitMaxBodyBytes),
+		zap.Int("max_sse_connections", cfg.MaxSSEConnections),
+	)
+
 	ring := NewRing(100)
+
+	// Verified-TLS config for the outbound connections to the (TLS 1.3)
+	// policy-manager API and SSE stream (CRY-WU-07). nil => system roots. Built
+	// once and shared by the SSE subscriber and the reverse proxy. Non-fatal on
+	// load error (the cert-manager CA may lag the dashboard's start): warn and
+	// fall back to system roots — verification still applies (no
+	// InsecureSkipVerify), so an unverifiable upstream fails the request rather
+	// than silently downgrading.
+	// Optionally present a client certificate to the policy-manager for mutual
+	// TLS (IAM-WU-03) on the reverse-proxied API and the SSE stream. The
+	// reloader's initial load is synchronous (so the proxy/SSE clients have a cert
+	// immediately); its rotation watcher runs under ctx. A failed load is fatal —
+	// an operator who configured a client cert intends mTLS, and an enforcing
+	// policy-manager would reject an un-certed dashboard anyway.
+	var pmClientGetCert func(*tls.CertificateRequestInfo) (*tls.Certificate, error)
+	if cfg.PolicyManagerClientCertPath != "" && cfg.PolicyManagerClientKeyPath != "" {
+		clientCertReloader, cerr := tlsreload.New(cfg.PolicyManagerClientCertPath, cfg.PolicyManagerClientKeyPath, log.Named("pm-client-cert"))
+		if cerr != nil {
+			return nil, nil, fmt.Errorf("load policy-manager client certificate: %w", cerr)
+		}
+		go func() {
+			if rerr := clientCertReloader.Start(ctx); rerr != nil {
+				log.Error("policy-manager client-cert reloader stopped with error", zap.Error(rerr))
+			}
+		}()
+		pmClientGetCert = clientCertReloader.GetClientCertificate
+	}
+
+	upstreamTLS, err := config.BuildClientTLSConfig(cfg.PolicyManagerCAPath, pmClientGetCert)
+	if err != nil {
+		log.Warn("policy-manager CA bundle unavailable; upstream clients fall back to system roots",
+			zap.String("policy_manager_ca_path", cfg.PolicyManagerCAPath),
+			zap.Error(err),
+		)
+		upstreamTLS = nil
+	}
 
 	// Eagerly subscribe to the upstream policy-manager SSE stream so the ring
 	// fills as cluster admission events flow, regardless of whether any
 	// browser ever opens an SSE connection. The SPA polls
 	// /api/decisions/recent today, so the upstream stream is the ring's only
 	// data source under normal operation.
-	subscriber := NewStreamSubscriber(ctx, cfg, ring, log)
+	subscriber := NewStreamSubscriber(ctx, cfg, upstreamTLS, ring, log)
 	subscriber.Start()
 
-	router.GET("/api/metrics/summary", NewMetricsHandler(cfg, log))
-	router.GET("/api/decisions/recent", NewRecentHandler(ring, log))
-	router.GET("/api/decisions/stream", subscriber.Handler())
+	// User authentication (IAM-WU-04 / NET-WU-18 / IAM-WU-16). In oidc mode this
+	// performs OIDC discovery and fails closed on error rather than serving an
+	// unprotected dashboard. The /auth/* endpoints and the SPA assets stay public;
+	// the read + proxy endpoints below are gated.
+	authn, err := newAuthenticator(ctx, cfg, log)
+	if err != nil {
+		return nil, nil, fmt.Errorf("auth init: %w", err)
+	}
+	if authn.mode == authModeDisabled {
+		log.Warn("dashboard user authentication DISABLED (DASHBOARD_AUTH_MODE=disabled) — the /api read + proxy endpoints are served UNAUTHENTICATED. Dev posture and a tracked gap; set DASHBOARD_AUTH_MODE=oidc (or forward-auth) in production.")
+	} else {
+		log.Info("dashboard user authentication enabled", zap.String("mode", string(authn.mode)))
+	}
+	authn.registerRoutes(router)
+
+	// PUBLIC: machine ingest stays gated by the symmetric internal token only
+	// (decisions.go), a separate trust domain from user auth — never placed under
+	// the user-auth group.
 	router.POST("/api/decisions/internal", NewIngestHandler(cfg, ring, log))
 
-	proxy, err := NewProxyHandler(cfg, log)
-	if err != nil {
-		return nil, fmt.Errorf("proxy init: %w", err)
+	// Audit logger (AUD-WU-13): emit DashboardWriteAttempt records for every
+	// mutating proxied request, including denied attempts (ALLOW_WRITES=false →
+	// 403). No-op when AuditEnabled=false (NewLogger with Enabled=false returns
+	// a safe no-op whose Close() is a no-op too). The file backend is created
+	// here and closed via the shutdown path below.
+	auditCfg := &config.AuditConfig{
+		Enabled:    cfg.AuditEnabled,
+		Backend:    cfg.AuditBackend,
+		BufferSize: 256,
+		Config:     map[string]string{"filename": cfg.AuditFile},
 	}
+	auditLogger, err := audit.NewLogger(auditCfg, audit.WithLogger(log.Named("audit")))
+	if err != nil {
+		return nil, nil, fmt.Errorf("audit logger init: %w", err)
+	}
+
+	proxy, err := NewProxyHandler(cfg, upstreamTLS, log, auditLogger)
+	if err != nil {
+		_ = auditLogger.Close()
+		return nil, nil, fmt.Errorf("proxy init: %w", err)
+	}
+
+	// PROTECTED: the read endpoints and the policy-manager reverse proxy require an
+	// authenticated user (NET-WU-18). EventSource cannot send an Authorization
+	// header, so the gate is cookie-based; an unauthenticated XHR gets 401, a
+	// top-level navigation a 302 to /auth/login.
+	authed := router.Group("")
+	authed.Use(authn.middleware())
+	authed.GET("/api/metrics/summary", NewMetricsHandler(cfg, log))
+	authed.GET("/api/decisions/recent", NewRecentHandler(ring, log))
+	// streamGate caps concurrent SSE connections (NET-WU-15); placed before the
+	// SSE handler so an over-cap connection is rejected with 429 immediately.
+	authed.GET("/api/decisions/stream", streamGate, subscriber.Handler())
 	// Wildcard match — Gin requires distinct method registration for the
 	// shared prefix, so we register the common verbs explicitly. Disallowed
 	// verbs are rejected inside the proxy handler (verb gate); unknown verbs
@@ -136,7 +313,7 @@ func newAPIServer(ctx context.Context, cfg *Config, log *zap.Logger) (*http.Serv
 		http.MethodGet, http.MethodHead, http.MethodPost,
 		http.MethodPut, http.MethodPatch, http.MethodDelete,
 	} {
-		router.Handle(m, "/api/v1/*proxyPath", proxy)
+		authed.Handle(m, "/api/v1/*proxyPath", proxy)
 	}
 
 	// SPA fallback: any route the API layer didn't claim falls through to the
@@ -151,13 +328,24 @@ func newAPIServer(ctx context.Context, cfg *Config, log *zap.Logger) (*http.Serv
 		ReadTimeout:       30 * time.Second,
 		WriteTimeout:      30 * time.Second,
 		IdleTimeout:       60 * time.Second,
-	}, nil
+	}, auditLogger, nil
 }
 
-func newMetricsServer(port int) *http.Server {
+// newMetricsServer builds the dashboard :9092 metrics server. When verifier is
+// non-nil, /metrics is wrapped with constant-time bearer-token auth (IAM-WU-12),
+// mirroring the webhook's setupMetricsServer and the policy-manager's
+// NewMetricsRouter. /healthz is always left open so kubelet probes (which send
+// no Authorization header) keep working. A nil verifier yields the legacy
+// plain-HTTP, unauthenticated /metrics — main only passes nil when TLS is off,
+// so a bearer token is never sent over plaintext.
+func newMetricsServer(port int, verifier *auth.TokenVerifier) *http.Server {
 	mux := http.NewServeMux()
-	mux.Handle("/metrics", promhttp.Handler())
-	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
+	metricsHandler := promhttp.Handler()
+	if verifier != nil {
+		metricsHandler = auth.RequireBearer(verifier, metricsHandler)
+	}
+	mux.Handle("/metrics", metricsHandler)
+	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("OK"))
 	})
@@ -191,10 +379,47 @@ func cspMiddleware(unsafeInline bool) gin.HandlerFunc {
 		"script-src 'self'",
 		"object-src 'none'",
 		"base-uri 'self'",
+		// frame-ancestors 'none' is the modern, CSP-level clickjacking control
+		// (complements the legacy X-Frame-Options header set in
+		// secureHeadersMiddleware) (CRY-WU-07).
+		"frame-ancestors 'none'",
 	}
 	header := strings.Join(parts, "; ")
 	return func(c *gin.Context) {
 		c.Header("Content-Security-Policy", header)
+		c.Next()
+	}
+}
+
+// secureHeadersMiddleware emits defense-in-depth response security headers on
+// every response (CRY-WU-07):
+//   - X-Content-Type-Options: nosniff   (block MIME sniffing)
+//   - X-Frame-Options: DENY             (legacy clickjacking control)
+//   - Referrer-Policy: no-referrer      (do not leak URLs cross-origin)
+//
+// Strict-Transport-Security is emitted ONLY when cfg.HSTSEnabled. HSTS is gated
+// independently of in-pod TLS because the browser-facing hop is usually the
+// Ingress (HTTPS) even when the pod sees plaintext; operators whose Ingress
+// already emits HSTS should leave this off to avoid a conflicting max-age.
+func secureHeadersMiddleware(cfg *Config) gin.HandlerFunc {
+	hsts := ""
+	if cfg.HSTSEnabled {
+		maxAge := cfg.HSTSMaxAge
+		if maxAge <= 0 {
+			maxAge = 31536000
+		}
+		hsts = fmt.Sprintf("max-age=%d", maxAge)
+		if cfg.HSTSIncludeSubdomains {
+			hsts += "; includeSubDomains"
+		}
+	}
+	return func(c *gin.Context) {
+		c.Header("X-Content-Type-Options", "nosniff")
+		c.Header("X-Frame-Options", "DENY")
+		c.Header("Referrer-Policy", "no-referrer")
+		if hsts != "" {
+			c.Header("Strict-Transport-Security", hsts)
+		}
 		c.Next()
 	}
 }

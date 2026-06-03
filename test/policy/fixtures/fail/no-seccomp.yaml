@@ -1,0 +1,40 @@
+# NEGATIVE fixture for restricted.pss (CFG-WU-12), evaluated per-document.
+#
+# A control-plane Deployment (admission-webhook component, so it is IN SCOPE)
+# whose container is otherwise fully hardened but carries NO seccompProfile at
+# either the pod or the container level. PSS-Restricted requires an effective
+# seccompProfile.type in {RuntimeDefault, Localhost}; this workload sets none,
+# so the per-document seccomp rule MUST deny.
+#
+# conftest test --namespace restricted.pss MUST exit non-zero.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: regression-no-seccomp
+  labels:
+    app.kubernetes.io/name: kube-policies
+    app.kubernetes.io/component: admission-webhook
+spec:
+  template:
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        runAsGroup: 65534
+      containers:
+        - name: webhook
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsGroup: 65534
+            capabilities:
+              drop:
+                - ALL
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi

@@ -14,6 +14,13 @@ type Collector struct {
 	evaluationDuration *prometheus.HistogramVec
 	policyEvaluations  *prometheus.CounterVec
 
+	// Fail-open admissions (IRM-WU-08, NIST SI-4(2)/IR-5): incremented whenever
+	// the webhook admits a request it could NOT evaluate (the engine errored),
+	// i.e. a security control was bypassed. Labeled by operation ("mutate";
+	// "validate" fails closed by contract so it never increments). Any nonzero
+	// rate is alert-worthy — the KubePoliciesFailOpenActive rule pages on it.
+	admissionFailOpen *prometheus.CounterVec
+
 	// Policy management metrics
 	policiesLoaded prometheus.Gauge
 	policyUpdates  *prometheus.CounterVec
@@ -35,6 +42,17 @@ type Collector struct {
 
 	// Exception suppression metrics
 	exceptionSuppressions *prometheus.CounterVec
+
+	// TLS certificate expiry (CRY-WU-12): Unix expiry time of the served cert,
+	// updated on each hot reload. An Alertmanager rule fires as it approaches.
+	certExpiry *prometheus.GaugeVec
+
+	// HTTP rate-limiting / DoS-protection rejections (NET-WU-14/15, RES-WU-17).
+	// Labeled by the handler that rejected the request and the reason it was
+	// rejected ("rate", "concurrency", "body_too_large", "stream_capacity").
+	// Label cardinality is bounded: handler is the small static set of mounted
+	// routes and reason is a four-value enum, so no operator-driven growth.
+	httpRateLimited *prometheus.CounterVec
 }
 
 // NewCollector creates a new metrics collector
@@ -48,6 +66,16 @@ func NewCollector() *Collector {
 				Help:      "Total number of admission requests processed",
 			},
 			[]string{"operation", "status", "reason"},
+		),
+
+		admissionFailOpen: promauto.NewCounterVec(
+			prometheus.CounterOpts{
+				Namespace: "kube_policies",
+				Subsystem: "admission",
+				Name:      "fail_open_total",
+				Help:      "Total number of requests admitted WITHOUT successful policy evaluation because the engine errored (fail-open). A control bypass; alert on any increase.",
+			},
+			[]string{"operation"},
 		),
 
 		evaluationDuration: promauto.NewHistogramVec(
@@ -172,12 +200,47 @@ func NewCollector() *Collector {
 			},
 			[]string{"policy_id", "rule_id"},
 		),
+
+		certExpiry: promauto.NewGaugeVec(
+			prometheus.GaugeOpts{
+				Namespace: "kube_policies",
+				Subsystem: "tls",
+				Name:      "cert_expiry_seconds",
+				Help:      "Unix timestamp (seconds) at which the served TLS certificate expires, per component",
+			},
+			[]string{"component"},
+		),
+
+		httpRateLimited: promauto.NewCounterVec(
+			prometheus.CounterOpts{
+				Namespace: "kube_policies",
+				Subsystem: "http",
+				Name:      "rate_limited_total",
+				Help:      "Total number of HTTP requests rejected by the rate-limit / DoS-protection middleware, by handler and reason (rate, concurrency, body_too_large, stream_capacity)",
+			},
+			[]string{"handler", "reason"},
+		),
 	}
+}
+
+// SetCertExpiry records the served TLS certificate's expiry for component as a
+// Unix-seconds gauge (CRY-WU-12). Alert on (cert_expiry_seconds - time()).
+func (c *Collector) SetCertExpiry(component string, notAfter time.Time) {
+	c.certExpiry.WithLabelValues(component).Set(float64(notAfter.Unix()))
 }
 
 // IncAdmissionRequests increments the admission requests counter
 func (c *Collector) IncAdmissionRequests(operation, status, reason string) {
 	c.admissionRequests.WithLabelValues(operation, status, reason).Inc()
+}
+
+// IncFailOpen increments the fail-open admissions counter (IRM-WU-08). Call this
+// only on the paths that ADMIT a request the engine could not evaluate (e.g. the
+// MutateHandler engine-error / patch-marshal-error branches). operation is the
+// admission operation ("mutate"); the validate path fails closed and must never
+// call this.
+func (c *Collector) IncFailOpen(operation string) {
+	c.admissionFailOpen.WithLabelValues(operation).Inc()
 }
 
 // ObserveEvaluationDuration observes policy evaluation duration
@@ -242,10 +305,18 @@ func (c *Collector) IncExceptionSuppression(policyID, ruleID string) {
 	c.exceptionSuppressions.WithLabelValues(policyID, ruleID).Inc()
 }
 
+// IncRateLimited increments the HTTP rate-limit rejection counter for the given
+// handler and reason (NET-WU-14/15, RES-WU-17). reason is one of "rate",
+// "concurrency", "body_too_large", "stream_capacity".
+func (c *Collector) IncRateLimited(handler, reason string) {
+	c.httpRateLimited.WithLabelValues(handler, reason).Inc()
+}
+
 // GetMetrics returns all metrics for testing or inspection
 func (c *Collector) GetMetrics() map[string]prometheus.Collector {
 	return map[string]prometheus.Collector{
 		"admission_requests":               c.admissionRequests,
+		"admission_fail_open":              c.admissionFailOpen,
 		"evaluation_duration":              c.evaluationDuration,
 		"policy_evaluations":               c.policyEvaluations,
 		"policies_loaded":                  c.policiesLoaded,
@@ -258,5 +329,6 @@ func (c *Collector) GetMetrics() map[string]prometheus.Collector {
 		"compliance_reports":               c.complianceReports,
 		"webhook_decision_publish_dropped": c.webhookDecisionPublishDropped,
 		"exception_suppressions":           c.exceptionSuppressions,
+		"http_rate_limited":                c.httpRateLimited,
 	}
 }

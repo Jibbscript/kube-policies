@@ -1,4 +1,9 @@
 {{- if .Values.dashboard.enabled }}
+{{- if eq .Values.dashboard.auth.mode "oidc" }}
+{{- if or (empty .Values.dashboard.auth.oidc.issuer) (empty .Values.dashboard.auth.oidc.clientID) (empty .Values.dashboard.auth.oidc.redirectURL) (empty .Values.dashboard.auth.oidc.existingSecret) }}
+{{- fail "dashboard.auth.mode=oidc requires dashboard.auth.oidc.issuer, .clientID, .redirectURL, and .existingSecret (a Secret with keys client-secret + session-key)" }}
+{{- end }}
+{{- end }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -18,9 +23,14 @@ spec:
       labels:
         {{- include "kube-policies.selectorLabels" . | nindent 8 }}
         app.kubernetes.io/component: dashboard
-      {{- with .Values.dashboard.podAnnotations }}
+      {{- if or .Values.dashboard.tls.enabled .Values.dashboard.podAnnotations }}
       annotations:
+        {{- if .Values.dashboard.tls.enabled }}
+        checksum/dashboard-certs: {{ include (print $.Template.BasePath "/dashboard-tls.yaml") . | sha256sum }}
+        {{- end }}
+        {{- with .Values.dashboard.podAnnotations }}
         {{- toYaml . | nindent 8 }}
+        {{- end }}
       {{- end }}
     spec:
       {{- with .Values.global.imagePullSecrets }}
@@ -28,13 +38,18 @@ spec:
         {{- toYaml . | nindent 8 }}
       {{- end }}
       serviceAccountName: {{ include "kube-policies.fullname" . }}-dashboard
+      # IAM-WU-10 (CIS 5.1.5/5.1.6): the dashboard never calls the apiserver at runtime,
+      # so it does not mount an SA token. Defaults false; an operator can override.
+      automountServiceAccountToken: {{ dig "automountServiceAccountToken" false .Values.dashboard }}
+      # RES-WU-07 (CP-10): bound the graceful-shutdown window. The dashboard is a
+      # read-only BFF (scratch image, no in-binary drain flag); the native preStop
+      # sleep below + its own graceful HTTP shutdown drain inside this window.
+      terminationGracePeriodSeconds: {{ .Values.dashboard.terminationGracePeriodSeconds | default 30 }}
       securityContext:
-        runAsNonRoot: true
-        runAsUser: 65532
-        fsGroup: 65532
+        {{- toYaml .Values.dashboard.podSecurityContext | nindent 8 }}
       containers:
         - name: dashboard
-          image: "{{ include "kube-policies.image" (dict "registry" (.Values.global.imageRegistry | default .Values.dashboard.image.registry) "repository" .Values.dashboard.image.repository "tag" .Values.dashboard.image.tag "defaultTag" .Chart.AppVersion) }}"
+          image: "{{ include "kube-policies.image" (dict "registry" (.Values.global.imageRegistry | default .Values.dashboard.image.registry) "repository" .Values.dashboard.image.repository "tag" .Values.dashboard.image.tag "digest" .Values.dashboard.image.digest "defaultTag" .Chart.AppVersion) }}"
           imagePullPolicy: {{ .Values.dashboard.image.pullPolicy | default "IfNotPresent" }}
           ports:
             - name: http
@@ -44,21 +59,172 @@ spec:
               containerPort: 9092
               protocol: TCP
           env:
+            {{- include "kube-policies.fipsEnv" . | nindent 12 }}
+            # The policy-manager API + SSE stream serve TLS 1.3 (CRY-WU-05) →
+            # https; verified via the mounted policy-manager CA (CRY-WU-07). The
+            # metrics URLs follow metrics.tls.enabled (CRY-WU-08): http by
+            # default, https + bearer token when metrics TLS is on.
             - name: POLICY_MANAGER_URL
-              value: "http://{{ include "kube-policies.fullname" . }}-policy-manager:8080"
+              value: "https://{{ include "kube-policies.fullname" . }}-policy-manager:8080"
+            {{- $metricsScheme := ternary "https" "http" .Values.metrics.tls.enabled }}
             - name: POLICY_MANAGER_METRICS_URL
-              value: "http://{{ include "kube-policies.fullname" . }}-policy-manager:9091/metrics"
+              value: "{{ $metricsScheme }}://{{ include "kube-policies.fullname" . }}-policy-manager:9091/metrics"
             - name: ADMISSION_WEBHOOK_METRICS_URL
-              value: "http://{{ include "kube-policies.fullname" . }}-admission-webhook:9090/metrics"
+              value: "{{ $metricsScheme }}://{{ include "kube-policies.fullname" . }}-admission-webhook:9090/metrics"
+            {{- if .Values.metrics.tls.enabled }}
+            # Bearer token presented when scraping the TLS-protected /metrics
+            # endpoints (CRY-WU-08); sent only over https by the scraper.
+            - name: POLICY_MANAGER_INTERNAL_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "kube-policies.fullname" . }}-internal-token
+                  key: token
+                  optional: true
+            {{- end }}
+            {{- if .Values.dashboard.tls.enabled }}
+            # Serving-side metrics auth (IAM-WU-12): the dashboard /metrics
+            # endpoint requires this bearer token. Coupled to dashboard.tls.enabled
+            # so the token is only present when /metrics serves TLS 1.3 — a bearer
+            # token must never be accepted over plaintext (mirrors the webhook /
+            # policy-manager metrics auth gating). The same internal-token Secret
+            # is reused so a scraper that already presents it (POLICY_MANAGER_INTERNAL_TOKEN
+            # above) authenticates against the dashboard too.
+            - name: INTERNAL_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "kube-policies.fullname" . }}-internal-token
+                  key: token
+                  optional: true
+            {{- end }}
             - name: ALLOW_WRITES
               value: {{ .Values.dashboard.allowWrites | default false | quote }}
+            # Rate-limiting / DoS-protection (NET-WU-15, RES-WU-17). The dashboard
+            # is env-configured (no shared config.yaml), so these mirror the
+            # shared security.ratelimit.* keys the webhook/PM read.
+            - name: DASHBOARD_RATELIMIT_ENABLED
+              value: {{ .Values.dashboard.rateLimit.enabled | quote }}
+            - name: DASHBOARD_RATELIMIT_REQUESTS_PER_SECOND
+              value: {{ .Values.dashboard.rateLimit.requestsPerSecond | quote }}
+            - name: DASHBOARD_RATELIMIT_BURST
+              value: {{ .Values.dashboard.rateLimit.burst | quote }}
+            - name: DASHBOARD_RATELIMIT_MAX_CONCURRENT
+              value: {{ .Values.dashboard.rateLimit.maxConcurrent | quote }}
+            - name: DASHBOARD_RATELIMIT_MAX_BODY_BYTES
+              # `| int64` before `| quote` so large byte counts are not rendered
+              # in scientific notation (Helm parses YAML numbers as float64).
+              value: {{ .Values.dashboard.rateLimit.maxBodyBytes | int64 | quote }}
+            - name: DASHBOARD_MAX_SSE_CONNECTIONS
+              value: {{ .Values.dashboard.maxSSEConnections | quote }}
             - name: POLICY_MANAGER_STREAM_URL
-              value: "http://{{ include "kube-policies.fullname" . }}-policy-manager:8080/api/v1/decisions/stream"
+              value: "https://{{ include "kube-policies.fullname" . }}-policy-manager:8080/api/v1/decisions/stream"
+            {{- if eq (include "kube-policies.internalAuthMode" .) "tokenreview" }}
+            # Present an audience-bound, short-TTL projected ServiceAccount token
+            # on the upstream SSE subscription so the policy-manager's TokenReview
+            # gate on /api/v1/decisions/stream + /recent accepts it (IAM-WU-11,
+            # Inc7 Stream A). Gate on mode only — not policyManager.enabled — so a
+            # split deploy (PM external) still presents the credential, mirroring
+            # the webhook's pm-internal-token. The subscriber re-reads the file
+            # per connect to follow kubelet rotation.
+            - name: POLICY_MANAGER_STREAM_TOKEN_PATH
+              value: /var/run/secrets/kube-policies/pm-stream-token/token
+            {{- else }}
+            # Static shared bearer for the SSE subscription (IAM-WU-11 escape
+            # hatch, mode=static only). The dashboard presents it on the upstream
+            # stream; the policy-manager accepts it via the static fallback. Reuses
+            # the same internal-token Secret the webhook/PM static path uses.
+            - name: POLICY_MANAGER_STREAM_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "kube-policies.fullname" . }}-internal-token
+                  key: token
+                  optional: true
+            {{- end }}
+            {{- if .Values.policyManager.enabled }}
+            - name: POLICY_MANAGER_CA_PATH
+              value: "/etc/policy-manager-ca/ca.crt"
+            {{- end }}
+            {{- if and .Values.policyManager.enabled .Values.policyManager.tls.mtls.enabled }}
+            # Present a client certificate to the policy-manager for mutual TLS
+            # (IAM-WU-03) on the proxied API + SSE stream; the metrics scraper
+            # does not (those listeners use bearer auth, not mTLS).
+            - name: POLICY_MANAGER_CLIENT_CERT_PATH
+              value: "/etc/policy-manager-client/tls.crt"
+            - name: POLICY_MANAGER_CLIENT_KEY_PATH
+              value: "/etc/policy-manager-client/tls.key"
+            {{- end }}
+            # In-pod TLS serving + HSTS (CRY-WU-07). Default off (Ingress
+            # terminates TLS); the production overlay turns these on.
+            - name: DASHBOARD_TLS_ENABLED
+              value: {{ .Values.dashboard.tls.enabled | default false | quote }}
+            - name: DASHBOARD_HSTS_ENABLED
+              value: {{ .Values.dashboard.tls.hsts.enabled | default false | quote }}
+            - name: DASHBOARD_HSTS_MAX_AGE
+              # `| int` before `| quote`: Helm parses YAML numbers as float64 and
+              # sprig `quote` would render a large int in scientific notation
+              # (e.g. 3.1536e+07), which Go's strconv.Atoi cannot parse.
+              value: {{ .Values.dashboard.tls.hsts.maxAge | default 31536000 | int | quote }}
+            - name: DASHBOARD_HSTS_INCLUDE_SUBDOMAINS
+              # No `| default true`: sprig `default` treats boolean false as empty
+              # and would coerce an explicit false back to true, making the
+              # opt-out non-functional. values.yaml always defines this key.
+              value: {{ .Values.dashboard.tls.hsts.includeSubdomains | quote }}
+            # User authentication (IAM-WU-04/16, NET-WU-18). mode=disabled (default)
+            # leaves the dashboard unauthenticated (dev). oidc/forward-auth enable the
+            # gate; per-user authZ is then enforced upstream by the policy-manager.
+            - name: DASHBOARD_AUTH_MODE
+              value: {{ .Values.dashboard.auth.mode | quote }}
+            {{- if eq .Values.dashboard.auth.mode "oidc" }}
+            - name: DASHBOARD_OIDC_ISSUER
+              value: {{ .Values.dashboard.auth.oidc.issuer | quote }}
+            - name: DASHBOARD_OIDC_CLIENT_ID
+              value: {{ .Values.dashboard.auth.oidc.clientID | quote }}
+            - name: DASHBOARD_OIDC_REDIRECT_URL
+              value: {{ .Values.dashboard.auth.oidc.redirectURL | quote }}
+            - name: DASHBOARD_OIDC_SCOPES
+              value: {{ .Values.dashboard.auth.oidc.scopes | quote }}
+            - name: DASHBOARD_OIDC_USERNAME_CLAIM
+              value: {{ .Values.dashboard.auth.oidc.usernameClaim | quote }}
+            - name: DASHBOARD_OIDC_GROUPS_CLAIM
+              value: {{ .Values.dashboard.auth.oidc.groupsClaim | quote }}
+            - name: DASHBOARD_SESSION_IDLE_TIMEOUT
+              value: {{ .Values.dashboard.auth.session.idleTimeout | quote }}
+            - name: DASHBOARD_SESSION_ABSOLUTE_TIMEOUT
+              value: {{ .Values.dashboard.auth.session.absoluteTimeout | quote }}
+            # Sensitive: the OIDC client secret + AES-256 session key from a Secret.
+            - name: DASHBOARD_OIDC_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.dashboard.auth.oidc.existingSecret }}
+                  key: client-secret
+            - name: DASHBOARD_SESSION_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.dashboard.auth.oidc.existingSecret }}
+                  key: session-key
+            - name: DASHBOARD_SESSION_KEY_PREVIOUS
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.dashboard.auth.oidc.existingSecret }}
+                  key: session-key-previous
+                  optional: true
+            {{- else if eq .Values.dashboard.auth.mode "forward-auth" }}
+            - name: DASHBOARD_FORWARD_AUTH_USER_HEADER
+              value: {{ .Values.dashboard.auth.forwardAuth.userHeader | quote }}
+            - name: DASHBOARD_FORWARD_AUTH_EMAIL_HEADER
+              value: {{ .Values.dashboard.auth.forwardAuth.emailHeader | quote }}
+            - name: DASHBOARD_FORWARD_AUTH_GROUPS_HEADER
+              value: {{ .Values.dashboard.auth.forwardAuth.groupsHeader | quote }}
+            - name: DASHBOARD_FORWARD_AUTH_TOKEN_HEADER
+              value: {{ .Values.dashboard.auth.forwardAuth.tokenHeader | quote }}
+            {{- end }}
+          # Probe scheme follows in-pod TLS: when the dashboard terminates TLS,
+          # the kubelet httpGet probe must use HTTPS (it skips cert verification
+          # and presents no client cert; server-auth-only TLS handshakes succeed).
           livenessProbe:
             httpGet:
               path: /healthz
               port: http
-              scheme: HTTP
+              scheme: {{ if .Values.dashboard.tls.enabled }}HTTPS{{ else }}HTTP{{ end }}
             initialDelaySeconds: 10
             periodSeconds: 15
             timeoutSeconds: 5
@@ -67,27 +233,110 @@ spec:
             httpGet:
               path: /readyz
               port: http
-              scheme: HTTP
+              scheme: {{ if .Values.dashboard.tls.enabled }}HTTPS{{ else }}HTTP{{ end }}
             initialDelaySeconds: 5
             periodSeconds: 10
             timeoutSeconds: 3
             failureThreshold: 3
+          {{- if .Values.dashboard.startupProbe.enabled }}
+          # RES-WU-05 (CP-10): gate liveness/readiness behind startup completion.
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: http
+              scheme: {{ if .Values.dashboard.tls.enabled }}HTTPS{{ else }}HTTP{{ end }}
+            periodSeconds: {{ .Values.dashboard.startupProbe.periodSeconds | default 5 }}
+            failureThreshold: {{ .Values.dashboard.startupProbe.failureThreshold | default 30 }}
+            timeoutSeconds: {{ .Values.dashboard.startupProbe.timeoutSeconds | default 3 }}
+          {{- end }}
+          {{- if and (gt (int (.Values.dashboard.preStopDrainSeconds | default 5)) 0) (semverCompare ">= 1.29-0" .Capabilities.KubeVersion.GitVersion) }}
+          # RES-WU-07 (CP-10): native sleep preStop. The `sleep` lifecycle action is
+          # a k8s >= 1.29 feature; on k8s < 1.29 the API server REJECTS an empty
+          # preStop handler, so it is rendered ONLY on >= 1.29. The dashboard (scratch
+          # image, no in-binary drain flag) relies on its own graceful HTTP shutdown
+          # on older clusters. Holds the pod in Terminating while it leaves endpoints.
+          lifecycle:
+            preStop:
+              sleep:
+                seconds: {{ .Values.dashboard.preStopDrainSeconds | default 5 | int }}
+          {{- end }}
           securityContext:
-            allowPrivilegeEscalation: false
-            capabilities:
-              drop:
-              - ALL
-            readOnlyRootFilesystem: true
-            runAsNonRoot: true
-            runAsUser: 65532
+            {{- toYaml .Values.dashboard.securityContext | nindent 12 }}
           resources:
             {{- toYaml .Values.dashboard.resources | nindent 12 }}
           volumeMounts:
             - name: tmp
               mountPath: /tmp
+            {{- if eq (include "kube-policies.internalAuthMode" .) "tokenreview" }}
+            # Projected SA token the dashboard presents on the upstream SSE
+            # subscription (IAM-WU-11, Inc7 Stream A). Gate on mode only so a
+            # split/PM-external deploy still mounts it.
+            - name: pm-stream-token
+              mountPath: /var/run/secrets/kube-policies/pm-stream-token
+              readOnly: true
+            {{- end }}
+            {{- if .Values.dashboard.tls.enabled }}
+            - name: dashboard-certs
+              mountPath: /etc/dashboard-certs
+              readOnly: true
+            {{- end }}
+            {{- if .Values.policyManager.enabled }}
+            - name: policy-manager-ca
+              mountPath: /etc/policy-manager-ca
+              readOnly: true
+            {{- end }}
+            {{- if and .Values.policyManager.enabled .Values.policyManager.tls.mtls.enabled }}
+            - name: policy-manager-client
+              mountPath: /etc/policy-manager-client
+              readOnly: true
+            {{- end }}
       volumes:
         - name: tmp
           emptyDir: {}
+        {{- if eq (include "kube-policies.internalAuthMode" .) "tokenreview" }}
+        # Audience-bound, short-TTL projected ServiceAccount token for the
+        # dashboard -> policy-manager SSE read subscription (IAM-WU-11, Inc7
+        # Stream A). Gated on mode only (mirrors the webhook's pm-internal-token).
+        # The dashboard SA (kube-policies.fullname-dashboard) backs this projected
+        # volume; projected serviceAccountToken sources do NOT require
+        # automountServiceAccountToken, so the dashboard automount stays false
+        # (IAM-WU-10). The kubelet mints a token scoped to
+        # audience=<internalAuth.audience> with the configured TTL and atomically
+        # swaps it as it rotates. Reuses the same audience + default TTL as the
+        # webhook's projected token.
+        - name: pm-stream-token
+          projected:
+            defaultMode: 0440
+            sources:
+              - serviceAccountToken:
+                  path: token
+                  audience: {{ include "kube-policies.internalAuthAudience" . | quote }}
+                  expirationSeconds: {{ dig "internalAuth" "expirationSeconds" 3600 .Values.policyManager }}
+        {{- end }}
+        {{- if .Values.dashboard.tls.enabled }}
+        - name: dashboard-certs
+          secret:
+            secretName: {{ include "kube-policies.dashboardCertSecretName" . }}
+        {{- end }}
+        {{- if .Values.policyManager.enabled }}
+        # Project ONLY ca.crt from the policy-manager serving Secret (CRY-WU-07);
+        # optional so a not-yet-issued cert-manager Secret does not block startup.
+        - name: policy-manager-ca
+          secret:
+            secretName: {{ include "kube-policies.policyManagerCertSecretName" . }}
+            items:
+              - key: ca.crt
+                path: ca.crt
+            optional: true
+        {{- end }}
+        {{- if and .Values.policyManager.enabled .Values.policyManager.tls.mtls.enabled }}
+        # Client identity the dashboard presents to the policy-manager for mTLS
+        # (IAM-WU-03), issued by the shared cert-manager issuer. NOT optional:
+        # when mTLS is enabled the dashboard must hold this cert to reach the PM.
+        - name: policy-manager-client
+          secret:
+            secretName: {{ include "kube-policies.dashboardClientCertSecretName" . }}
+        {{- end }}
       {{- with .Values.dashboard.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}

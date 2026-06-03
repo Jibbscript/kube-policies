@@ -1,0 +1,32 @@
+{{- /*
+IRM-WU-14 (NIST CM-2, CA-7, SI-4; CIS Kubernetes Benchmark 3.2): the single
+PrometheusRule holding every kube-policies alert group. The rule groups are NOT
+inlined here — they are read from charts/kube-policies/files/alerts/*.yaml, the
+SAME files promtool check/test in CI and `make validate-monitoring-rules`. This
+is the single source of truth: there is no second hand-maintained copy to drift
+(the rules formerly embedded in deployments/kubernetes/monitoring/
+prometheus-deployment.yaml were migrated into files/alerts/). SLO burn-rate
+rules render separately via slo-prometheusrule.yaml.
+
+Requires the Prometheus Operator CRDs (monitoring.coreos.com/v1). Gated OFF by
+default so the chart renders on clusters without the operator.
+*/ -}}
+{{- if .Values.monitoring.prometheusRule.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: {{ include "kube-policies.fullname" . }}-alerts
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kube-policies.labels" . | nindent 4 }}
+    {{- with .Values.monitoring.prometheusRule.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  groups:
+  {{- range $path, $_ := .Files.Glob "files/alerts/*.yaml" }}
+  {{- range ($.Files.Get $path | fromYaml).groups }}
+    - {{ toYaml . | nindent 6 | trim }}
+  {{- end }}
+  {{- end }}
+{{- end }}

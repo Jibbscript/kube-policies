@@ -38,6 +38,9 @@ fi
 
 cd "${ROOT_DIR}"
 
+# Resolve gitignored subchart deps (prometheus/grafana) before lint/render.
+bash scripts/ci/helm-deps.sh
+
 echo "==> Helm lint"
 helm lint charts/kube-policies
 
@@ -90,3 +93,64 @@ kubeconform -strict -summary -ignore-missing-schemas \
 	examples/exceptions/*.yaml \
 	demo/capture/fixtures/*.yaml \
 	test/e2e/fixtures/*.yaml
+
+# IAM-WU-11 regression guard: verify the admission-webhook pod renders the
+# projected serviceAccountToken volume with the expected audience and a TTL
+# <= 3600s, and that the --policy-manager-token-path arg matches the mount.
+# Guard on yq availability so this no-ops gracefully when yq is absent.
+if command -v yq >/dev/null 2>&1; then
+	echo "==> IAM-WU-11: projected token volume assertion (tokenreview mode)"
+	# Render with default values (tokenreview mode).
+	helm template kube-policies charts/kube-policies >"${TMP_DIR}/helm-tr.yaml"
+
+	# Extract the serviceAccountToken audience from the webhook Deployment.
+	_aud="$(yq '
+		select(.kind == "Deployment" and .metadata.name == "*-admission-webhook")
+		| .spec.template.spec.volumes[]
+		| select(.name == "pm-internal-token")
+		| .projected.sources[]
+		| select(has("serviceAccountToken"))
+		| .serviceAccountToken.audience
+	' "${TMP_DIR}/helm-tr.yaml" | head -1)"
+
+	_exp="$(yq '
+		select(.kind == "Deployment" and .metadata.name == "*-admission-webhook")
+		| .spec.template.spec.volumes[]
+		| select(.name == "pm-internal-token")
+		| .projected.sources[]
+		| select(has("serviceAccountToken"))
+		| .serviceAccountToken.expirationSeconds
+	' "${TMP_DIR}/helm-tr.yaml" | head -1)"
+
+	_arg="$(yq '
+		select(.kind == "Deployment" and .metadata.name == "*-admission-webhook")
+		| .spec.template.spec.containers[]
+		| select(.name == "admission-webhook")
+		| .args[]
+		| select(test("^--policy-manager-token-path="))
+	' "${TMP_DIR}/helm-tr.yaml" | head -1)"
+
+	_ok=1
+	if [[ -z "${_aud}" ]]; then
+		printf 'IAM-WU-11 FAIL: pm-internal-token projected volume not found in admission-webhook Deployment\n' >&2
+		_ok=0
+	elif [[ "${_aud}" != "policy-manager" ]]; then
+		printf 'IAM-WU-11 FAIL: projected token audience=%q want "policy-manager"\n' "${_aud}" >&2
+		_ok=0
+	fi
+	if [[ -n "${_exp}" ]] && [[ "${_exp}" -gt 3600 ]]; then
+		printf 'IAM-WU-11 FAIL: projected token expirationSeconds=%s exceeds 3600s (1h)\n' "${_exp}" >&2
+		_ok=0
+	fi
+	_expected_path="--policy-manager-token-path=/var/run/secrets/kube-policies/pm-token/token"
+	if [[ "${_arg}" != "${_expected_path}" ]]; then
+		printf 'IAM-WU-11 FAIL: --policy-manager-token-path arg=%q want %q\n' "${_arg}" "${_expected_path}" >&2
+		_ok=0
+	fi
+	if [[ "${_ok}" -eq 1 ]]; then
+		printf '    IAM-WU-11 projected token volume: audience=%s expirationSeconds=%s arg=%s OK\n' \
+			"${_aud}" "${_exp}" "${_arg}"
+	else
+		exit 1
+	fi
+fi

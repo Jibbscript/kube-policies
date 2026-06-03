@@ -1,0 +1,117 @@
+# promtool unit tests for the kube-policies-dos group (NET-WU-23), migrated with
+# the rules into the chart single source (IRM-WU-14). Each block drives one alert
+# across its threshold; control series prove the per-instance thresholds are real.
+rule_files:
+  - ../../charts/kube-policies/files/alerts/dos.yaml
+
+evaluation_interval: 1m
+
+tests:
+  # KubePoliciesHighAdmissionRequestRate: 300 req/s on webhook-0 (> 200) held
+  # > 10m fires; webhook-1 at 1 req/s stays quiet.
+  - interval: 1m
+    input_series:
+      - series: 'kube_policies_admission_requests_total{instance="webhook-0",operation="CREATE",status="allowed",reason="ok"}'
+        values: '0+18000x20'
+      - series: 'kube_policies_admission_requests_total{instance="webhook-1",operation="CREATE",status="allowed",reason="ok"}'
+        values: '0+60x20'
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: KubePoliciesHighAdmissionRequestRate
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              instance: webhook-0
+            exp_annotations:
+              description: "Admission request rate on webhook-0 has held above 200 req/s for 10m (300 req/s). Possible client loop or DoS flood; check the offending source and consider rate-limit tuning (security.ratelimit.*)."
+              runbook_url: "https://github.com/Jibbscript/kube-policies/blob/main/docs/security/runbooks/dos-response.md"
+              summary: "kube-policies admission request rate is sustained-high on webhook-0"
+
+  # KubePoliciesRateLimitSurge: 10 rejections/s for reason=rate (> 1/s) fires;
+  # body_too_large at 0.2/s stays quiet.
+  - interval: 1m
+    input_series:
+      - series: 'kube_policies_http_rate_limited_total{instance="webhook-0",handler="admission",reason="rate"}'
+        values: '0+600x10'
+      - series: 'kube_policies_http_rate_limited_total{instance="webhook-0",handler="admission",reason="body_too_large"}'
+        values: '0+12x10'
+    alert_rule_test:
+      - eval_time: 8m
+        alertname: KubePoliciesRateLimitSurge
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              instance: webhook-0
+              reason: rate
+            exp_annotations:
+              description: "The rate limiter on webhook-0 has rejected > 1 req/s for reason 'rate' over 5m (10.0 rejections/s). Clients are exceeding limits — possible flood. Identify the source before relaxing security.ratelimit.* limits."
+              runbook_url: "https://github.com/Jibbscript/kube-policies/blob/main/docs/security/runbooks/dos-response.md"
+              summary: "kube-policies is throttling clients (reason=rate) on webhook-0"
+
+  # Latency: all observations land in +Inf only => p95 resolves very high,
+  # firing BOTH the warning (> 5s) and critical (> 8s) alerts.
+  - interval: 1m
+    input_series:
+      - series: 'kube_policies_admission_evaluation_duration_seconds_bucket{le="0.5",operation="CREATE"}'
+        values: '0+0x10'
+      - series: 'kube_policies_admission_evaluation_duration_seconds_bucket{le="1",operation="CREATE"}'
+        values: '0+0x10'
+      - series: 'kube_policies_admission_evaluation_duration_seconds_bucket{le="9",operation="CREATE"}'
+        values: '0+0x10'
+      - series: 'kube_policies_admission_evaluation_duration_seconds_bucket{le="+Inf",operation="CREATE"}'
+        values: '0+60x10'
+    alert_rule_test:
+      - eval_time: 8m
+        alertname: KubePoliciesAdmissionLatencyHigh
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              description: "p95 admission evaluation latency is 9.00s, over half the 10s webhook timeout. Sustained load or slow policy evaluation; investigate before requests start timing out."
+              runbook_url: "https://github.com/Jibbscript/kube-policies/blob/main/docs/security/runbooks/dos-response.md"
+              summary: "kube-policies admission p95 latency is high (> 5s)"
+      - eval_time: 8m
+        alertname: KubePoliciesAdmissionLatencyCritical
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+            exp_annotations:
+              description: "p95 admission evaluation latency is 9.00s, at 80% of the 10s webhook timeout. Requests are about to time out (fail-open admits unchecked / fail-closed blocks apply). Mitigate load immediately."
+              runbook_url: "https://github.com/Jibbscript/kube-policies/blob/main/docs/security/runbooks/dos-response.md"
+              summary: "kube-policies admission p95 latency is CRITICAL (> 8s, near 10s timeout)"
+
+  # Latency negative: all observations in le=0.5 => p95 low, neither fires.
+  - interval: 1m
+    input_series:
+      - series: 'kube_policies_admission_evaluation_duration_seconds_bucket{le="0.5",operation="CREATE"}'
+        values: '0+60x10'
+      - series: 'kube_policies_admission_evaluation_duration_seconds_bucket{le="1",operation="CREATE"}'
+        values: '0+60x10'
+      - series: 'kube_policies_admission_evaluation_duration_seconds_bucket{le="9",operation="CREATE"}'
+        values: '0+60x10'
+      - series: 'kube_policies_admission_evaluation_duration_seconds_bucket{le="+Inf",operation="CREATE"}'
+        values: '0+60x10'
+    alert_rule_test:
+      - eval_time: 8m
+        alertname: KubePoliciesAdmissionLatencyHigh
+        exp_alerts: []
+      - eval_time: 8m
+        alertname: KubePoliciesAdmissionLatencyCritical
+        exp_alerts: []
+
+  # KubePoliciesDecisionPublishDrops: any drop rate > 0 held > 5m fires.
+  - interval: 1m
+    input_series:
+      - series: 'kube_policies_webhook_decision_publish_dropped_total{instance="webhook-0"}'
+        values: '0+6x10'
+    alert_rule_test:
+      - eval_time: 8m
+        alertname: KubePoliciesDecisionPublishDrops
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              instance: webhook-0
+            exp_annotations:
+              description: "The decision-publish buffer on webhook-0 is dropping events (0.10 drops/s) — buffer saturation under load. Audit decisions are being lost; check decisions-channel health and consumer throughput."
+              runbook_url: "https://github.com/Jibbscript/kube-policies/blob/main/docs/security/runbooks/audit-pipeline-loss.md"
+              summary: "kube-policies is dropping admission-decision publishes on webhook-0"

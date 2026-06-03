@@ -1,0 +1,128 @@
+{{- /*
+IRM-WU-16 (NIST IR-6, IR-4, SI-4(5), IR-8): Alertmanager configuration with a
+severity-based route tree, real paging + chat receivers, inhibition rules, and a
+dead-man's-switch heartbeat receiver consuming the KubePoliciesWatchdog alert.
+
+NO credentials are inlined: every receiver secret is referenced via Alertmanager
+`*_file` directives pointing at keys of monitoring.alertmanager.config.existingSecret,
+which the HA StatefulSet (alertmanager-statefulset.yaml) mounts at
+/etc/alertmanager/secrets. The dummy http://127.0.0.1:5001/ receiver from the
+standalone manifest is gone.
+
+Rendered as a Secret so the config (which may carry an SMTP username etc.) is not
+world-readable. amtool check-config validates this in CI (IRM-WU-15). Receivers
+that are not enabled render as name-only receivers, which are valid Alertmanager
+receivers, so the route tree always references a defined receiver.
+*/ -}}
+{{- if .Values.monitoring.alertmanager.config.enabled }}
+{{- $am := .Values.monitoring.alertmanager.config }}
+{{- $r := $am.receivers }}
+{{- if and (or $r.pagerduty.enabled $r.slack.enabled $r.email.enabled $am.heartbeat.enabled) (not $am.existingSecret) }}
+{{- fail "monitoring.alertmanager.config: a receiver is enabled but monitoring.alertmanager.config.existingSecret is empty. Receiver credentials (PagerDuty routing key, Slack URL, SMTP password, heartbeat URL) are referenced via *_file from that Secret and are NEVER inlined. Create the Secret and set existingSecret, or disable the receivers." }}
+{{- end }}
+{{- $secretDir := "/etc/alertmanager/secrets" }}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ include "kube-policies.fullname" . }}-alertmanager-config
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kube-policies.labels" . | nindent 4 }}
+    app.kubernetes.io/component: alertmanager
+type: Opaque
+stringData:
+  alertmanager.yml: |
+    global:
+      resolve_timeout: 5m
+      {{- if $r.email.enabled }}
+      smtp_from: {{ $r.email.from | quote }}
+      smtp_smarthost: {{ $r.email.smarthost | quote }}
+      smtp_auth_username: {{ $r.email.from | quote }}
+      smtp_auth_password_file: {{ printf "%s/%s" $secretDir $r.email.authPasswordSecretKey | quote }}
+      {{- end }}
+
+    # Severity-based routing tree. critical pages; warning notifies chat/email;
+    # the always-firing Watchdog (severity=none) is split off to the heartbeat
+    # receiver on a short repeat interval as a dead-man's-switch.
+    route:
+      group_by: ['alertname', 'component']
+      group_wait: 30s
+      group_interval: 5m
+      repeat_interval: 4h
+      receiver: kube-policies-default
+      routes:
+        - matchers:
+            - alertname="KubePoliciesWatchdog"
+          receiver: kube-policies-heartbeat
+          group_wait: 0s
+          group_interval: 1m
+          repeat_interval: 1m
+          continue: false
+        - matchers:
+            - severity="critical"
+          receiver: kube-policies-critical
+          continue: true
+        - matchers:
+            - severity="warning"
+          receiver: kube-policies-warning
+
+    # Suppress dependent warnings for a component while that component is down,
+    # to cut alert-storm noise during an outage.
+    inhibit_rules:
+      - source_matchers:
+          - alertname="KubePoliciesDown"
+        target_matchers:
+          - severity="warning"
+        equal: ['component']
+      - source_matchers:
+          - severity="critical"
+        target_matchers:
+          - severity="warning"
+        equal: ['component']
+
+    receivers:
+      # Safe default sink for anything that does not match a severity route.
+      - name: kube-policies-default
+
+      - name: kube-policies-critical
+        {{- if or $r.pagerduty.enabled $r.slack.enabled }}
+        {{- if $r.pagerduty.enabled }}
+        pagerduty_configs:
+          - routing_key_file: {{ printf "%s/%s" $secretDir $r.pagerduty.routingKeySecretKey | quote }}
+            send_resolved: true
+            description: '{{ `{{ .CommonLabels.alertname }}` }} ({{ `{{ .CommonLabels.severity }}` }})'
+        {{- end }}
+        {{- if $r.slack.enabled }}
+        slack_configs:
+          - api_url_file: {{ printf "%s/%s" $secretDir $r.slack.apiUrlSecretKey | quote }}
+            channel: {{ $r.slack.channel | quote }}
+            send_resolved: true
+            title: '{{ `{{ .CommonLabels.alertname }}` }}'
+            text: '{{ `{{ range .Alerts }}{{ .Annotations.description }}{{ "\n" }}{{ end }}` }}'
+        {{- end }}
+        {{- end }}
+
+      - name: kube-policies-warning
+        {{- if or $r.slack.enabled $r.email.enabled }}
+        {{- if $r.slack.enabled }}
+        slack_configs:
+          - api_url_file: {{ printf "%s/%s" $secretDir $r.slack.apiUrlSecretKey | quote }}
+            channel: {{ $r.slack.channel | quote }}
+            send_resolved: true
+            title: '{{ `{{ .CommonLabels.alertname }}` }}'
+            text: '{{ `{{ range .Alerts }}{{ .Annotations.description }}{{ "\n" }}{{ end }}` }}'
+        {{- end }}
+        {{- if $r.email.enabled }}
+        email_configs:
+          - to: {{ $r.email.to | quote }}
+            send_resolved: true
+        {{- end }}
+        {{- end }}
+
+      - name: kube-policies-heartbeat
+        {{- if $am.heartbeat.enabled }}
+        webhook_configs:
+          - url_file: {{ printf "%s/%s" $secretDir $am.heartbeat.urlSecretKey | quote }}
+            send_resolved: false
+        {{- end }}
+{{- end }}

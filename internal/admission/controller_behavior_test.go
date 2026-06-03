@@ -10,6 +10,8 @@ import (
 	"testing"
 
 	"github.com/gin-gonic/gin"
+	"github.com/prometheus/client_golang/prometheus"
+	dto "github.com/prometheus/client_model/go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
@@ -215,6 +217,55 @@ func TestMutateHandler_FailSafeOnEngineError(t *testing.T) {
 	assert.True(t, out.Response.Allowed, "mutate must allow when the engine errors")
 	assert.Empty(t, out.Response.Patch, "no patches should be returned on engine error")
 	assert.Nil(t, out.Response.PatchType)
+}
+
+// failOpenCount sums every child series of the kube_policies_admission_fail_open_total
+// counter from the package-shared collector, so a before/after delta isolates this
+// test from the other mutate-fail-open tests that share the global registry.
+func failOpenCount(t *testing.T) float64 {
+	t.Helper()
+	c := sharedMetrics.GetMetrics()["admission_fail_open"]
+	require.NotNil(t, c, "admission_fail_open must be registered in GetMetrics")
+	ch := make(chan prometheus.Metric, 16)
+	c.Collect(ch)
+	close(ch)
+	var total float64
+	for m := range ch {
+		var dtm dto.Metric
+		require.NoError(t, m.Write(&dtm))
+		if dtm.Counter != nil {
+			total += dtm.Counter.GetValue()
+		}
+	}
+	return total
+}
+
+// TestMutateHandler_FailOpenIsRecorded locks IRM-WU-08: a fail-open admission
+// (engine error on the mutate path) is observable via the fail_open counter so
+// the KubePoliciesFailOpenActive alert can fire. Without the metric the bypass
+// would be silent.
+func TestMutateHandler_FailOpenIsRecorded(t *testing.T) {
+	before := failOpenCount(t)
+
+	ctrl := newControllerWithStub(t, &stubEvaluator{err: errors.New("engine boom")})
+	out := postAdmissionReview(t, ctrl.MutateHandler, privilegedPodAdmissionRequest(t))
+
+	require.True(t, out.Response.Allowed, "precondition: mutate fails open on engine error")
+	assert.InDelta(t, before+1, failOpenCount(t), 1e-9,
+		"a fail-open admission must increment kube_policies_admission_fail_open_total")
+}
+
+// TestValidateHandler_DoesNotRecordFailOpen locks the contract that the
+// fail-CLOSED validate path never touches the fail-open counter.
+func TestValidateHandler_DoesNotRecordFailOpen(t *testing.T) {
+	before := failOpenCount(t)
+
+	ctrl := newControllerWithStub(t, &stubEvaluator{err: errors.New("engine boom")})
+	out := postAdmissionReview(t, ctrl.ValidateHandler, privilegedPodAdmissionRequest(t))
+
+	require.False(t, out.Response.Allowed, "precondition: validate fails closed on engine error")
+	assert.InDelta(t, before, failOpenCount(t), 1e-9,
+		"validate denies on engine error and must NOT increment the fail-open counter")
 }
 
 // Compile-time guards that *policy.Engine and the stub both satisfy the Evaluator interface.

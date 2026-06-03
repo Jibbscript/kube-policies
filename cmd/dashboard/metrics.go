@@ -7,6 +7,7 @@ import (
 	"math"
 	"net/http"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -15,6 +16,8 @@ import (
 	"github.com/prometheus/common/expfmt"
 	"github.com/prometheus/common/model"
 	"go.uber.org/zap"
+
+	"github.com/Jibbscript/kube-policies/internal/config"
 )
 
 // In prometheus/common v0.67+, expfmt.TextParser carries its OWN ValidationScheme
@@ -44,17 +47,31 @@ type TopViolatingRule struct {
 	Count  float64 `json:"count"`
 }
 
-// metricsClient is the HTTP client used to scrape upstream /metrics. Kept
-// short-timeout so a hung upstream cannot stall the summary endpoint.
-var metricsClient = &http.Client{Timeout: 5 * time.Second}
-
 // NewMetricsHandler returns a handler for GET /api/metrics/summary.
 //
 // It scrapes both upstream /metrics endpoints in parallel, parses Prometheus
 // text exposition format, and returns a typed summary. Failures of either
 // upstream are reported via the per-source *Degraded flags but never
 // surface as a 5xx — the endpoint always returns 200 (acceptance #8).
+//
+// When the upstream metrics endpoints serve TLS (CRY-WU-08), the scrape client
+// verifies their certificate via cfg.PolicyManagerCAPath (no InsecureSkipVerify)
+// and presents the bearer token — but only over https, so the token never
+// crosses a plaintext scrape.
 func NewMetricsHandler(cfg *Config, log *zap.Logger) gin.HandlerFunc {
+	// Short timeout so a hung upstream cannot stall the summary endpoint.
+	client := &http.Client{Timeout: 5 * time.Second}
+	// nil getClientCert: the metrics listeners (:9091 PM, :9090 webhook) use
+	// bearer-token auth, not mTLS, so the scraper presents no client certificate
+	// (IAM-WU-03).
+	if tlsConf, err := config.BuildClientTLSConfig(cfg.PolicyManagerCAPath, nil); err != nil {
+		log.Warn("metrics CA bundle unavailable; scraper falls back to system roots",
+			zap.String("policy_manager_ca_path", cfg.PolicyManagerCAPath), zap.Error(err))
+	} else if tlsConf != nil {
+		client.Transport = &http.Transport{TLSClientConfig: tlsConf}
+	}
+	token := cfg.MetricsToken
+
 	return func(c *gin.Context) {
 		ctx, cancel := context.WithTimeout(c.Request.Context(), 6*time.Second)
 		defer cancel()
@@ -68,11 +85,11 @@ func NewMetricsHandler(cfg *Config, log *zap.Logger) gin.HandlerFunc {
 		wg.Add(2)
 		go func() {
 			defer wg.Done()
-			pmFamilies, pmErr = scrapeMetrics(ctx, cfg.PolicyManagerMetricsURL)
+			pmFamilies, pmErr = scrapeMetrics(ctx, cfg.PolicyManagerMetricsURL, client, token)
 		}()
 		go func() {
 			defer wg.Done()
-			awFamilies, awErr = scrapeMetrics(ctx, cfg.AdmissionWebhookMetricsURL)
+			awFamilies, awErr = scrapeMetrics(ctx, cfg.AdmissionWebhookMetricsURL, client, token)
 		}()
 		wg.Wait()
 
@@ -105,12 +122,17 @@ func NewMetricsHandler(cfg *Config, log *zap.Logger) gin.HandlerFunc {
 // scrapeMetrics fetches and parses a Prometheus text-format /metrics endpoint.
 // Returns an error if the upstream is unreachable, returns non-2xx, or
 // produces unparseable output.
-func scrapeMetrics(ctx context.Context, url string) (map[string]*dto.MetricFamily, error) {
+func scrapeMetrics(ctx context.Context, url string, client *http.Client, token string) (map[string]*dto.MetricFamily, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return nil, err
 	}
-	resp, err := metricsClient.Do(req)
+	// Present the bearer token only over https so it never crosses a plaintext
+	// scrape (CRY-WU-08). Token-protected /metrics is only served over TLS.
+	if token != "" && strings.HasPrefix(url, "https://") {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	resp, err := client.Do(req)
 	if err != nil {
 		return nil, err
 	}

@@ -1,0 +1,48 @@
+# Illustrative example mirroring the bundled require-image-digest policy (internal/policy). NOT loaded automatically; copy/adapt into your own Policy CR. The engine compiles every rule alongside data.kube_policies.lib (internal/policy/rego/podspec.rego).
+apiVersion: policies.kube-policies.io/v1
+kind: Policy
+metadata:
+  name: require-image-digest
+  namespace: kube-policies-system
+  labels:
+    category: supply-chain
+    severity: high
+spec:
+  description: "Require container images to be pinned by immutable digest (@sha256:...)"
+  enabled: false
+
+  targets:
+    kinds:
+      - apiGroup: ""
+        kinds: ["Pod"]
+      - apiGroup: "apps"
+        kinds: ["Deployment", "ReplicaSet", "DaemonSet", "StatefulSet"]
+      - apiGroup: "batch"
+        kinds: ["Job", "CronJob"]
+
+  rules:
+    - name: require-image-digest
+      severity: HIGH
+      description: "Container images must be pinned by immutable digest (@sha256:...)"
+      frameworks: ["NIST-800-53", "NIST-800-190", "SLSA", "NSA-Hardening-SupplyChain", "NIST SR-4"]
+      rego: |
+        package kube_policies
+
+        import rego.v1
+
+        import data.kube_policies.lib as lib
+
+        default evaluate := {"allowed": true}
+
+        evaluate := {
+        	"allowed": false,
+        	"message": sprintf("Container image '%s' must be pinned by immutable digest (@sha256:...) for verifiable provenance", [entry.container.image]),
+        	"path": sprintf("%s.image", [entry.path]),
+        } if {
+        	offending := [e |
+        		some e in lib.containers_with_paths
+        		not contains(e.container.image, "@sha256:")
+        	]
+        	count(offending) > 0
+        	entry := offending[0]
+        }

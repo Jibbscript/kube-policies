@@ -1,0 +1,108 @@
+# Least-privilege RBAC for the standalone Falco DaemonSet.
+# Falco only reads Kubernetes metadata (pods, nodes, namespaces, events) for
+# log enrichment — it does not write any cluster resources.
+# NIST SI-4, AC-6; IRM-WU-23.
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: falco
+  namespace: falco-system
+  labels:
+    app.kubernetes.io/name: falco
+    app.kubernetes.io/component: runtime-detection
+    app.kubernetes.io/managed-by: kustomize
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: falco-runtime-detection
+  labels:
+    app.kubernetes.io/name: falco
+    app.kubernetes.io/component: runtime-detection
+    app.kubernetes.io/managed-by: kustomize
+rules:
+  # Pod metadata for container/workload enrichment in Falco event output.
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [get, list, watch]
+  # Node metadata for host enrichment.
+  - apiGroups: [""]
+    resources: [nodes]
+    verbs: [get, list, watch]
+  # Namespace metadata for k8s.ns.name enrichment (used in kube_policies_pods macro).
+  - apiGroups: [""]
+    resources: [namespaces]
+    verbs: [get, list, watch]
+  # ReplicationController / ReplicaSet / Deployment owner references for enrichment.
+  - apiGroups: [""]
+    resources: [replicationcontrollers]
+    verbs: [get, list, watch]
+  - apiGroups: [apps]
+    resources: [replicasets, deployments, daemonsets, statefulsets]
+    verbs: [get, list, watch]
+  # Events: Falco can emit Kubernetes events on findings (optional, controlled
+  # by falco.json_output / output_rules). List/watch needed for deduplication.
+  - apiGroups: [""]
+    resources: [events]
+    verbs: [get, list, watch]
+  # Services: needed for network enrichment of egress connections.
+  - apiGroups: [""]
+    resources: [services]
+    verbs: [get, list, watch]
+  # ConfigMaps in falco-system only — allows Falco to reload rules without restart
+  # (used with falco --watch-config-files). Restricted to falco-system namespace
+  # via the ClusterRoleBinding below combined with the namespace-scoped Role.
+  # NOTE: Falco does NOT need cluster-wide ConfigMap read; that is enforced by
+  # using a Role (namespace-scoped) for this resource — see role-falco-system.yaml.
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: falco-runtime-detection
+  labels:
+    app.kubernetes.io/name: falco
+    app.kubernetes.io/component: runtime-detection
+    app.kubernetes.io/managed-by: kustomize
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: falco-runtime-detection
+subjects:
+  - kind: ServiceAccount
+    name: falco
+    namespace: falco-system
+---
+# Namespace-scoped Role: allows Falco to read ConfigMaps in falco-system only
+# (for --watch-config-files hot-reload without cluster-wide ConfigMap access).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: falco-configmap-reader
+  namespace: falco-system
+  labels:
+    app.kubernetes.io/name: falco
+    app.kubernetes.io/component: runtime-detection
+    app.kubernetes.io/managed-by: kustomize
+rules:
+  - apiGroups: [""]
+    resources: [configmaps]
+    verbs: [get, list, watch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: falco-configmap-reader
+  namespace: falco-system
+  labels:
+    app.kubernetes.io/name: falco
+    app.kubernetes.io/component: runtime-detection
+    app.kubernetes.io/managed-by: kustomize
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: falco-configmap-reader
+subjects:
+  - kind: ServiceAccount
+    name: falco
+    namespace: falco-system

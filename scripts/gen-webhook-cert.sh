@@ -59,12 +59,14 @@ IP.1  = 127.0.0.1
 EOF
 
 # 1. Issuing CA — self-signed, used as caBundle in the VWC.
-openssl req -new -newkey rsa:2048 -nodes -x509 -days 365 \
+#    ECDSA P-256 + SHA-256 (CRY-WU-11 approved key strength; see
+#    docs/compliance/crypto-standards.md). -sha256 is explicit for auditability.
+openssl req -new -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -x509 -days 365 -sha256 \
   -subj "/CN=kube-policies-webhook-ca" \
   -keyout "$CA_KEY" -out "$CA_CERT" >/dev/null 2>&1
 
-# 2. Leaf key + CSR (CN = service FQDN).
-openssl req -new -newkey rsa:2048 -nodes \
+# 2. Leaf key + CSR (CN = service FQDN). ECDSA P-256 (CRY-WU-11).
+openssl req -new -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes \
   -config "$LEAF_CONF" \
   -keyout "$LEAF_KEY" -out "$LEAF_CSR" >/dev/null 2>&1
 

@@ -1,0 +1,110 @@
+# Production overlay for kube-policies.
+#
+# Apply on top of values.yaml for production / ATO-relevant deployments:
+#   helm upgrade --install kube-policies charts/kube-policies \
+#     -f charts/kube-policies/values.yaml \
+#     -f charts/kube-policies/values-production.yaml
+#
+# This overlay tightens the cryptographic posture to the FedRAMP-Moderate
+# baseline. It is intentionally additive — only the values that must differ
+# from the dev defaults are set here.
+
+# FIPS 140-3 is mandatory in production: each binary runs the startup self-test
+# and aborts if the validated module is not active (CRY-WU-02). Images are
+# already built with GOFIPS140 and default to fips140=on.
+fips:
+  required: true
+  godebug: "fips140=on"
+
+# cert-manager provisions webhook TLS in production (CRY-WU-09), replacing the
+# demo-only sprig self-signed path (which is fixed RSA-2048). Requires
+# cert-manager to be pre-installed in the cluster. The issued cert uses the
+# approved key strength (ECDSA P-256, CRY-WU-11). For a real PKI chain set
+# issuerType=ca (with caSecretName) or issuerType=existing (with issuerRef).
+certManager:
+  enabled: true
+  issuerType: selfsigned
+
+# Disable the demo sprig autoGenerate path so a missing cert-manager setup fails
+# loudly rather than silently falling back to a fixed RSA-2048 self-signed cert.
+#
+# Enforce apiserver mutual TLS on the webhook listener (IAM-WU-06): the webhook
+# requires + verifies the kube-apiserver's client certificate. requireClientCert
+# makes the render fail closed unless admissionWebhook.tls.clientCA (the apiserver
+# client-CA bundle) is also supplied — set it via an additional -f override or
+# --set admissionWebhook.tls.clientCA=... for your cluster.
+admissionWebhook:
+  tls:
+    autoGenerate: false
+    requireClientCert: true
+
+policyManager:
+  tls:
+    autoGenerate: false
+    # Enforce mutual TLS on the :8080 API (IAM-WU-03): the policy-manager
+    # requires + verifies a client certificate from the webhook and dashboard,
+    # and cert-manager issues those client certs (certManager.enabled=true above).
+    mtls:
+      enabled: true
+  # Inter-service auth for the decisions channel (IAM-WU-11): audience-bound
+  # projected ServiceAccount token validated via TokenReview. Pinned explicitly
+  # here (matches the chart default) so production never silently runs the static
+  # escape hatch.
+  internalAuth:
+    mode: tokenreview
+    audience: "policy-manager"
+
+# Protect the webhook/policy-manager /metrics endpoints with TLS + bearer auth
+# (CRY-WU-08). Requires the Prometheus scrape config to use https + ca_file +
+# bearer_token_file (see monitoring/prometheus/prometheus.yaml). /healthz +
+# /readyz stay open for probes.
+metrics:
+  tls:
+    enabled: true
+
+# Tamper-evident audit log (AUD-WU-04/05, AU-9). Supply audit.integrity.key
+# (a CSPRNG-generated HMAC key) or an external secret rather than relying on the
+# chart's demo key generation.
+audit:
+  integrity:
+    enabled: true
+
+# Management API authentication is MANDATORY in production (P3 Increment 1):
+# the policy-manager :8080 API enforces OIDC bearer-token auth instead of
+# shipping unauthenticated. This overlay turns it on but does NOT hardcode an
+# issuer — the operator MUST supply issuer, jwksUrl, and a non-empty audience
+# for their environment. The chart's render-fail guard makes these effectively
+# required: with auth.enabled=true and any of them empty,
+#   helm template -f values-production.yaml
+# is EXPECTED TO FAIL with
+#   "auth.enabled=true requires auth.issuer, auth.jwksUrl, and a non-empty auth.audience"
+# Set them via additional -f overrides or --set, e.g.:
+#   --set auth.issuer=https://oidc.example.com \
+#   --set auth.jwksUrl=https://oidc.example.com/keys \
+#   --set 'auth.audience={kube-policies}'
+auth:
+  enabled: true
+  # REQUIRED — supply per environment (left empty so the render fails until set).
+  issuer: ""
+  jwksUrl: ""
+  audience: []
+  rbac:
+    # Grant authenticated users with no matching binding a read-only role.
+    defaultRole: viewer
+    # Sample bindings — replace the group names with your IdP groups.
+    roleBindings:
+      - role: admin
+        groups: ["platform-admins"]
+      - role: editor
+        groups: ["policy-authors"]
+
+# If the dashboard is enabled in production, terminate TLS in-pod and emit HSTS
+# (CRY-WU-07). Harmless when dashboard.enabled stays false. Operators who
+# terminate TLS at the Ingress instead can leave dashboard.tls.enabled false and
+# emit HSTS at the Ingress.
+dashboard:
+  tls:
+    enabled: true
+    autoGenerate: false
+    hsts:
+      enabled: true

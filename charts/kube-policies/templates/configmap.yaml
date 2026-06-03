@@ -2,6 +2,15 @@
 {{- if not (or (eq $auditBackendType "file") (eq $auditBackendType "stdout")) -}}
 {{- fail (printf "audit.backend.type=%q is not supported by the runtime; use file or stdout" $auditBackendType) -}}
 {{- end -}}
+{{- /* Fail-closed guard for management-API authentication (P3 Increment 1).
+       When auth.enabled=true, OIDC issuer/jwksUrl/audience are mandatory; an
+       enabled-but-misconfigured render is a security regression, so refuse to
+       render. Mirrors the metrics.tls / webhook-TLS render-fail guards. */ -}}
+{{- if .Values.auth.enabled -}}
+{{- if or (empty .Values.auth.issuer) (empty .Values.auth.jwksUrl) (empty .Values.auth.audience) -}}
+{{- fail "auth.enabled=true requires auth.issuer, auth.jwksUrl, and a non-empty auth.audience" -}}
+{{- end -}}
+{{- end -}}
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -20,10 +29,53 @@ data:
       buffer_size: {{ .Values.audit.bufferSize | default 1024 }}
       flush_interval: {{ .Values.audit.flushInterval | default "10s" | quote }}
       retention: {{ .Values.audit.retention | default "90d" | quote }}
-      {{- if eq $auditBackendType "file" }}
-      # Map the YAML directory `audit.backend.file.path` to a concrete
-      # filename. The audit logger's createBackend reads
-      # `config.filename` for the file backend.
+      {{- if or (eq $auditBackendType "file") .Values.audit.integrity.enabled }}
       config:
+        {{- if eq $auditBackendType "file" }}
+        # Map the YAML directory `audit.backend.file.path` to a concrete
+        # filename. The audit logger's createBackend reads `config.filename`.
         filename: {{ printf "%s/audit.log" (.Values.audit.backend.file.path | default "/var/log/kube-policies") | quote }}
+        {{- end }}
+        {{- if .Values.audit.integrity.enabled }}
+        # Tamper-evidence HMAC key path (AUD-WU-04/05). Its presence enables the
+        # integrity chain; the key Secret is mounted at this path.
+        integrity_key_path: {{ .Values.audit.integrity.keyPath | default "/etc/audit-integrity/key" | quote }}
+        {{- end }}
       {{- end }}
+    security:
+      # Management API authentication (policy-manager :8080). When
+      # authentication.enabled=false the API is UNAUTHENTICATED (dev only;
+      # tracked gap). Production sets auth.enabled=true (values-production.yaml),
+      # which the render-fail guard above gates on issuer/jwks_url/audience.
+      authentication:
+        enabled: {{ .Values.auth.enabled }}
+        {{- if .Values.auth.enabled }}
+        issuer: {{ .Values.auth.issuer | quote }}
+        jwks_url: {{ .Values.auth.jwksUrl | quote }}
+        audience:
+          {{- toYaml .Values.auth.audience | nindent 10 }}
+        username_claim: {{ .Values.auth.usernameClaim | default "sub" | quote }}
+        groups_claim: {{ .Values.auth.groupsClaim | default "groups" | quote }}
+        {{- end }}
+      rbac:
+        # default_role grants a role to authenticated users without a matching
+        # binding; "" denies mutations to such users.
+        default_role: {{ .Values.auth.rbac.defaultRole | quote }}
+        {{- if .Values.auth.rbac.roleBindings }}
+        role_bindings:
+          {{- toYaml .Values.auth.rbac.roleBindings | nindent 10 }}
+        {{- else }}
+        role_bindings: []
+        {{- end }}
+      # Rate-limiting / DoS-protection (NET-WU-14/15, RES-WU-17). Flows through
+      # the shared config.yaml ConfigMap so the webhook and policy-manager pick
+      # the same limits up via security.ratelimit.*. Limits are PER-REPLICA;
+      # defaults are tuned to protect the fail-closed webhook from a flood
+      # without throttling legitimate apiserver admission traffic.
+      ratelimit:
+        enabled: {{ .Values.rateLimit.enabled }}
+        requests_per_second: {{ .Values.rateLimit.requestsPerSecond }}
+        burst: {{ .Values.rateLimit.burst }}
+        max_concurrent: {{ .Values.rateLimit.maxConcurrent }}
+        max_body_bytes: {{ .Values.rateLimit.maxBodyBytes | int64 }}
+        max_stream_connections: {{ .Values.rateLimit.maxStreamConnections }}

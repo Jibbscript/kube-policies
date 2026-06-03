@@ -1,0 +1,40 @@
+# NEGATIVE fixture for restricted.pss (CFG-WU-12), evaluated per-document.
+#
+# An in-scope control-plane Deployment (policy-manager component) whose
+# container sets allowPrivilegeEscalation: true. PSS-Restricted forbids
+# privilege escalation (CIS 5.2.5); the allowPrivilegeEscalation rule MUST deny.
+#
+# conftest test --namespace restricted.pss MUST exit non-zero.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: regression-priv-escalation
+  labels:
+    app.kubernetes.io/name: kube-policies
+    app.kubernetes.io/component: policy-manager
+spec:
+  template:
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        runAsGroup: 65534
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: manager
+          securityContext:
+            allowPrivilegeEscalation: true
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsGroup: 65534
+            capabilities:
+              drop:
+                - ALL
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi

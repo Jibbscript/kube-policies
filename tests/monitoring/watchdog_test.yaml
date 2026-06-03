@@ -1,0 +1,63 @@
+# promtool unit tests for the kube-policies-watchdog group (IRM-WU-12):
+# the always-firing heartbeat and the no-traffic absent() watchdog.
+rule_files:
+  - ../../charts/kube-policies/files/alerts/watchdog.yaml
+
+evaluation_interval: 1m
+
+tests:
+  # Watchdog must ALWAYS evaluate true (dead-man's-switch heartbeat). No input
+  # series are needed for vector(1). NoTraffic also fires here (no admission
+  # traffic series), which is correct.
+  - interval: 1m
+    input_series: []
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: KubePoliciesWatchdog
+        exp_alerts:
+          - exp_labels:
+              severity: none
+            exp_annotations:
+              description: "This alert is always firing. It is routed to the dead-man's-switch heartbeat receiver; if it stops arriving, the monitoring pipeline (Prometheus/Alertmanager) is down and on-call must investigate."
+              summary: "kube-policies monitoring heartbeat"
+
+  # NoTraffic must fire when the admission-requests series is absent for >10m.
+  - interval: 1m
+    input_series: []
+    alert_rule_test:
+      - eval_time: 12m
+        alertname: KubePoliciesNoTraffic
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              description: "No admission requests have been recorded for >10m. Either the apiserver is no longer calling the webhook (ValidatingWebhookConfiguration removed, caBundle broken, or selectors excluding everything) or metrics scraping is broken — both mean enforcement may be silently bypassed."
+              runbook_url: "https://github.com/Jibbscript/kube-policies/blob/main/docs/security/runbooks/webhook-outage.md"
+              summary: "kube-policies admission webhook is receiving no traffic"
+
+  # NoTraffic must FIRE when the series EXISTS but traffic has stopped (flat
+  # counter => rate 0). This is the real-world scenario absent() alone misses.
+  - interval: 1m
+    input_series:
+      - series: 'kube_policies_admission_requests_total{operation="validate",status="allowed",reason="ok"}'
+        values: '500x15'
+    alert_rule_test:
+      - eval_time: 12m
+        alertname: KubePoliciesNoTraffic
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              description: "No admission requests have been recorded for >10m. Either the apiserver is no longer calling the webhook (ValidatingWebhookConfiguration removed, caBundle broken, or selectors excluding everything) or metrics scraping is broken — both mean enforcement may be silently bypassed."
+              runbook_url: "https://github.com/Jibbscript/kube-policies/blob/main/docs/security/runbooks/webhook-outage.md"
+              summary: "kube-policies admission webhook is receiving no traffic"
+
+  # NoTraffic must NOT fire while admission traffic is present (counter rising).
+  - interval: 1m
+    input_series:
+      - series: 'kube_policies_admission_requests_total{operation="validate",status="allowed",reason="ok"}'
+        values: '0+60x15'
+    alert_rule_test:
+      - eval_time: 12m
+        alertname: KubePoliciesNoTraffic
+        exp_alerts: []

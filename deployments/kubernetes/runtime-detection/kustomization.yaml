@@ -1,0 +1,33 @@
+# kustomization.yaml — standalone Falco runtime-detection for kube-policies.
+#
+# OPT-IN: Apply with:
+#   kubectl apply -k deployments/kubernetes/runtime-detection/
+#
+# Prerequisites:
+#   1. A supported CNI plugin (Calico, Cilium, etc.) for NetworkPolicy enforcement.
+#   2. A kernel that supports the eBPF CO-RE probe (5.8+) OR the Falco kernel module.
+#   3. The kube-policies-system namespace already exists (created by Helm or base/).
+#
+# This overlay targets the admission-webhook + policy-manager workloads in
+# kube-policies-system. It does NOT deploy the kube-policies control plane itself.
+# Falco is cluster infrastructure; deploy once and load additional rule overlays
+# per application team.
+#
+# NIST SI-4, SI-4(2), SI-4(4), SC-7; IRM-WU-23.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - namespace.yaml
+  - rbac.yaml
+  - configmap.yaml
+  - daemonset.yaml
+
+# Common labels applied to all resources.
+commonLabels:
+  app.kubernetes.io/part-of: kube-policies-runtime-detection
+
+# Common annotations for audit traceability.
+commonAnnotations:
+  kube-policies/compliance: "NIST-SI-4,SI-4(2),SI-4(4),SC-7"
+  kube-policies/opt-in: "true"

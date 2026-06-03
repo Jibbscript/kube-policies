@@ -39,6 +39,10 @@ spec:
         prometheus.io/path: "/metrics"
     spec:
       serviceAccountName: kube-policies-admission-webhook
+      # IAM-WU-10 (CIS 5.1.5/5.1.6): the SA defaults automount off; the webhook opts
+      # the token back in here because the controller-runtime client + leader election
+      # authenticate to the apiserver with it.
+      automountServiceAccountToken: true
       securityContext:
         runAsNonRoot: true
         runAsUser: 65534
@@ -57,7 +61,13 @@ spec:
               topologyKey: kubernetes.io/hostname
       containers:
       - name: admission-webhook
-        image: ghcr.io/enterprise/admission-webhook:v1.0.0
+        # SUP-WU-09 (CM-2/SI-7): real published repository (the prior
+        # ghcr.io/enterprise/admission-webhook:v1.0.0 was a placeholder). This
+        # raw base is a reference manifest; the SUPPORTED, digest-pinned install
+        # path is the Helm chart (set admissionWebhook.image.digest to render
+        # repository@sha256:...). Replace the tag with @sha256:<digest> from the
+        # release before applying this base directly in production.
+        image: ghcr.io/jibbscript/kube-policies/admission-webhook:1.0.0
         imagePullPolicy: IfNotPresent
         ports:
         - name: webhook
@@ -83,6 +93,13 @@ spec:
         - --port=8443
         - --metrics-port=9090
         - --config=/etc/config/config.yaml
+        # IAM-WU-06: this base/example manifest runs the webhook WITHOUT
+        # apiserver-client-cert verification (dev only; tracked gap). The binary
+        # defaults --require-client-cert=true (fail closed); we explicitly set it
+        # false here because this base ships no apiserver client-CA bundle and the
+        # webhook would otherwise refuse to start. PRODUCTION uses the Helm chart
+        # with admissionWebhook.tls.requireClientCert=true + a clientCA bundle.
+        - --require-client-cert=false
         securityContext:
           allowPrivilegeEscalation: false
           readOnlyRootFilesystem: true
@@ -101,11 +118,21 @@ spec:
           limits:
             cpu: 500m
             memory: 512Mi
+        # Probes target the metrics server (port 9090) over plain HTTP. The
+        # webhook TLS port (8443) cannot serve a plain-HTTP probe, and once
+        # mutual TLS is enforced (client_auth=require + a client CA) an HTTPS
+        # probe without a client cert would fail the handshake and kill the pod.
+        # liveness uses /healthz (process up); readiness uses /readyz, which the
+        # binary now gates on the real :8443 TLS listener (RES-WU-06) so a pod
+        # with a down TLS listener is pulled from the Service endpoints.
+        # NOTE: this kustomize base intentionally omits the chart-only resilience
+        # tuning (startupProbe, --shutdown-drain-delay, preStop); the Helm chart is
+        # the recommended, fully-hardened deployment path.
         livenessProbe:
           httpGet:
             path: /healthz
-            port: webhook
-            scheme: HTTPS
+            port: metrics
+            scheme: HTTP
           initialDelaySeconds: 30
           periodSeconds: 10
           timeoutSeconds: 5
@@ -113,8 +140,8 @@ spec:
         readinessProbe:
           httpGet:
             path: /readyz
-            port: webhook
-            scheme: HTTPS
+            port: metrics
+            scheme: HTTP
           initialDelaySeconds: 5
           periodSeconds: 5
           timeoutSeconds: 3
@@ -128,6 +155,15 @@ spec:
           readOnly: true
         - name: tmp
           mountPath: /tmp
+        # AUD-WU-08 (NIST AU-9/AU-11): writable mount for the file audit backend.
+        # readOnlyRootFilesystem: true blocks mkdir on the overlay; this emptyDir
+        # gives the audit logger a writable directory at the path the config
+        # targets (audit.config.filename: /var/log/kube-policies/audit.log).
+        # For persistence beyond pod lifetime use the Helm chart with
+        # audit.persistence.enabled=true (PVC) or audit.forwarder.enabled=true
+        # (log-shipping DaemonSet, preferred for multi-replica deployments).
+        - name: audit-log
+          mountPath: /var/log/kube-policies
       volumes:
       - name: certs
         secret:
@@ -137,6 +173,8 @@ spec:
         configMap:
           name: kube-policies-config
       - name: tmp
+        emptyDir: {}
+      - name: audit-log
         emptyDir: {}
       terminationGracePeriodSeconds: 30
       dnsPolicy: ClusterFirst
@@ -206,24 +244,50 @@ data:
           - "TLS_AES_256_GCM_SHA384"
           - "TLS_CHACHA20_POLY1305_SHA256"
           - "TLS_AES_128_GCM_SHA256"
-        client_auth: "require"
+        # client_auth is set to "none" here because this base/example manifest
+        # does NOT mount an apiserver client-CA bundle (no client_ca_path volume
+        # or Secret). Setting "require" without a CA bundle would be internally
+        # inconsistent: BuildServerTLSConfig silently degrades to NoClientCert
+        # when clientCAs==nil, so the declared intent would be silently no-opped.
+        #
+        # Production mutual TLS enforcement is NOT configured here. It is
+        # provided by:
+        #   1. The Helm chart, which mounts the apiserver client-CA bundle and
+        #      passes --client-ca-path to the webhook, AND
+        #   2. The --require-client-cert=true default on the webhook binary, which
+        #      fails CLOSED at startup if no client-CA bundle is supplied.
+        #
+        # To enable mTLS in a non-Helm deployment, set client_ca_path to the
+        # mounted apiserver CA bundle path and pass --client-ca-path accordingly.
+        # See deployments/kubernetes/helm/ and cmd/admission-webhook/main.go.
+        # (NET-WU-24: base manifest made consistent with what it actually provisions)
+        client_auth: "none"
+      # This base/example manifest ships the policy-manager management API with
+      # authentication DISABLED (dev only; tracked gap). It is NOT production
+      # secure. The production path is the Helm chart with auth.enabled=true,
+      # which enforces OIDC bearer-token auth and REFUSES TO RENDER without an
+      # issuer, jwksUrl, and audience.
+      authentication:
+        enabled: false
       rbac:
-        enabled: true
-        provider: "kubernetes"
         default_role: "viewer"
-      encryption:
-        at_rest:
-          enabled: true
-          algorithm: "AES-256-GCM"
-          key_source: "kubernetes-secret"
-        in_transit:
-          enabled: true
-          mode: "strict"
-    
+      # NOTE: no security.encryption stanza — at-rest protection is a cluster
+      # EncryptionConfiguration + KMS concern, not an in-app control (CRY-WU-15;
+      # see deployments/kubernetes/encryption/ and docs/compliance/secrets-at-rest.md).
+
     storage:
       type: "memory"
       config: {}
 ---
+# RES-WU-09 (CP-2/CP-10/SC-5): the Helm chart (charts/kube-policies) is the
+# SINGLE SOURCE OF TRUTH for webhook coverage; this kustomize base is kept in
+# sync with it. The rule sets below are aligned to Pods — the kind the bundled
+# default policies actually evaluate (internal/policy). The previous base covered
+# services/configmaps/secrets/workloads/networking/RBAC with no matching default
+# policies, which only widened the fail-closed blast radius without adding
+# enforcement; add kinds back here (and in the chart values) only when you load
+# Policies that target them. namespaceSelector uses the auto-applied
+# kubernetes.io/metadata.name label (not the manual "name" label).
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingWebhookConfiguration
 metadata:
@@ -242,26 +306,16 @@ webhooks:
   - operations: ["CREATE", "UPDATE"]
     apiGroups: [""]
     apiVersions: ["v1"]
-    resources: ["pods", "services", "configmaps", "secrets"]
-  - operations: ["CREATE", "UPDATE"]
-    apiGroups: ["apps"]
-    apiVersions: ["v1"]
-    resources: ["deployments", "replicasets", "daemonsets", "statefulsets"]
-  - operations: ["CREATE", "UPDATE"]
-    apiGroups: ["networking.k8s.io"]
-    apiVersions: ["v1"]
-    resources: ["networkpolicies", "ingresses"]
-  - operations: ["CREATE", "UPDATE"]
-    apiGroups: ["rbac.authorization.k8s.io"]
-    apiVersions: ["v1"]
-    resources: ["roles", "rolebindings", "clusterroles", "clusterrolebindings"]
+    resources: ["pods"]
+    scope: "Namespaced"
   namespaceSelector:
     matchExpressions:
-    - key: name
+    - key: kubernetes.io/metadata.name
       operator: NotIn
       values: ["kube-system", "kube-public", "kube-node-lease", "kube-policies-system"]
-  admissionReviewVersions: ["v1", "v1beta1"]
+  admissionReviewVersions: ["v1"]
   sideEffects: None
+  # Validate fails CLOSED (Fail) — a violation or an unreachable webhook blocks admission.
   failurePolicy: Fail
   timeoutSeconds: 10
 ---
@@ -284,16 +338,16 @@ webhooks:
     apiGroups: [""]
     apiVersions: ["v1"]
     resources: ["pods"]
-  - operations: ["CREATE", "UPDATE"]
-    apiGroups: ["apps"]
-    apiVersions: ["v1"]
-    resources: ["deployments", "replicasets", "daemonsets", "statefulsets"]
+    scope: "Namespaced"
   namespaceSelector:
     matchExpressions:
-    - key: name
+    - key: kubernetes.io/metadata.name
       operator: NotIn
       values: ["kube-system", "kube-public", "kube-node-lease", "kube-policies-system"]
-  admissionReviewVersions: ["v1", "v1beta1"]
+  admissionReviewVersions: ["v1"]
   sideEffects: None
-  failurePolicy: Fail
+  # Mutate fails OPEN (Ignore) per build/docker + chart AGENTS.md guidance: a
+  # transient mutation error must not block admission (validate stays fail-closed).
+  failurePolicy: Ignore
+  reinvocationPolicy: IfNeeded
   timeoutSeconds: 10

@@ -1,0 +1,303 @@
+# VUL-WU-10: Base-image CVE rebuild trigger
+#
+# NIST controls: SI-2 (Flaw Remediation), SP 800-190 §3.1 (Image Currency),
+# SLSA L3 (reproducible, verified builds from pinned sources).
+#
+# PURPOSE
+# -------
+# Dependabot's docker ecosystem already covers scheduled digest bumps (see
+# .github/dependabot.yml). This workflow is the FASTER, CVE-driven complement:
+# it runs on a weekly schedule (and on-demand) and raises an immediate PR *and*
+# a tracking issue the moment any pinned base-image digest diverges from the
+# current upstream digest for its tag. The PR is the primary remediation path;
+# the issue provides a durable audit trail with remediation SLA.
+#
+# IMPLEMENTATION NOTE
+# -------------------
+# We implement BOTH paths:
+#   (a) PR via peter-evans/create-pull-request  — automated rewrite of FROM …@sha256: lines.
+#       The PR requires human review/merge; the workflow only opens it.
+#   (b) Tracking issue via gh CLI               — lists stale pins + new digests,
+#       provides the SLA reminder, and remains open until the PR is merged.
+#
+# crane (gcr.io/go-containerregistry/crane) is used for digest resolution;
+# we pin it by release version + SHA256 checksum for supply-chain integrity (SLSA L3).
+
+name: Base-Image CVE Refresh
+
+on:
+  schedule:
+    # 05:00 UTC every Tuesday — offset from other nightly/weekly jobs
+    - cron: '0 5 * * 2'
+  workflow_dispatch:
+
+permissions:
+  contents: write       # needed by create-pull-request to push the update branch
+  pull-requests: write  # needed by create-pull-request to open the PR
+  issues: write         # needed by gh issue create/edit for the tracking issue
+
+concurrency:
+  group: base-image-refresh
+  cancel-in-progress: true
+
+env:
+  # crane (from google/go-containerregistry) v0.20.2 — linux/amd64.
+  # The release ships the suite tarball `go-containerregistry_Linux_x86_64.tar.gz`
+  # (contains crane/gcrane/krane). SHA256 verified against the upstream
+  # checksums.txt for v0.20.2.
+  CRANE_VERSION: '0.20.2'
+  CRANE_SHA256: 'c14340087103ba9dadf61d45acd20675490fd0ccbd56ac7901fc1b502137f44b'
+
+jobs:
+  check-and-refresh:
+    name: Check & Refresh Base-Image Digests
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+        with:
+          fetch-depth: 0
+
+      # -----------------------------------------------------------------------
+      # Install crane (pinned, checksum-verified) — no network trust beyond SHA
+      # -----------------------------------------------------------------------
+      - name: Install crane (pinned, checksum-verified)
+        run: |
+          set -euo pipefail
+          asset="go-containerregistry_Linux_x86_64.tar.gz"
+          url="https://github.com/google/go-containerregistry/releases/download/v${CRANE_VERSION}/${asset}"
+          curl -fsSL -o "${asset}" "${url}"
+          echo "${CRANE_SHA256}  ${asset}" | sha256sum -c -
+          tar -xzf "${asset}" crane
+          install -m 0755 crane /usr/local/bin/crane
+          rm -f "${asset}" crane
+
+      # -----------------------------------------------------------------------
+      # Resolve current upstream digests and compare to pinned values.
+      # All values come from the Dockerfiles themselves (grep) — never from
+      # user-controlled event inputs — so there is no injection risk here.
+      # -----------------------------------------------------------------------
+      - name: Resolve upstream digests and detect drift
+        id: drift
+        run: |
+          set -euo pipefail
+
+          # Read pinned digests directly from the Dockerfiles (source of truth)
+          pinned_golang="$(grep -m1 'golang:1\.25-alpine@sha256:' \
+            build/docker/admission-webhook.Dockerfile | grep -oP 'sha256:[a-f0-9]+')"
+          pinned_distroless="$(grep -m1 'distroless/static:nonroot@sha256:' \
+            build/docker/admission-webhook.Dockerfile | grep -oP 'sha256:[a-f0-9]+')"
+          pinned_node="$(grep -m1 'node:22-alpine@sha256:' \
+            build/Dockerfile.dashboard | grep -oP 'sha256:[a-f0-9]+')"
+
+          # Resolve current upstream digests via crane
+          upstream_golang="$(crane digest golang:1.25-alpine)"
+          upstream_distroless="$(crane digest gcr.io/distroless/static:nonroot)"
+          upstream_node="$(crane digest node:22-alpine)"
+
+          echo "golang:1.25-alpine       pinned=${pinned_golang}     upstream=${upstream_golang}"
+          echo "distroless/static:nonroot pinned=${pinned_distroless}  upstream=${upstream_distroless}"
+          echo "node:22-alpine            pinned=${pinned_node}        upstream=${upstream_node}"
+
+          drift_detected=false
+          drift_lines=""
+
+          if [ "${upstream_golang}" != "${pinned_golang}" ]; then
+            drift_detected=true
+            drift_lines="${drift_lines}
+          ### golang:1.25-alpine
+          | | Digest |
+          |---|---|
+          | Pinned | \`${pinned_golang}\` |
+          | Upstream | \`${upstream_golang}\` |
+          | Files | \`build/docker/admission-webhook.Dockerfile\`, \`build/docker/policy-manager.Dockerfile\`, \`build/Dockerfile.dashboard\` |
+          "
+          fi
+
+          if [ "${upstream_distroless}" != "${pinned_distroless}" ]; then
+            drift_detected=true
+            drift_lines="${drift_lines}
+          ### gcr.io/distroless/static:nonroot
+          | | Digest |
+          |---|---|
+          | Pinned | \`${pinned_distroless}\` |
+          | Upstream | \`${upstream_distroless}\` |
+          | Files | \`build/docker/admission-webhook.Dockerfile\`, \`build/docker/policy-manager.Dockerfile\` |
+          "
+          fi
+
+          if [ "${upstream_node}" != "${pinned_node}" ]; then
+            drift_detected=true
+            drift_lines="${drift_lines}
+          ### node:22-alpine
+          | | Digest |
+          |---|---|
+          | Pinned | \`${pinned_node}\` |
+          | Upstream | \`${upstream_node}\` |
+          | Files | \`build/Dockerfile.dashboard\` |
+          "
+          fi
+
+          echo "drift_detected=${drift_detected}" >> "${GITHUB_OUTPUT}"
+
+          # Write drift report to a file to avoid multiline env-var escaping issues
+          printf '%s' "${drift_lines}" > /tmp/drift_report.md
+
+          # Export upstream digests for the rewrite step (safe: crane output only)
+          {
+            echo "upstream_golang=${upstream_golang}"
+            echo "upstream_distroless=${upstream_distroless}"
+            echo "upstream_node=${upstream_node}"
+            echo "pinned_golang=${pinned_golang}"
+            echo "pinned_distroless=${pinned_distroless}"
+            echo "pinned_node=${pinned_node}"
+          } >> "${GITHUB_ENV}"
+
+      # -----------------------------------------------------------------------
+      # Rewrite FROM …@sha256: pins in Dockerfiles with updated digests.
+      # Only runs when drift was detected.
+      # -----------------------------------------------------------------------
+      - name: Rewrite pinned digests in Dockerfiles
+        if: steps.drift.outputs.drift_detected == 'true'
+        run: |
+          set -euo pipefail
+
+          # golang:1.25-alpine — three Dockerfiles
+          if [ "${upstream_golang}" != "${pinned_golang}" ]; then
+            echo "Updating golang:1.25-alpine  ${pinned_golang} -> ${upstream_golang}"
+            sed -i "s|golang:1\.25-alpine@${pinned_golang}|golang:1.25-alpine@${upstream_golang}|g" \
+              build/docker/admission-webhook.Dockerfile \
+              build/docker/policy-manager.Dockerfile \
+              build/Dockerfile.dashboard
+          fi
+
+          # gcr.io/distroless/static:nonroot — two Dockerfiles
+          if [ "${upstream_distroless}" != "${pinned_distroless}" ]; then
+            echo "Updating distroless/static:nonroot  ${pinned_distroless} -> ${upstream_distroless}"
+            sed -i "s|distroless/static:nonroot@${pinned_distroless}|distroless/static:nonroot@${upstream_distroless}|g" \
+              build/docker/admission-webhook.Dockerfile \
+              build/docker/policy-manager.Dockerfile
+          fi
+
+          # node:22-alpine — dashboard Dockerfile
+          if [ "${upstream_node}" != "${pinned_node}" ]; then
+            echo "Updating node:22-alpine  ${pinned_node} -> ${upstream_node}"
+            sed -i "s|node:22-alpine@${pinned_node}|node:22-alpine@${upstream_node}|g" \
+              build/Dockerfile.dashboard
+          fi
+
+      # -----------------------------------------------------------------------
+      # Open / update a PR with the rewritten Dockerfiles.
+      # peter-evans/create-pull-request v7 (same pinned SHA as ci.yml).
+      # The PR requires human review; this workflow only opens it.
+      # -----------------------------------------------------------------------
+      - name: Open base-image update PR
+        if: steps.drift.outputs.drift_detected == 'true'
+        id: cpr
+        uses: peter-evans/create-pull-request@22a9089034f40e5a961c8808d113e2c98fb63676  # v7
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          commit-message: 'fix(deps): bump base-image digests to current upstream [VUL-WU-10]'
+          branch: base-image-refresh/auto
+          delete-branch: true
+          title: 'fix(deps): bump base-image digests to current upstream [VUL-WU-10]'
+          labels: |
+            security
+            dependencies
+          body: |
+            ## Base-Image Digest Refresh (VUL-WU-10)
+
+            This PR was opened automatically by the **Base-Image CVE Refresh** workflow
+            (`.github/workflows/base-image-refresh.yml`).
+
+            **Compliance**: NIST SI-2, SP 800-190 §3.1, SLSA L3.
+
+            **Note**: Dependabot (docker ecosystem) also covers scheduled digest bumps.
+            This workflow is the faster, CVE-driven complement triggered weekly or on-demand.
+
+            ---
+
+            ### Detected digest drift
+
+            See the linked tracking issue for full details and remediation SLA.
+
+            ---
+
+            > Human review and merge required. The workflow rewrites only the
+            > `FROM …@sha256:` pins; no build logic is changed.
+
+      # -----------------------------------------------------------------------
+      # Open / update a tracking issue for durable audit trail + SLA reminder.
+      # Uses the gh CLI (pre-installed on ubuntu-latest runners).
+      # GH_TOKEN is a secret (not user-controlled input) — no injection risk.
+      # -----------------------------------------------------------------------
+      - name: Open or update tracking issue
+        if: steps.drift.outputs.drift_detected == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ steps.cpr.outputs.pull-request-number }}
+          PR_URL: ${{ steps.cpr.outputs.pull-request-url }}
+        run: |
+          set -euo pipefail
+
+          drift_body="$(cat /tmp/drift_report.md)"
+          run_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          run_date="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+          if [ -n "${PR_NUMBER}" ]; then
+            pr_line="**Remediation PR**: #${PR_NUMBER} — ${PR_URL}"
+          else
+            pr_line="**Remediation PR**: not created (Dockerfiles may already be current after rewrite; check the run log)"
+          fi
+
+          issue_body="## Base-Image Digest Drift Detected (VUL-WU-10)
+
+          **Workflow run**: ${run_url}
+          **Date**: ${run_date}
+          **Compliance**: NIST SI-2, SP 800-190 §3.1, SLSA L3
+
+          ${pr_line}
+
+          ---
+
+          ${drift_body}
+
+          ---
+
+          ### Remediation SLA
+          - **P1/High** (stale base image): merge within **7 calendar days** of issue open date.
+          - **P0/Critical** (CVE advisory linked): merge within **24 hours**.
+
+          This issue should be closed when the update PR is merged and CI passes."
+
+          # Check for an existing open tracking issue — update rather than duplicate
+          existing_issue="$(gh issue list \
+            --repo "${GITHUB_REPOSITORY}" \
+            --state open \
+            --label security \
+            --search 'in:title Base-Image Digest Drift' \
+            --json number \
+            --jq '.[0].number' 2>/dev/null || true)"
+
+          if [ -n "${existing_issue}" ] && [ "${existing_issue}" != "null" ]; then
+            echo "Adding comment to existing tracking issue #${existing_issue}"
+            gh issue comment "${existing_issue}" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --body "${issue_body}"
+          else
+            echo "Creating new tracking issue"
+            gh issue create \
+              --repo "${GITHUB_REPOSITORY}" \
+              --title "security: base-image digest drift detected [VUL-WU-10]" \
+              --label "security" \
+              --body "${issue_body}"
+          fi
+
+      - name: No drift detected
+        if: steps.drift.outputs.drift_detected == 'false'
+        run: echo "All base-image digests match upstream. No action required."

@@ -4,6 +4,12 @@ metadata:
   name: kube-policies-monitoring
   labels:
     name: kube-policies-monitoring
+    # CFG-WU-05/06 (CIS 5.2.1 / PSS-Restricted): enforce the restricted Pod
+    # Security Standard on the monitoring namespace. The hardened Prometheus/
+    # Grafana/Alertmanager workloads (CFG-WU-06/07/08) are admissible under it.
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/warn: restricted
 ---
 apiVersion: v1
 kind: ServiceAccount
@@ -70,6 +76,18 @@ data:
 
     scrape_configs:
       # Kube-Policies Admission Webhook
+      # Default (demo): metrics is plain HTTP. When the chart is deployed with
+      # metrics.tls.enabled=true (CRY-WU-08), /metrics serves TLS 1.3 and
+      # requires a bearer token. Then add to BOTH jobs below (and mount the
+      # serving CA + the <release>-internal-token Secret into this Prometheus
+      # pod — cross-namespace, so copy the Secrets into this namespace):
+      #     scheme: https
+      #     tls_config:
+      #       ca_file: /etc/prometheus/kp-tls/ca.crt
+      #       # role:endpoints dials the pod IP, so pin the Service SAN:
+      #       server_name: <job>.kube-policies-system.svc
+      #     bearer_token_file: /etc/prometheus/kp-token/token
+      # (Prefer ca_file over insecure_skip_verify.)
       - job_name: 'kube-policies-admission-webhook'
         kubernetes_sd_configs:
           - role: endpoints
@@ -83,11 +101,10 @@ data:
           - source_labels: [__meta_kubernetes_endpoint_port_name]
             action: keep
             regex: metrics
-        scheme: https
-        tls_config:
-          insecure_skip_verify: true
 
-      # Kube-Policies Policy Manager
+      # Kube-Policies Policy Manager (see the admission-webhook job above for the
+      # metrics.tls.enabled=true scrape shape; server_name becomes
+      # kube-policies-policy-manager.kube-policies-system.svc).
       - job_name: 'kube-policies-policy-manager'
         kubernetes_sd_configs:
           - role: endpoints
@@ -169,55 +186,23 @@ kind: ConfigMap
 metadata:
   name: prometheus-rules
   namespace: kube-policies-monitoring
+# IRM-WU-14: alert rules are NO LONGER embedded here. They previously duplicated
+# (and drifted from) the canonical rules. The SINGLE SOURCE OF TRUTH is
+# charts/kube-policies/files/alerts/*.yaml (+ files/slo/*.yaml), rendered into
+# the chart PrometheusRule and concatenated into
+# monitoring/prometheus/rules/kube-policies.rules.yml by `make gen-monitoring-rules`.
+# For this standalone (bring-your-own Prometheus) demo, regenerate and load the
+# rules into THIS ConfigMap instead of hand-editing them here:
+#
+#   make gen-monitoring-rules
+#   kubectl create configmap prometheus-rules -n kube-policies-monitoring \
+#     --from-file=monitoring/prometheus/rules/kube-policies.rules.yml \
+#     --dry-run=client -o yaml | kubectl apply -f -
+#
+# The empty placeholder below keeps the mount valid until you do so.
 data:
-  kube-policies.yml: |
-    groups:
-    - name: kube-policies.rules
-      rules:
-      - alert: KubePoliciesHighLatency
-        expr: histogram_quantile(0.95, sum(rate(kube_policies_admission_evaluation_duration_seconds_bucket[5m])) by (le)) > 0.1
-        for: 2m
-        labels:
-          severity: warning
-        annotations:
-          summary: "Kube-Policies admission webhook high latency"
-          description: "95th percentile latency is {{ $value }}s for the last 5 minutes."
-
-      - alert: KubePoliciesHighErrorRate
-        expr: sum(rate(kube_policies_admission_requests_total{status="error"}[5m])) / sum(rate(kube_policies_admission_requests_total[5m])) > 0.05
-        for: 2m
-        labels:
-          severity: critical
-        annotations:
-          summary: "Kube-Policies high error rate"
-          description: "Error rate is {{ $value | humanizePercentage }} for the last 5 minutes."
-
-      - alert: KubePoliciesDown
-        expr: up{job="kube-policies-admission-webhook"} == 0
-        for: 1m
-        labels:
-          severity: critical
-        annotations:
-          summary: "Kube-Policies admission webhook is down"
-          description: "Kube-Policies admission webhook has been down for more than 1 minute."
-
-      - alert: KubePoliciesHighDenyRate
-        expr: sum(rate(kube_policies_admission_requests_total{status="denied"}[5m])) > 10
-        for: 5m
-        labels:
-          severity: warning
-        annotations:
-          summary: "High admission deny rate"
-          description: "{{ $value }} denied admission requests per second for the last 5 minutes."
-
-      - alert: KubePoliciesMemoryUsage
-        expr: container_memory_usage_bytes{pod=~"kube-policies-.*"} / container_spec_memory_limit_bytes{pod=~"kube-policies-.*"} > 0.8
-        for: 5m
-        labels:
-          severity: warning
-        annotations:
-          summary: "Kube-Policies high memory usage"
-          description: "{{ $labels.pod }} memory usage is {{ $value | humanizePercentage }} of limit."
+  kube-policies.rules.yml: |
+    groups: []
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -237,17 +222,47 @@ spec:
         app: prometheus
     spec:
       serviceAccountName: prometheus
+      # restricted-PSS pod securityContext. prom/prometheus runs as the
+      # "nobody" user (UID/GID 65534) in its upstream image, so we pin to
+      # that non-zero identity and let fsGroup own the writable emptyDir.
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        runAsGroup: 65534
+        fsGroup: 65534
+        seccompProfile:
+          type: RuntimeDefault
       containers:
       - name: prometheus
-        image: prom/prometheus:v2.40.0
+        # SUP-WU-09 (CM-2/SI-7): pinned by immutable digest (tag kept for
+        # readability). Raw monitoring manifests are demo-grade; image currency
+        # is reviewed manually, not by Dependabot's docker ecosystem.
+        image: prom/prometheus:v2.40.0@sha256:8e6e3cce35528e8411feaaa2602fee78dc29b30112dcebdf2099dd4d0df03ac1
+        # restricted-PSS container securityContext. readOnlyRootFilesystem is
+        # safe because every path Prometheus writes (TSDB + /tmp) is backed by
+        # an emptyDir mount below.
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          runAsNonRoot: true
+          runAsUser: 65534
+          runAsGroup: 65534
+          capabilities:
+            drop:
+              - ALL
+          seccompProfile:
+            type: RuntimeDefault
         args:
           - '--config.file=/etc/prometheus/prometheus.yml'
           - '--storage.tsdb.path=/prometheus/'
           - '--web.console.libraries=/etc/prometheus/console_libraries'
           - '--web.console.templates=/etc/prometheus/consoles'
           - '--storage.tsdb.retention.time=200h'
+          # --web.enable-lifecycle exposes /-/reload and /-/quit. Kept minimal
+          # (no admin API). Disable it too if you do not reload via HTTP.
           - '--web.enable-lifecycle'
-          - '--web.enable-admin-api'
+          # NOTE: --web.enable-admin-api intentionally removed. It exposes
+          # destructive TSDB endpoints (delete/clean tombstones) with no auth.
         ports:
         - containerPort: 9090
           name: web
@@ -258,6 +273,8 @@ spec:
           mountPath: /etc/prometheus/rules/
         - name: prometheus-storage-volume
           mountPath: /prometheus/
+        - name: tmp-volume
+          mountPath: /tmp
         resources:
           requests:
             cpu: 200m
@@ -286,7 +303,12 @@ spec:
         configMap:
           defaultMode: 420
           name: prometheus-rules
+      # DEMO/Kind-grade storage only. The TSDB and /tmp use ephemeral emptyDir
+      # volumes — data is lost on pod restart. A production deployment must
+      # replace prometheus-storage-volume with a PersistentVolumeClaim.
       - name: prometheus-storage-volume
+        emptyDir: {}
+      - name: tmp-volume
         emptyDir: {}
 ---
 apiVersion: v1

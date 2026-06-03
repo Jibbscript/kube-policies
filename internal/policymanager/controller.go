@@ -3,9 +3,11 @@ package policymanager
 import (
 	"context"
 	"fmt"
+	"sync/atomic"
 	"time"
 
 	"go.uber.org/zap"
+	authenticationv1 "k8s.io/api/authentication/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -19,6 +21,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
+	"github.com/Jibbscript/kube-policies/internal/audit"
 	"github.com/Jibbscript/kube-policies/internal/policy"
 	policiesv1 "github.com/Jibbscript/kube-policies/internal/policymanager/apis/policies/v1"
 )
@@ -86,16 +89,53 @@ type ControllerOptions struct {
 	// LeaderlessReconcilers makes the embedded Policy/PolicyException
 	// reconcilers run on every pod (NeedLeaderElection=false) while the
 	// manager itself still acquires the leader-election lease. Set this for
-	// embedders whose reconciler's job is to populate a per-pod local cache
-	// — the admission-webhook in particular MUST set this true, otherwise
-	// only the leader's local OPA engine receives Policy CRD updates and
-	// admission requests load-balanced to follower pods bypass policy
-	// enforcement. The status-patch races between replicas are benign:
-	// every replica writes the same Phase/Conditions for the same CRD spec.
-	// Leave false for policy-manager, whose reconciler owns the
-	// cluster-wide registry state and should run on the leader only.
+	// embedders whose reconciler's job is to populate a PER-POD local cache
+	// that the pod serves directly:
+	//   - the admission-webhook MUST set this true — its PolicySink feeds the
+	//     local OPA engine, and an admission request load-balanced to a
+	//     follower pod must see the same policies as the leader.
+	//   - the policy-manager ALSO sets this true (RES-WU-03, CP-2/CP-10): it
+	//     answers /api/v1/policies from an in-memory registry, so every replica
+	//     must reconcile to serve fresh reads and so killing the lease-holder
+	//     never stalls reconciliation on the survivors.
+	// The status-patch races between replicas are benign: every replica writes
+	// the same Phase/Conditions for the same CRD spec (idempotent MergeFrom).
+	// To avoid DUPLICATE reconcile-audit events when several replicas reconcile
+	// the same change, StartControllers gates AuditLogger emission on leadership
+	// (see auditWhenLeader below): every replica updates its registry, but only
+	// the elected leader records the AU-2/AU-12 ConfigurationChange.
 	LeaderlessReconcilers bool
+
+	// MaxConcurrentReconciles bounds the number of concurrent Reconcile calls per
+	// reconciler (RES-WU-17, DoS protection). controller-runtime defaults to 1;
+	// a small bound (e.g. 2) keeps a CRD-apply storm from spawning unbounded
+	// goroutines while still allowing modest parallelism. <= 0 falls back to the
+	// defensive default of 2 so an unset value is never an unbounded worker pool.
+	MaxConcurrentReconciles int
+
+	// AuditLogger records a reconcile-driven ConfigurationChange / system event
+	// for every CRD create/update/delete and exception expiry (AUD-WU-12,
+	// AU-2/AU-12). It is OPTIONAL and NIL-SAFE: a nil logger makes every audit
+	// emission a no-op, so embedders that do not audit reconciles (the
+	// admission-webhook, which already passes nil here) compile and run
+	// unchanged. The policy-manager threads its own *audit.Logger so CRD-driven
+	// registry changes are attributed to the controller service account.
+	AuditLogger *audit.Logger
+
+	// ControllerNamespace is the namespace the controller service account runs
+	// in; it is woven into the synthesized controlling identity recorded on
+	// reconcile audit events (Username
+	// "system:serviceaccount:<ns>:kube-policies-controller"). Empty falls back to
+	// "kube-system" only as a defensive last resort — production callers set it
+	// to the pod namespace (the same value used for LeaderElectionNamespace).
+	ControllerNamespace string
 }
+
+// defaultMaxConcurrentReconciles is the bound applied when
+// ControllerOptions.MaxConcurrentReconciles is unset (<= 0). It caps the
+// per-reconciler worker pool so a flood of CRD changes cannot exhaust process
+// resources (RES-WU-17).
+const defaultMaxConcurrentReconciles = 2
 
 // StartControllers builds and starts a controller-runtime Manager that
 // watches Policy CRDs (always) and PolicyException CRDs (when opts.ExceptionSink
@@ -165,24 +205,68 @@ func StartControllers(ctx context.Context, cfg *rest.Config, log *zap.Logger, op
 		return fmt.Errorf("build controller manager: %w", err)
 	}
 
-	policyReconciler := &PolicyReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
-		Sink:   opts.PolicySink,
-		Log:    log.Named("policy-reconciler"),
+	// Bound the per-reconciler worker pool (RES-WU-17). An unset/non-positive
+	// value falls back to the defensive default so a CRD-apply storm cannot spawn
+	// an unbounded number of concurrent Reconcile goroutines.
+	maxConcurrent := opts.MaxConcurrentReconciles
+	if maxConcurrent <= 0 {
+		maxConcurrent = defaultMaxConcurrentReconciles
 	}
-	if err := policyReconciler.SetupWithManager(mgr, opts.LeaderlessReconcilers); err != nil {
+
+	// Synthesized controlling identity recorded on reconcile-driven audit events
+	// (AUD-WU-12). It is the controller service account, not a human principal —
+	// CRD reconciliation is a system actor. ControllerNamespace falls back to
+	// kube-system only defensively; production callers set it to the pod namespace.
+	controllerNS := opts.ControllerNamespace
+	if controllerNS == "" {
+		controllerNS = "kube-system"
+	}
+	controllerIdentity := authenticationv1.UserInfo{
+		Username: fmt.Sprintf("system:serviceaccount:%s:kube-policies-controller", controllerNS),
+		Groups:   []string{"system:serviceaccounts", "system:serviceaccounts:" + controllerNS},
+	}
+
+	// auditWhenLeader gates reconcile-driven audit emission on leadership so that
+	// with LeaderlessReconcilers=true (every replica reconciles into its own
+	// registry) only ONE replica records the AU-2/AU-12 ConfigurationChange —
+	// no duplicate audit events per CRD change (RES-WU-03 preserves the P7
+	// reconcile-audit dedup contract). mgr.Elected() closes when this manager
+	// wins the lease OR when leader election is disabled (controller-runtime
+	// treats "no election" as elected), so single-process/test runs
+	// (DisableLeaderElection=true) audit normally. The brief pre-election window
+	// is the accepted tradeoff: a change reconciled before any leader is elected
+	// is registry-applied on every pod but not audited until the leader emerges
+	// (the human management-plane mutation path is audited independently).
+	auditWhenLeader := &atomic.Bool{}
+	go func() {
+		<-mgr.Elected()
+		auditWhenLeader.Store(true)
+	}()
+
+	policyReconciler := &PolicyReconciler{
+		Client:          mgr.GetClient(),
+		Scheme:          mgr.GetScheme(),
+		Sink:            opts.PolicySink,
+		Log:             log.Named("policy-reconciler"),
+		Audit:           opts.AuditLogger,
+		AuditWhenLeader: auditWhenLeader,
+		Identity:        controllerIdentity,
+	}
+	if err := policyReconciler.SetupWithManager(mgr, opts.LeaderlessReconcilers, maxConcurrent); err != nil {
 		return fmt.Errorf("setup Policy reconciler: %w", err)
 	}
 
 	if opts.ExceptionSink != nil {
 		exceptionReconciler := &PolicyExceptionReconciler{
-			Client: mgr.GetClient(),
-			Scheme: mgr.GetScheme(),
-			Sink:   opts.ExceptionSink,
-			Log:    log.Named("exception-reconciler"),
+			Client:          mgr.GetClient(),
+			Scheme:          mgr.GetScheme(),
+			Sink:            opts.ExceptionSink,
+			Log:             log.Named("exception-reconciler"),
+			Audit:           opts.AuditLogger,
+			AuditWhenLeader: auditWhenLeader,
+			Identity:        controllerIdentity,
 		}
-		if err := exceptionReconciler.SetupWithManager(mgr, opts.LeaderlessReconcilers); err != nil {
+		if err := exceptionReconciler.SetupWithManager(mgr, opts.LeaderlessReconcilers, maxConcurrent); err != nil {
 			return fmt.Errorf("setup PolicyException reconciler: %w", err)
 		}
 	}
@@ -191,6 +275,7 @@ func StartControllers(ctx context.Context, cfg *rest.Config, log *zap.Logger, op
 		zap.Bool("leader_election", effectiveLeaderElection),
 		zap.Bool("leaderless_reconcilers", opts.LeaderlessReconcilers),
 		zap.Bool("exception_reconciler_enabled", opts.ExceptionSink != nil),
+		zap.Int("max_concurrent_reconciles", maxConcurrent),
 	)
 	if err := mgr.Start(ctx); err != nil {
 		return fmt.Errorf("controller manager exited: %w", err)
@@ -207,6 +292,20 @@ type PolicyReconciler struct {
 	Scheme *runtime.Scheme
 	Sink   PolicySink
 	Log    *zap.Logger
+	// Audit records a reconcile-driven ConfigurationChange for every CRD
+	// create/update/delete (AUD-WU-12, AU-2/AU-12). Optional and nil-safe: nil
+	// makes auditReconcile a no-op so embedders that pass no logger are
+	// unaffected.
+	Audit *audit.Logger
+	// AuditWhenLeader gates audit emission on leadership so leaderless
+	// multi-replica reconcilers (RES-WU-03) do not record DUPLICATE audit
+	// events for the same CRD change. nil disables the gate (audit always
+	// emits) for direct-construction callers/tests; StartControllers always
+	// sets it. Registry upserts are NOT gated — every replica stays current.
+	AuditWhenLeader *atomic.Bool
+	// Identity is the synthesized controller service-account UserInfo recorded
+	// on the audit events emitted by this reconciler.
+	Identity authenticationv1.UserInfo
 }
 
 // Reconcile is the controller-runtime entry point. The reconcile contract is
@@ -222,6 +321,10 @@ func (r *PolicyReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 			// Policy was deleted at the apiserver — drop it from the sink.
 			// NotFound is not an error from the reconciler's POV.
 			r.Sink.RemovePolicyByID(id)
+			r.auditReconcile("DELETE", "policy", id, map[string]interface{}{
+				"crd_namespace": req.Namespace,
+				"crd_name":      req.Name,
+			})
 			return ctrl.Result{}, nil
 		}
 		return ctrl.Result{}, fmt.Errorf("get Policy %s: %w", req.NamespacedName, err)
@@ -254,19 +357,49 @@ func (r *PolicyReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 
 	r.Sink.UpsertPolicyFromCRD(&crd)
 	r.publishPolicyStatus(ctx, &crd, "Active", metav1.ConditionTrue, "Reconciled", "Policy is loaded into the engine")
+	// A create and an update are indistinguishable at the reconcile level (each is
+	// an idempotent re-read of apiserver state), so we record UPSERT and let the
+	// generation/UID distinguish a first apply from a spec change.
+	r.auditReconcile("UPSERT", "policy", id, map[string]interface{}{
+		"crd_namespace": crd.Namespace,
+		"crd_name":      crd.Name,
+		"uid":           string(crd.UID),
+		"generation":    crd.Generation,
+	})
 	return ctrl.Result{}, nil
+}
+
+// auditReconcile records a reconcile-driven ConfigurationChange attributed to
+// the controller service account (AUD-WU-12, AU-2/AU-12). It is nil-safe: a nil
+// r.Audit makes this a no-op. The correlation id is synthesized by the logger
+// (a reconcile is not part of an inbound HTTP request chain).
+func (r *PolicyReconciler) auditReconcile(verb, resource, id string, changes map[string]interface{}) {
+	if r.Audit == nil {
+		return
+	}
+	// Only the leader audits so leaderless multi-replica reconciles (RES-WU-03)
+	// produce one ConfigurationChange per change, not one per replica.
+	if r.AuditWhenLeader != nil && !r.AuditWhenLeader.Load() {
+		return
+	}
+	changes["controller"] = "reconcile"
+	r.Audit.LogConfigChange(r.Identity, verb, resource, id, changes)
 }
 
 // SetupWithManager wires the reconciler into the controller-runtime manager.
 // When leaderless is true, the controller is registered with
 // NeedLeaderElection=false so it runs on every replica — required by
 // embedders whose Sink populates a per-pod local cache (e.g. the
-// admission-webhook's OPA engine).
-func (r *PolicyReconciler) SetupWithManager(mgr ctrl.Manager, leaderless bool) error {
+// admission-webhook's OPA engine). maxConcurrent bounds the worker pool
+// (RES-WU-17); a non-positive value defers to controller-runtime's default of 1.
+func (r *PolicyReconciler) SetupWithManager(mgr ctrl.Manager, leaderless bool, maxConcurrent int) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&policiesv1.Policy{}).
 		Named("policy").
-		WithOptions(controller.Options{NeedLeaderElection: ptr.To(!leaderless)}).
+		WithOptions(controller.Options{
+			NeedLeaderElection:      ptr.To(!leaderless),
+			MaxConcurrentReconciles: maxConcurrent,
+		}).
 		Complete(r)
 }
 
@@ -296,6 +429,17 @@ type PolicyExceptionReconciler struct {
 	Scheme *runtime.Scheme
 	Sink   ExceptionSink
 	Log    *zap.Logger
+	// Audit records a reconcile-driven ConfigurationChange for every
+	// PolicyException create/update/delete and a system event when the reconciler
+	// observes an expired exception (AUD-WU-12, AU-2/AU-12). Optional and nil-safe.
+	Audit *audit.Logger
+	// AuditWhenLeader gates audit emission on leadership so leaderless
+	// multi-replica reconcilers (RES-WU-03) do not record DUPLICATE audit events.
+	// nil disables the gate (audit always emits); StartControllers always sets it.
+	AuditWhenLeader *atomic.Bool
+	// Identity is the synthesized controller service-account UserInfo recorded on
+	// the audit events emitted by this reconciler.
+	Identity authenticationv1.UserInfo
 }
 
 func (r *PolicyExceptionReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -305,6 +449,10 @@ func (r *PolicyExceptionReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 	if err := r.Get(ctx, req.NamespacedName, &crd); err != nil {
 		if apierrors.IsNotFound(err) {
 			r.Sink.RemoveExceptionByID(id)
+			r.auditReconcile("DELETE", "exception", id, map[string]interface{}{
+				"crd_namespace": req.Namespace,
+				"crd_name":      req.Name,
+			})
 			return ctrl.Result{}, nil
 		}
 		return ctrl.Result{}, fmt.Errorf("get PolicyException %s: %w", req.NamespacedName, err)
@@ -321,25 +469,99 @@ func (r *PolicyExceptionReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 	}
 
 	r.Sink.UpsertExceptionFromCRD(&crd)
+
+	// Capture prior observed state BEFORE publishing the new status, to dedup
+	// reconcile-driven audit records (AUD-WU-12): a periodic resync of an
+	// unchanged exception must NOT flood the audit log. We audit an UPSERT only
+	// when the spec generation advances, and an expiry only on the TRANSITION
+	// into Expired. (publishExceptionStatus is a no-op patch when nothing
+	// changed, so steady state does not even re-reconcile; this guards the 10h
+	// resync and post-restart cases where it does.)
+	priorPhase := crd.Status.Phase
+	priorObservedGen := crd.Status.ObservedGeneration
+
 	phase := "Active"
-	if crd.Spec.ExpiresAt != nil && crd.Spec.ExpiresAt.Time.Before(time.Now()) {
+	expired := crd.Spec.ExpiresAt != nil && crd.Spec.ExpiresAt.Time.Before(time.Now())
+	if expired {
 		phase = "Expired"
 	}
 	r.publishExceptionStatus(ctx, &crd, phase, metav1.ConditionTrue, "Reconciled", "Exception is loaded into the registry")
+
+	if crd.Generation != priorObservedGen {
+		r.auditReconcile("UPSERT", "exception", id, map[string]interface{}{
+			"crd_namespace": crd.Namespace,
+			"crd_name":      crd.Name,
+			"uid":           string(crd.UID),
+			"generation":    crd.Generation,
+			"policy_id":     crd.Spec.PolicyID,
+			"phase":         phase,
+		})
+	}
+	// An exception transitioning INTO phase=Expired is a lifecycle event distinct
+	// from the upsert; record it explicitly (once per transition) so AU-2 expiry
+	// coverage does not depend on a reader inferring expiry from a phase field.
+	if expired && priorPhase != "Expired" {
+		r.auditExpiry(id, crd.Namespace, crd.Name, string(crd.UID), crd.Generation, crd.Spec.PolicyID)
+	}
 	return ctrl.Result{}, nil
 }
 
-func (r *PolicyExceptionReconciler) SetupWithManager(mgr ctrl.Manager, leaderless bool) error {
+// auditReconcile records a reconcile-driven ConfigurationChange attributed to
+// the controller service account (AUD-WU-12). Nil-safe.
+func (r *PolicyExceptionReconciler) auditReconcile(verb, resource, id string, changes map[string]interface{}) {
+	if r.Audit == nil {
+		return
+	}
+	// Leader-only audit for leaderless multi-replica reconciles (RES-WU-03).
+	if r.AuditWhenLeader != nil && !r.AuditWhenLeader.Load() {
+		return
+	}
+	changes["controller"] = "reconcile"
+	r.Audit.LogConfigChange(r.Identity, verb, resource, id, changes)
+}
+
+// auditExpiry records the CRD-reconciler exception-expiry lifecycle event
+// (AUD-WU-12, AU-2). Nil-safe. The controlling identity and resource
+// generation/UID are recorded so the expiry is attributable. This is the
+// CRD-reconciler half of the expiry coverage; the in-memory hourly ticker
+// (Manager.checkExpiredExceptions) records the other half.
+func (r *PolicyExceptionReconciler) auditExpiry(id, ns, name, uid string, generation int64, policyID string) {
+	if r.Audit == nil {
+		return
+	}
+	// Leader-only audit for leaderless multi-replica reconciles (RES-WU-03).
+	if r.AuditWhenLeader != nil && !r.AuditWhenLeader.Load() {
+		return
+	}
+	r.Audit.LogSystemEvent("ExceptionExpired",
+		fmt.Sprintf("policy exception %s expired (reconcile)", id),
+		map[string]interface{}{
+			"controller":    "reconcile",
+			"identity":      r.Identity.Username,
+			"exception_id":  id,
+			"crd_namespace": ns,
+			"crd_name":      name,
+			"uid":           uid,
+			"generation":    generation,
+			"policy_id":     policyID,
+		})
+}
+
+func (r *PolicyExceptionReconciler) SetupWithManager(mgr ctrl.Manager, leaderless bool, maxConcurrent int) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&policiesv1.PolicyException{}).
 		Named("policyexception").
-		WithOptions(controller.Options{NeedLeaderElection: ptr.To(!leaderless)}).
+		WithOptions(controller.Options{
+			NeedLeaderElection:      ptr.To(!leaderless),
+			MaxConcurrentReconciles: maxConcurrent,
+		}).
 		Complete(r)
 }
 
 func (r *PolicyExceptionReconciler) publishExceptionStatus(ctx context.Context, crd *policiesv1.PolicyException, phase string, status metav1.ConditionStatus, reason, message string) {
 	patch := client.MergeFrom(crd.DeepCopy())
 	crd.Status.Phase = phase
+	crd.Status.ObservedGeneration = crd.Generation
 	cond := metav1.Condition{
 		Type:               "Ready",
 		Status:             status,

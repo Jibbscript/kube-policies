@@ -15,10 +15,31 @@ OPA-based policy evaluation engine. Defines the in-memory policy/rule data model
 | `engine_test.go` | Unit tests for the engine's core evaluation paths (Rego execution, policy loading, mutation aggregation). |
 | `engine_exceptions_test.go` | Eight `TestEngine_*` cases covering the suppression pass (nil-registry, match, mismatch, fail-closed-on-error, partial suppression, MatchKey population, mixed suppress+error, distinct-exception count). |
 
+## P10 Policy Library (POL-WU-*)
+
+The bundled library was overhauled in P10. New structure:
+
+| File | Description |
+|------|-------------|
+| `rego/podspec.rego` | Shared Rego library (`package kube_policies.lib`) embedded via `lib_loader.go` and compiled ALONGSIDE every rule in `preparedQueryFor`. Helpers: `pod_spec`, `all_containers`, `containers_with_paths` (container + kind-correct JSONPath), `volumes`, `pod_security_context`, `pod_meta`, `container_path_prefix`. Lets rules traverse workload-controller templates, initContainers, and ephemeralContainers (POL-WU-01). |
+| `lib_loader.go` | `go:embed rego/*.rego`; `libModuleOptions()` (added to every compile) and `LibrarySources()` (for the validator + bundle digest). |
+| `bundled_rules.go` | The opt-in rule packs: `pssBaselinePolicy`, `pssRestrictedPolicy`, `nsaHardeningPolicy`, `governanceBaselinePolicy`, `rbacBaselinePolicy`, `secretsBaselinePolicy`, `networkBaselinePolicy`, `mutatingHardeningPolicy`. All ship `Enabled:false`. |
+| `profiles.go` | `EnforcementProfiles` (name → policy-ID set) + `applyProfiles` (POL-WU-23). Selected via `config.PolicyConfig.Profiles`. |
+| `policy_validation.go` | `ValidateRuleRego`/`ValidatePolicy` — compile-with-lib + contract probe; the CRD compile gate delegates here (POL-WU-24). |
+| `bundle_version.go` | `PolicyBundleVersion` (SemVer) + `ruleBundleVersions` (every rule → introduced-in version) (POL-WU-26). |
+| `bundle_digest.go` | `ComputeBundleManifest`/`BundleDigest` — canonical, signable manifest of the library (POL-WU-27); emitted by `cmd/policybundle`. |
+| `control_matrix.{yaml,go}` | Machine-checkable rule → numbered-control-ID matrix (POL-WU-28). |
+
+Key invariants (all test-locked — see the `_test.go` files):
+- **Kind routing (POL-WU-21):** a `Rule.TargetKinds` slice scopes which Kubernetes kinds a rule runs against. Empty = all kinds. `evaluatePolicy` skips non-matching rules, so a pod rule never evaluates (or errors and fail-closes) a ClusterRole, and the RBAC/Network/Secret packs coexist with pod rules. Pod-shaped rules use `podWorkloadKinds`.
+- **Parameters:** `Policy.Parameters` (map[string]string) is exposed to that policy's rules at `input.parameters` (POL-WU-13/20). `evaluatePolicy` shallow-copies the base input only when a policy has parameters.
+- **Single verdict per rule:** when several conditions can match, build an ordered list and emit the first (`list[0]` / `min(indices)`), and make helper functions return a single value (sorted) — multiple complete-value `evaluate` rules or multi-output functions raise an OPA conflict that errors evaluation.
+- **Opt-in safety:** only `security-baseline` is enabled by default. Adding a rule? Add it to a pack, give it a `TargetKinds`, register it in `ruleBundleVersions` AND `control_matrix.yaml` AND a `ruleCoverage` fixture (allow+deny) AND `docs/policy-library.md` — each is enforced by a test that fails for an uncovered rule.
+
 ## For AI Agents
 
 ### Working In This Directory
-- Each rule's Rego is compiled per evaluation via `rego.New(...).PrepareForEval(ctx)` and queried as `data.kube_policies.evaluate`. Rules must define `package kube_policies` and produce a result map with keys `allowed` (bool), `message` (string, optional), `path` (string, optional), and `patches` (list, optional). This is the contract — examples in `examples/policies/` follow it.
+- Each rule's Rego is compiled per evaluation via `rego.New(...).PrepareForEval(ctx)` — together with the shared library modules (`libModuleOptions()`) — and queried as `data.kube_policies.evaluate`. Rules must define `package kube_policies` and produce a result map with keys `allowed` (bool), `message` (string, optional), `path` (string, optional), and `patches` (list, optional). This is the contract — examples in `examples/policies/` follow it (and are compile-tested by `TestExamplePoliciesCompile`).
 - The engine guards `policies` map with `sync.RWMutex`. Reads (`Evaluate`, `ListPolicies`) take RLock; writes (`LoadPolicy`, `RemovePolicy`) take Lock. Preserve this discipline.
 - A rule that fails to evaluate is **logged and skipped**, not propagated as an error — preventing one bad policy from taking down admission control. Do not change this without a migration story.
 - `loadDefaultPolicies` ships an embedded `security-baseline` policy denying `spec.securityContext.privileged: true`. Add to this list cautiously; default-deny rules can break clusters on upgrade.

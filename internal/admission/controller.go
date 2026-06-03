@@ -17,6 +17,13 @@ import (
 	"github.com/Jibbscript/kube-policies/internal/policy"
 )
 
+// admissionEvalTimeout bounds a single policy evaluation on the admission hot
+// path. The apiserver enforces a webhook timeout of <=10s; capping eval well
+// under that lets a slow/looping evaluation be canceled (the engine threads
+// this ctx into OPA's PrepareForEval/Eval) so requests cannot pile up, instead
+// of running unbounded against context.Background() (closes the eval-DoS).
+const admissionEvalTimeout = 2 * time.Second
+
 // Controller handles admission webhook requests
 type Controller struct {
 	policyEngine policy.Evaluator
@@ -46,6 +53,35 @@ func NewController(
 }
 
 // ValidateHandler handles validation admission requests
+// newAuditContext builds the audit.Context common to both admission handlers,
+// populating the AU-3 source-attribution fields (AUD-WU-01) from the inbound
+// *http.Request, the AU-8 dual timestamps (AUD-WU-02), and the AU-12(1)
+// correlation id (AUD-WU-20). SourceIP is the webhook's HTTP peer (the
+// apiserver/proxy hop) — gin must be configured with SetTrustedProxies(nil) so
+// it is not spoofable via X-Forwarded-For (done in setupWebhookServer).
+// APIServerID/AdmissionWebhookConfig are left empty: the AdmissionRequest does
+// not carry them; they are correlated from the apiserver-side audit policy
+// (see docs/audit/cluster-audit-policy.md).
+func (c *Controller) newAuditContext(ginCtx *gin.Context, req *admissionv1.AdmissionRequest, startTime time.Time) *audit.Context {
+	received := startTime.UTC()
+	return &audit.Context{
+		RequestID:                string(req.UID),
+		UserInfo:                 req.UserInfo,
+		Namespace:                req.Namespace,
+		Kind:                     req.Kind,
+		Name:                     req.Name,
+		Operation:                string(req.Operation),
+		Object:                   &req.Object,
+		OldObject:                &req.OldObject,
+		Timestamp:                received,
+		RequestReceivedTimestamp: received,
+		CorrelationID:            string(req.UID),
+		SourceIP:                 ginCtx.ClientIP(),
+		UserAgent:                ginCtx.Request.UserAgent(),
+		RequestURI:               ginCtx.Request.RequestURI,
+	}
+}
+
 func (c *Controller) ValidateHandler(ctx *gin.Context) {
 	startTime := time.Now()
 
@@ -65,21 +101,16 @@ func (c *Controller) ValidateHandler(ctx *gin.Context) {
 		return
 	}
 
-	// Create audit context
-	auditCtx := &audit.Context{
-		RequestID: string(req.UID),
-		UserInfo:  req.UserInfo,
-		Namespace: req.Namespace,
-		Kind:      req.Kind,
-		Name:      req.Name,
-		Operation: string(req.Operation),
-		Object:    &req.Object,
-		OldObject: &req.OldObject,
-		Timestamp: time.Now(),
-	}
+	// Create audit context (AU-3 attribution + AU-8 dual timestamps + AU-12(1)
+	// correlation id are populated by the shared helper).
+	auditCtx := c.newAuditContext(ctx, req, startTime)
 
-	// Evaluate policies
-	decision, err := c.policyEngine.Evaluate(context.Background(), &policy.EvaluationRequest{
+	// Evaluate policies under a bounded deadline derived from the inbound
+	// request so a slow evaluation is canceled within the apiserver's webhook
+	// timeout instead of running against an unbounded context.Background().
+	evalCtx, cancel := context.WithTimeout(ctx.Request.Context(), admissionEvalTimeout)
+	defer cancel()
+	decision, err := c.policyEngine.Evaluate(evalCtx, &policy.EvaluationRequest{
 		AdmissionRequest: req,
 		Operation:        "validate",
 	})
@@ -183,21 +214,16 @@ func (c *Controller) MutateHandler(ctx *gin.Context) {
 		return
 	}
 
-	// Create audit context
-	auditCtx := &audit.Context{
-		RequestID: string(req.UID),
-		UserInfo:  req.UserInfo,
-		Namespace: req.Namespace,
-		Kind:      req.Kind,
-		Name:      req.Name,
-		Operation: string(req.Operation),
-		Object:    &req.Object,
-		OldObject: &req.OldObject,
-		Timestamp: time.Now(),
-	}
+	// Create audit context (AU-3 attribution + AU-8 dual timestamps + AU-12(1)
+	// correlation id are populated by the shared helper).
+	auditCtx := c.newAuditContext(ctx, req, startTime)
 
-	// Evaluate policies for mutations
-	decision, err := c.policyEngine.Evaluate(context.Background(), &policy.EvaluationRequest{
+	// Evaluate policies for mutations under a bounded deadline derived from the
+	// inbound request (see admissionEvalTimeout) so a slow evaluation is
+	// canceled within the apiserver's webhook timeout.
+	evalCtx, cancel := context.WithTimeout(ctx.Request.Context(), admissionEvalTimeout)
+	defer cancel()
+	decision, err := c.policyEngine.Evaluate(evalCtx, &policy.EvaluationRequest{
 		AdmissionRequest: req,
 		Operation:        "mutate",
 	})
@@ -216,7 +242,10 @@ func (c *Controller) MutateHandler(ctx *gin.Context) {
 			c.publisher.Publish(audit.NewPublicEvent(auditCtx, nil))
 		}
 
-		// Fail-safe behavior - allow without mutations
+		// Fail-safe behavior - allow without mutations (FAIL-OPEN). The request
+		// is admitted WITHOUT a successful policy evaluation, so a control was
+		// bypassed: record it (IRM-WU-08) for the KubePoliciesFailOpenActive alert.
+		c.metrics.IncFailOpen("mutate")
 		response := &admissionv1.AdmissionResponse{
 			UID:     req.UID,
 			Allowed: true,
@@ -240,7 +269,10 @@ func (c *Controller) MutateHandler(ctx *gin.Context) {
 			c.logger.Error("Failed to marshal patches", zap.Error(err))
 			c.metrics.IncAdmissionRequests("mutate", "error", "patch_marshal_error")
 
-			// Allow without mutations on patch error
+			// Allow without mutations on patch error (FAIL-OPEN): the computed
+			// mutation could not be applied, so the object is admitted unmutated.
+			// Record the bypass (IRM-WU-08).
+			c.metrics.IncFailOpen("mutate")
 			response.Allowed = true
 		} else {
 			response.Patch = patchBytes

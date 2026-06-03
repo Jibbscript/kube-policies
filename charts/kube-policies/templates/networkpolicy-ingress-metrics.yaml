@@ -1,0 +1,94 @@
+{{- /* NET-WU-06: metrics ingress. Each component exposes a Prometheus endpoint on
+       its own port (webhook 9090, policy-manager 9091, dashboard 9092). Ingress to
+       those ports is allowed ONLY from the monitoring scraper described by
+       networkPolicy.metricsScraperSelector (namespaceSelector AND podSelector,
+       ANDed inside one `from` peer). One NetworkPolicy per component so each
+       selects exactly the right pod set + port. Gated on networkPolicy.enabled;
+       per-component gates mirror each component's enabled flag. */ -}}
+{{- $scraper := .Values.networkPolicy.metricsScraperSelector -}}
+{{- if and .Values.networkPolicy.enabled .Values.admissionWebhook.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "kube-policies.fullname" . }}-ingress-metrics-webhook
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kube-policies.labels" . | nindent 4 }}
+    app.kubernetes.io/component: admission-webhook
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "kube-policies.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: admission-webhook
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              {{- toYaml $scraper.namespaceSelector | nindent 14 }}
+          podSelector:
+            matchLabels:
+              {{- toYaml $scraper.podSelector | nindent 14 }}
+      ports:
+        - protocol: TCP
+          port: 9090
+{{- end }}
+{{- if and .Values.networkPolicy.enabled .Values.policyManager.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "kube-policies.fullname" . }}-ingress-metrics-policy-manager
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kube-policies.labels" . | nindent 4 }}
+    app.kubernetes.io/component: policy-manager
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "kube-policies.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: policy-manager
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              {{- toYaml $scraper.namespaceSelector | nindent 14 }}
+          podSelector:
+            matchLabels:
+              {{- toYaml $scraper.podSelector | nindent 14 }}
+      ports:
+        - protocol: TCP
+          port: 9091
+{{- end }}
+{{- if and .Values.networkPolicy.enabled .Values.dashboard.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "kube-policies.fullname" . }}-ingress-metrics-dashboard
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kube-policies.labels" . | nindent 4 }}
+    app.kubernetes.io/component: dashboard
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "kube-policies.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: dashboard
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              {{- toYaml $scraper.namespaceSelector | nindent 14 }}
+          podSelector:
+            matchLabels:
+              {{- toYaml $scraper.podSelector | nindent 14 }}
+      ports:
+        - protocol: TCP
+          port: 9092
+{{- end }}

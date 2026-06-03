@@ -1,0 +1,36 @@
+# Dead-man's-switch / no-traffic watchdog (IRM-WU-12, NIST SI-4, SI-4(4),
+# CA-7, IR-5). A monitoring pipeline that has silently died, or a webhook that
+# is receiving zero traffic (apiserver no longer calling it), must itself be
+# detected.
+groups:
+  - name: kube-policies-watchdog
+    rules:
+      # Always-firing heartbeat. The Alertmanager heartbeat receiver (IRM-WU-16)
+      # consumes this and forwards it to an external dead-man's-switch (e.g.
+      # Dead Man's Snitch / healthchecks.io). If Prometheus or Alertmanager dies,
+      # the heartbeat stops arriving and the external watchdog pages.
+      - alert: KubePoliciesWatchdog
+        expr: vector(1)
+        labels:
+          severity: none
+        annotations:
+          summary: "kube-policies monitoring heartbeat"
+          description: "This alert is always firing. It is routed to the dead-man's-switch heartbeat receiver; if it stops arriving, the monitoring pipeline (Prometheus/Alertmanager) is down and on-call must investigate."
+
+      # The webhook is registered but receiving no admission traffic for 10m:
+      # either the apiserver is no longer routing to it (webhook config removed /
+      # caBundle broken) or the metric pipeline is broken. The == 0 clause covers
+      # the common case where the pod is healthy and the counter series exists but
+      # has stopped incrementing (a lazily-registered counter persists for the
+      # process lifetime, so absent() alone would NOT catch a traffic stop); the
+      # absent() clause covers a webhook that has never served a request / whose
+      # series was never created.
+      - alert: KubePoliciesNoTraffic
+        expr: (sum(rate(kube_policies_admission_requests_total[10m])) == 0) or absent(kube_policies_admission_requests_total)
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "kube-policies admission webhook is receiving no traffic"
+          description: "No admission requests have been recorded for >10m. Either the apiserver is no longer calling the webhook (ValidatingWebhookConfiguration removed, caBundle broken, or selectors excluding everything) or metrics scraping is broken — both mean enforcement may be silently bypassed."
+          runbook_url: "https://github.com/Jibbscript/kube-policies/blob/main/docs/security/runbooks/webhook-outage.md"

@@ -1,0 +1,33 @@
+# NEGATIVE fixture for sa.shared label-drift guard (IAM-WU-17, LOW-2).
+#
+# Simulates the label-evasion attack: the policy-manager Deployment drops its
+# app.kubernetes.io/component label entirely, so the shared-SA intersection
+# check would silently pass (empty set). The label-drift guard MUST deny.
+#
+# conftest test --combine MUST exit non-zero with a deny from package sa.shared.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: some-sa
+automountServiceAccountToken: false
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: regression-admission-webhook
+  labels:
+    app.kubernetes.io/component: admission-webhook
+spec:
+  template:
+    spec:
+      serviceAccountName: some-sa
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: regression-policy-manager-no-label
+  labels: {}
+spec:
+  template:
+    spec:
+      serviceAccountName: some-sa

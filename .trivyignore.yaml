@@ -1,0 +1,81 @@
+# Trivy path-scoped misconfiguration suppressions (VUL-WU-02)
+# Controls: NIST RA-5, SI-2, SP 800-190 §4.x
+#
+# The CI "Trivy GATE — config/misconfig" step (.github/workflows/ci.yml) scans
+# the shipped IaC (charts/, deployments/, build/docker/) and FAILS on a
+# CRITICAL/HIGH misconfiguration. The deliberately-insecure policy/test/demo/UI
+# fixtures (demo/, test/, web/, examples/) are excluded at the scan level via
+# skip-dirs — they exist precisely to prove the engine DENIES them, so gating on
+# them would be semantically wrong.
+#
+# The few entries below are LEGITIMATE operational-infra findings on optional
+# deploy manifests. Each is path-scoped (never a global ID suppression) and
+# carries a justification, owner, and expiry. Re-review on or before the expiry.
+misconfigurations:
+  - id: AVD-KSV-0010
+    paths:
+      - "deployments/kubernetes/conformance/kube-bench-job.yaml"
+    statement: >-
+      kube-bench is a host CIS-benchmark scanner; it requires hostPID to read
+      the node's kubelet/process configuration. This Job is operator-run
+      tooling, not a workload the product ships into tenant namespaces.
+      Owner: System Owner (TBD). Expires: 2026-12-01 (re-review).
+  - id: AVD-KSV-0118
+    paths:
+      - "deployments/kubernetes/conformance/kube-bench-job.yaml"
+    statement: >-
+      kube-bench scanner Job intentionally runs with elevated host access to
+      assess the node; a fully-restricted securityContext would defeat its
+      purpose. Operator-run tooling only.
+      Owner: System Owner (TBD). Expires: 2026-12-01 (re-review).
+  - id: AVD-KSV-0047
+    paths:
+      - "deployments/kubernetes/monitoring/prometheus-deployment.yaml"
+    statement: >-
+      Prometheus requires the nodes/proxy RBAC verb to scrape kubelet and
+      node-level metrics. This is the standard, documented Prometheus scrape
+      requirement; the deployment is an optional monitoring extra.
+      Owner: System Owner (TBD). Expires: 2026-12-01 (re-review).
+  # --- Falco runtime-detection DaemonSet (opt-in; runtimeDetection.enabled). ---
+  # Falco does kernel-level syscall monitoring and therefore requires privileged
+  # / SYS_ADMIN / hostPID and host path mounts by design; a restricted
+  # securityContext would defeat runtime threat detection. This DaemonSet is
+  # optional operator-deployed security tooling, not a tenant workload.
+  - id: AVD-KSV-0005
+    paths:
+      - "deployments/kubernetes/runtime-detection/daemonset.yaml"
+    statement: >-
+      Falco requires the SYS_ADMIN capability for kernel syscall instrumentation.
+      Opt-in runtime-security tooling. Owner: System Owner (TBD). Expires: 2026-12-01 (re-review).
+  - id: AVD-KSV-0010
+    paths:
+      - "deployments/kubernetes/runtime-detection/daemonset.yaml"
+    statement: >-
+      Falco requires hostPID to monitor host-level process/syscall activity.
+      Opt-in runtime-security tooling. Owner: System Owner (TBD). Expires: 2026-12-01 (re-review).
+  - id: AVD-KSV-0014
+    paths:
+      - "deployments/kubernetes/runtime-detection/daemonset.yaml"
+    statement: >-
+      Falco and falco-driver-loader need a writable root filesystem to build/load
+      the kernel driver. Opt-in tooling. Owner: System Owner (TBD). Expires: 2026-12-01 (re-review).
+  - id: AVD-KSV-0017
+    paths:
+      - "deployments/kubernetes/runtime-detection/daemonset.yaml"
+    statement: >-
+      Falco and falco-driver-loader run privileged for kernel-module/eBPF access.
+      Opt-in runtime-security tooling. Owner: System Owner (TBD). Expires: 2026-12-01 (re-review).
+  - id: AVD-KSV-0118
+    paths:
+      - "deployments/kubernetes/runtime-detection/daemonset.yaml"
+    statement: >-
+      Falco's elevated host access is required for syscall monitoring; a fully
+      restricted default securityContext would defeat it. Opt-in tooling.
+      Owner: System Owner (TBD). Expires: 2026-12-01 (re-review).
+  - id: AVD-KSV-0121
+    paths:
+      - "deployments/kubernetes/runtime-detection/daemonset.yaml"
+    statement: >-
+      Falco mounts host paths (/boot,/etc,/proc,/usr) read-only to read kernel
+      headers and host config for syscall analysis. Opt-in tooling.
+      Owner: System Owner (TBD). Expires: 2026-12-01 (re-review).

@@ -1,4 +1,19 @@
 {{- if .Values.admissionWebhook.enabled -}}
+{{- /* Fail-closed guard for apiserver mutual-TLS enforcement (IAM-WU-06). When
+       admissionWebhook.tls.requireClientCert=true the webhook requires + verifies
+       the apiserver client certificate, which is impossible without a client-CA
+       bundle to verify against — the binary fails closed at startup. Refuse to
+       render rather than ship a crash-looping deployment. Evaluated regardless of
+       certManager state. Mirrors the auth.enabled / metrics.tls render-fail
+       guards. */ -}}
+{{- if and .Values.admissionWebhook.tls.requireClientCert (empty .Values.admissionWebhook.tls.clientCA) -}}
+{{- fail "admissionWebhook.tls.requireClientCert=true requires admissionWebhook.tls.clientCA (the apiserver client-CA bundle)" -}}
+{{- end -}}
+{{- if not .Values.certManager.enabled -}}
+{{- /* cert-manager DISABLED (default): chart provisions the serving cert and an
+       inline caBundle via the 3-branch logic below. When certManager.enabled=true
+       this whole block is skipped — cert-manager owns the Secret and ca-injector
+       populates the caBundle (see the else branch). */ -}}
 {{- $secretName := printf "%s-admission-webhook-certs" (include "kube-policies.fullname" .) -}}
 {{- $existingSecret := lookup "v1" "Secret" .Release.Namespace $secretName -}}
 {{- $tlsCrt := "" -}}
@@ -24,6 +39,11 @@
   {{- $tlsKey = .Values.admissionWebhook.tls.key | b64enc -}}
   {{- $caBundle = .Values.admissionWebhook.tls.caCert | b64enc -}}
 {{- else if .Values.admissionWebhook.tls.autoGenerate -}}
+  {{- /* DEMO-ONLY (CRY-WU-11): sprig genCA/genSignedCert emit a FIXED RSA-2048 /
+         SHA-256 key pair with no algorithm/size knob, which is below the
+         FedRAMP-Moderate bar. Production must use cert-manager
+         (certManager.enabled=true → ECDSA P-256) or supply an approved-strength
+         cert via tls.caCert/cert/key. See docs/compliance/crypto-standards.md. */ -}}
   {{- $svc := printf "%s-admission-webhook" (include "kube-policies.fullname" .) -}}
   {{- $ns := .Release.Namespace -}}
   {{- /* Per A2/C3 — five DNS names + one IP, matching scripts/gen-webhook-cert.sh:53-58 verbatim. */ -}}
@@ -78,20 +98,112 @@ webhooks:
         path: /validate
         port: 8443
       caBundle: {{ $caBundle | quote }}
+    # RES-WU-09: rules are values-driven (admissionWebhook.webhook.rules). The
+    # default covers Pods — the kind the bundled default policies evaluate. Add
+    # kinds here when you load CRD Policies targeting them; each added kind under
+    # failurePolicy=Fail widens the fail-closed blast radius, so scope deliberately.
     rules:
-      - apiGroups: [""]
-        apiVersions: ["v1"]
-        operations: ["CREATE", "UPDATE"]
-        resources: ["pods"]
-        scope: "Namespaced"
+      {{- toYaml .Values.admissionWebhook.webhook.rules | nindent 6 }}
     namespaceSelector:
-      matchExpressions:
-        - key: kubernetes.io/metadata.name
-          operator: NotIn
-          values:
-            - kube-system
-            - kube-public
-            - kube-node-lease
-            - local-path-storage
-            - {{ .Release.Namespace }}
+      {{- include "kube-policies.webhookNamespaceSelector" (dict "ctx" .) | nindent 6 }}
+{{- if .Values.admissionWebhook.webhook.mutating.enabled }}
+---
+# RES-WU-09 (CP-2/CP-10/SC-5): MutatingWebhookConfiguration. failurePolicy
+# defaults to Ignore so a transient mutation error never blocks admission — the
+# fail-closed guarantee lives in the ValidatingWebhookConfiguration above.
+# reinvocationPolicy re-runs this webhook if a later webhook mutates the object.
+apiVersion: admissionregistration.k8s.io/v1
+kind: MutatingWebhookConfiguration
+metadata:
+  name: {{ include "kube-policies.fullname" . }}-mutating-webhook
+  labels:
+    {{- include "kube-policies.labels" . | nindent 4 }}
+webhooks:
+  - name: mutate.kube-policies.io
+    admissionReviewVersions: ["v1"]
+    sideEffects: None
+    failurePolicy: {{ .Values.admissionWebhook.webhook.mutating.failurePolicy | default "Ignore" }}
+    reinvocationPolicy: {{ .Values.admissionWebhook.webhook.mutating.reinvocationPolicy | default "IfNeeded" }}
+    timeoutSeconds: {{ .Values.admissionWebhook.webhook.mutating.timeoutSeconds | default 10 }}
+    clientConfig:
+      service:
+        name: {{ include "kube-policies.fullname" . }}-admission-webhook
+        namespace: {{ .Release.Namespace }}
+        path: /mutate
+        port: 8443
+      caBundle: {{ $caBundle | quote }}
+    rules:
+      {{- toYaml .Values.admissionWebhook.webhook.mutating.rules | nindent 6 }}
+    namespaceSelector:
+      {{- include "kube-policies.webhookNamespaceSelector" (dict "ctx" .) | nindent 6 }}
+{{- end }}
+{{- else -}}
+{{- /* cert-manager ENABLED (CRY-WU-09): no inline Secret and no inline
+       caBundle. cert-manager issues the serving cert (see certificate.yaml /
+       issuer.yaml) into the same Secret the deployment mounts, and the
+       cert-manager.io/inject-ca-from annotation makes ca-injector populate the
+       caBundle from the Certificate's resulting CA. The annotation value MUST be
+       <namespace>/<certificate-name> (the Certificate is named
+       <fullname>-admission-webhook), NOT the Secret name. */ -}}
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingWebhookConfiguration
+metadata:
+  name: {{ include "kube-policies.fullname" . }}-validating-webhook
+  annotations:
+    cert-manager.io/inject-ca-from: {{ printf "%s/%s-admission-webhook" .Release.Namespace (include "kube-policies.fullname" .) | quote }}
+  labels:
+    {{- include "kube-policies.labels" . | nindent 4 }}
+webhooks:
+  - name: validate.kube-policies.io
+    admissionReviewVersions: ["v1"]
+    sideEffects: None
+    failurePolicy: {{ .Values.admissionWebhook.webhook.failurePolicy | default "Fail" }}
+    timeoutSeconds: {{ .Values.admissionWebhook.webhook.timeoutSeconds | default 10 }}
+    clientConfig:
+      service:
+        name: {{ include "kube-policies.fullname" . }}-admission-webhook
+        namespace: {{ .Release.Namespace }}
+        path: /validate
+        port: 8443
+      # caBundle intentionally omitted; cert-manager ca-injector populates it.
+    # RES-WU-09: values-driven rules (default: Pods). See the cert-manager-disabled
+    # branch above for the fail-closed blast-radius note.
+    rules:
+      {{- toYaml .Values.admissionWebhook.webhook.rules | nindent 6 }}
+    namespaceSelector:
+      {{- include "kube-policies.webhookNamespaceSelector" (dict "ctx" .) | nindent 6 }}
+{{- if .Values.admissionWebhook.webhook.mutating.enabled }}
+---
+# RES-WU-09 (CP-2/CP-10/SC-5): MutatingWebhookConfiguration (cert-manager path).
+# ca-injector populates caBundle from the same webhook Certificate. failurePolicy
+# defaults to Ignore so a transient mutation error never blocks admission.
+apiVersion: admissionregistration.k8s.io/v1
+kind: MutatingWebhookConfiguration
+metadata:
+  name: {{ include "kube-policies.fullname" . }}-mutating-webhook
+  annotations:
+    cert-manager.io/inject-ca-from: {{ printf "%s/%s-admission-webhook" .Release.Namespace (include "kube-policies.fullname" .) | quote }}
+  labels:
+    {{- include "kube-policies.labels" . | nindent 4 }}
+webhooks:
+  - name: mutate.kube-policies.io
+    admissionReviewVersions: ["v1"]
+    sideEffects: None
+    failurePolicy: {{ .Values.admissionWebhook.webhook.mutating.failurePolicy | default "Ignore" }}
+    reinvocationPolicy: {{ .Values.admissionWebhook.webhook.mutating.reinvocationPolicy | default "IfNeeded" }}
+    timeoutSeconds: {{ .Values.admissionWebhook.webhook.mutating.timeoutSeconds | default 10 }}
+    clientConfig:
+      service:
+        name: {{ include "kube-policies.fullname" . }}-admission-webhook
+        namespace: {{ .Release.Namespace }}
+        path: /mutate
+        port: 8443
+      # caBundle intentionally omitted; cert-manager ca-injector populates it.
+    rules:
+      {{- toYaml .Values.admissionWebhook.webhook.mutating.rules | nindent 6 }}
+    namespaceSelector:
+      {{- include "kube-policies.webhookNamespaceSelector" (dict "ctx" .) | nindent 6 }}
+{{- end }}
+{{- end }}
 {{- end }}

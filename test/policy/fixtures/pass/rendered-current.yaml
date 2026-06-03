@@ -1,0 +1,1506 @@
+---
+# Source: kube-policies/templates/namespace.yaml
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: default
+  labels:
+    helm.sh/chart: kube-policies-1.2.0
+    app.kubernetes.io/name: kube-policies
+    app.kubernetes.io/instance: kube-policies
+    app.kubernetes.io/version: "1.0.0"
+    app.kubernetes.io/managed-by: Helm
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/warn: restricted
+---
+# Source: kube-policies/templates/networkpolicy-default-deny.yaml
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: kube-policies-default-deny
+  namespace: default
+  labels:
+    helm.sh/chart: kube-policies-1.2.0
+    app.kubernetes.io/name: kube-policies
+    app.kubernetes.io/instance: kube-policies
+    app.kubernetes.io/version: "1.0.0"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/component: network-policy
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+    - Egress
+---
+# Source: kube-policies/templates/networkpolicy-egress-apiserver.yaml
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: kube-policies-egress-apiserver
+  namespace: default
+  labels:
+    helm.sh/chart: kube-policies-1.2.0
+    app.kubernetes.io/name: kube-policies
+    app.kubernetes.io/instance: kube-policies
+    app.kubernetes.io/version: "1.0.0"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/component: network-policy
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: kube-policies
+      app.kubernetes.io/instance: kube-policies
+    matchExpressions:
+      - key: app.kubernetes.io/component
+        operator: In
+        values:
+          - admission-webhook
+          - policy-manager
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - ipBlock:
+            cidr: "10.0.0.0/24"
+      ports:
+        - protocol: TCP
+          port: 443
+        - protocol: TCP
+          port: 6443
+---
+# Source: kube-policies/templates/networkpolicy-egress-dashboard.yaml
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: kube-policies-egress-dashboard
+  namespace: default
+  labels:
+    helm.sh/chart: kube-policies-1.2.0
+    app.kubernetes.io/name: kube-policies
+    app.kubernetes.io/instance: kube-policies
+    app.kubernetes.io/version: "1.0.0"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/component: dashboard
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: kube-policies
+      app.kubernetes.io/instance: kube-policies
+      app.kubernetes.io/component: dashboard
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: kube-policies
+              app.kubernetes.io/instance: kube-policies
+              app.kubernetes.io/component: policy-manager
+      ports:
+        - protocol: TCP
+          port: 8080
+        - protocol: TCP
+          port: 9091
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: kube-policies
+              app.kubernetes.io/instance: kube-policies
+              app.kubernetes.io/component: admission-webhook
+      ports:
+        - protocol: TCP
+          port: 9090
+---
+# Source: kube-policies/templates/networkpolicy-egress-dns.yaml
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: kube-policies-egress-dns
+  namespace: default
+  labels:
+    helm.sh/chart: kube-policies-1.2.0
+    app.kubernetes.io/name: kube-policies
+    app.kubernetes.io/instance: kube-policies
+    app.kubernetes.io/version: "1.0.0"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/component: network-policy
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: kube-policies
+      app.kubernetes.io/instance: kube-policies
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+---
+# Source: kube-policies/templates/networkpolicy-egress-internal.yaml
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: kube-policies-egress-internal
+  namespace: default
+  labels:
+    helm.sh/chart: kube-policies-1.2.0
+    app.kubernetes.io/name: kube-policies
+    app.kubernetes.io/instance: kube-policies
+    app.kubernetes.io/version: "1.0.0"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/component: admission-webhook
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: kube-policies
+      app.kubernetes.io/instance: kube-policies
+      app.kubernetes.io/component: admission-webhook
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: kube-policies
+              app.kubernetes.io/instance: kube-policies
+              app.kubernetes.io/component: policy-manager
+      ports:
+        - protocol: TCP
+          port: 8080
+---
+# Source: kube-policies/templates/networkpolicy-ingress-dashboard.yaml
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: kube-policies-ingress-dashboard
+  namespace: default
+  labels:
+    helm.sh/chart: kube-policies-1.2.0
+    app.kubernetes.io/name: kube-policies
+    app.kubernetes.io/instance: kube-policies
+    app.kubernetes.io/version: "1.0.0"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/component: dashboard
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: kube-policies
+      app.kubernetes.io/instance: kube-policies
+      app.kubernetes.io/component: dashboard
+  policyTypes:
+    - Ingress
+  ingress:
+    - ports:
+        - protocol: TCP
+          port: 8090
+      from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ingress-nginx
+---
+# Source: kube-policies/templates/networkpolicy-ingress-metrics.yaml
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: kube-policies-ingress-metrics-webhook
+  namespace: default
+  labels:
+    helm.sh/chart: kube-policies-1.2.0
+    app.kubernetes.io/name: kube-policies
+    app.kubernetes.io/instance: kube-policies
+    app.kubernetes.io/version: "1.0.0"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/component: admission-webhook
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: kube-policies
+      app.kubernetes.io/instance: kube-policies
+      app.kubernetes.io/component: admission-webhook
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: prometheus
+      ports:
+        - protocol: TCP
+          port: 9090
+---
+# Source: kube-policies/templates/networkpolicy-ingress-metrics.yaml
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: kube-policies-ingress-metrics-policy-manager
+  namespace: default
+  labels:
+    helm.sh/chart: kube-policies-1.2.0
+    app.kubernetes.io/name: kube-policies
+    app.kubernetes.io/instance: kube-policies
+    app.kubernetes.io/version: "1.0.0"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/component: policy-manager
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: kube-policies
+      app.kubernetes.io/instance: kube-policies
+      app.kubernetes.io/component: policy-manager
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: prometheus
+      ports:
+        - protocol: TCP
+          port: 9091
+---
+# Source: kube-policies/templates/networkpolicy-ingress-metrics.yaml
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: kube-policies-ingress-metrics-dashboard
+  namespace: default
+  labels:
+    helm.sh/chart: kube-policies-1.2.0
+    app.kubernetes.io/name: kube-policies
+    app.kubernetes.io/instance: kube-policies
+    app.kubernetes.io/version: "1.0.0"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/component: dashboard
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: kube-policies
+      app.kubernetes.io/instance: kube-policies
+      app.kubernetes.io/component: dashboard
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: prometheus
+      ports:
+        - protocol: TCP
+          port: 9092
+---
+# Source: kube-policies/templates/networkpolicy-ingress-policy-manager.yaml
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: kube-policies-ingress-policy-manager
+  namespace: default
+  labels:
+    helm.sh/chart: kube-policies-1.2.0
+    app.kubernetes.io/name: kube-policies
+    app.kubernetes.io/instance: kube-policies
+    app.kubernetes.io/version: "1.0.0"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/component: policy-manager
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: kube-policies
+      app.kubernetes.io/instance: kube-policies
+      app.kubernetes.io/component: policy-manager
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: kube-policies
+              app.kubernetes.io/instance: kube-policies
+              app.kubernetes.io/component: admission-webhook
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: kube-policies
+              app.kubernetes.io/instance: kube-policies
+              app.kubernetes.io/component: dashboard
+      ports:
+        - protocol: TCP
+          port: 8080
+---
+# Source: kube-policies/templates/networkpolicy-ingress-webhook.yaml
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: kube-policies-ingress-webhook
+  namespace: default
+  labels:
+    helm.sh/chart: kube-policies-1.2.0
+    app.kubernetes.io/name: kube-policies
+    app.kubernetes.io/instance: kube-policies
+    app.kubernetes.io/version: "1.0.0"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/component: admission-webhook
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: kube-policies
+      app.kubernetes.io/instance: kube-policies
+      app.kubernetes.io/component: admission-webhook
+  policyTypes:
+    - Ingress
+  ingress:
+    - ports:
+        - protocol: TCP
+          port: 8443
+      from:
+        - ipBlock:
+            cidr: "10.0.0.0/24"
+---
+# Source: kube-policies/templates/dashboard-rbac.yaml
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: kube-policies-dashboard
+  namespace: default
+  labels:
+    helm.sh/chart: kube-policies-1.2.0
+    app.kubernetes.io/name: kube-policies
+    app.kubernetes.io/instance: kube-policies
+    app.kubernetes.io/version: "1.0.0"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/component: dashboard
+# IAM-WU-10 (CIS 5.1.5/5.1.6): the dashboard does not call the apiserver at runtime,
+# so it never mounts an SA token (the pod also sets automountServiceAccountToken: false).
+automountServiceAccountToken: false
+---
+# Source: kube-policies/templates/rbac.yaml
+# Admission-webhook ServiceAccount (IAM-WU-09): the enforcement plane's identity.
+# automountServiceAccountToken: false (IAM-WU-10, CIS 5.1.5/5.1.6) — the SA default
+# is off; the webhook Deployment opts the token back IN at pod level because the
+# controller-runtime client + leader election need it.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: kube-policies-admission-webhook
+  namespace: default
+  labels:
+    helm.sh/chart: kube-policies-1.2.0
+    app.kubernetes.io/name: kube-policies
+    app.kubernetes.io/instance: kube-policies
+    app.kubernetes.io/version: "1.0.0"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/component: admission-webhook
+automountServiceAccountToken: false
+---
+# Source: kube-policies/templates/rbac.yaml
+# Policy-manager ServiceAccount (IAM-WU-09): the management plane's identity,
+# distinct from the webhook for separation of duties (NIST AC-5).
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: kube-policies-policy-manager
+  namespace: default
+  labels:
+    helm.sh/chart: kube-policies-1.2.0
+    app.kubernetes.io/name: kube-policies
+    app.kubernetes.io/instance: kube-policies
+    app.kubernetes.io/version: "1.0.0"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/component: policy-manager
+automountServiceAccountToken: false
+---
+# Source: kube-policies/templates/admission-webhook-tls.yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: kube-policies-admission-webhook-certs
+  namespace: default
+  labels:
+    helm.sh/chart: kube-policies-1.2.0
+    app.kubernetes.io/name: kube-policies
+    app.kubernetes.io/instance: kube-policies
+    app.kubernetes.io/version: "1.0.0"
+    app.kubernetes.io/managed-by: Helm
+type: kubernetes.io/tls
+data:
+  tls.crt: "LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0tCk1JSUVEVENDQXZXZ0F3SUJBZ0lSQU1NUFpHeDk2UlY1V2FQMm9ZYnVHeXN3RFFZSktvWklodmNOQVFFTEJRQXcKSXpFaE1COEdBMVVFQXhNWWEzVmlaUzF3YjJ4cFkybGxjeTEzWldKb2IyOXJMV05oTUI0WERUSTJNRFl3TVRJdwpNelF5T1ZvWERUSTNNRFl3TVRJd016UXlPVm93S2pFb01DWUdBMVVFQXhNZmEzVmlaUzF3YjJ4cFkybGxjeTFoClpHMXBjM05wYjI0dGQyVmlhRzl2YXpDQ0FTSXdEUVlKS29aSWh2Y05BUUVCQlFBRGdnRVBBRENDQVFvQ2dnRUIKQU1KZWdxNzI3d0wrYVpKcmdreXczWlpaY21DZGpMVlBEZmVWbHd1Y09jM01JVFV5U2QzSU4ranRubXJnSkhaZQo1S2dTYnBYamoxODFIZjU2dkVpbmZzZjJIblk4MHZ3SUZ2Q3Vlb2tDT2FYN2RBb3RWclRDSHQ2ak5DVUZWREZnClpRUSsxSytpa1hyc29NYXlvamQvL29DVmFJODNjUkxiUkgrdk50aHh1ZkJBUS9MZW5OUWFhWWI0VUtRTDAxUk4KK3VRc0h6N2hwWHAwOHcvTkJJd1poZlliak1tMGswYm1iaXRDTHFzQnE2Zi9KVUkxTC9rOWhlWVpBOVI4MW8xNwpjdDJERk5ZNG9xR3k5RzJ4Zy9KRlRQZnFkMFVJbGRrQVF5SHJZYVo1ZG14NTZNVFlFZWRMcTRTd0VmR3Nyc3hIClZJYnk5TGFGanhPQVZsbzkxZmFES3gwQ0F3RUFBYU9DQVRNd2dnRXZNQTRHQTFVZER3RUIvd1FFQXdJRm9EQWQKQmdOVkhTVUVGakFVQmdnckJnRUZCUWNEQVFZSUt3WUJCUVVIQXdJd0RBWURWUjBUQVFIL0JBSXdBREFmQmdOVgpIU01FR0RBV2dCUTJWeld5cW16c3JYbHlycnY3UHVkd3JDa0plekNCemdZRFZSMFJCSUhHTUlIRGdoOXJkV0psCkxYQnZiR2xqYVdWekxXRmtiV2x6YzJsdmJpMTNaV0pvYjI5cmdpZHJkV0psTFhCdmJHbGphV1Z6TFdGa2JXbHoKYzJsdmJpMTNaV0pvYjI5ckxtUmxabUYxYkhTQ0sydDFZbVV0Y0c5c2FXTnBaWE10WVdSdGFYTnphVzl1TFhkbApZbWh2YjJzdVpHVm1ZWFZzZEM1emRtT0NPV3QxWW1VdGNHOXNhV05wWlhNdFlXUnRhWE56YVc5dUxYZGxZbWh2CmIyc3VaR1ZtWVhWc2RDNXpkbU11WTJ4MWMzUmxjaTVzYjJOaGJJSUpiRzlqWVd4b2IzTjBod1IvQUFBQk1BMEcKQ1NxR1NJYjNEUUVCQ3dVQUE0SUJBUUJpdENOK1ZtazZ6RGRlV1lMbU5sSEhNUXBGUDZrZWxPbHJIU0FqL0s5dgplWVlrakR5a2psaldJVXFJVDZad0t3dk1zUnptUU1TS01EakVLb3E0TEUzb0swRUIzWnV6R1VFbWVaZ09XK3cyCjJiZnN4VlNxNTRGSjllTEVHQkFNRVNNajBCUGVWekNQdVFoeEorbFZVZFcwQ3EyZVBncng4TXN1cW9DTUd2ZFYKaGs5c3pCVkU2MnROK0RzTUZGZHllK0hrUFh5YVo5L0tObmVTSDVSUUlvZWJCK3RVRW53c2pZMmg0L2U5eDNyTgpiVE0vZ0h6VnViZ0s4K3VLc0VyNEl5em9iSTE5VHFMSVhvWmlBRFhpRTVLOVROVHJySGJmMUNta3NsY1AxbGNsClQ5cHJsTlBXZHVoYUY1Vnh4UEw5WWk3SzhsUkFaSWpqS3JTTC90NS9lWE1qCi0tLS0tRU5EIENFUlRJRklDQVRFLS0tLS0K"
+  tls.key: "LS0tLS1CRUdJTiBSU0EgUFJJVkFURSBLRVktLS0tLQpNSUlFb3dJQkFBS0NBUUVBd2w2Q3J2YnZBdjVwa211Q1RMRGRsbGx5WUoyTXRVOE45NVdYQzV3NXpjd2hOVEpKCjNjZzM2TzJlYXVBa2RsN2txQkp1bGVPUFh6VWQvbnE4U0tkK3gvWWVkanpTL0FnVzhLNTZpUUk1cGZ0MENpMVcKdE1JZTNxTTBKUVZVTVdCbEJEN1VyNktSZXV5Z3hyS2lOMy8rZ0pWb2p6ZHhFdHRFZjY4MjJIRzU4RUJEOHQ2YwoxQnBwaHZoUXBBdlRWRTM2NUN3ZlB1R2xlblR6RDgwRWpCbUY5aHVNeWJTVFJ1WnVLMEl1cXdHcnAvOGxRalV2CitUMkY1aGtEMUh6V2pYdHkzWU1VMWppaW9iTDBiYkdEOGtWTTkrcDNSUWlWMlFCRElldGhwbmwyYkhub3hOZ1IKNTB1cmhMQVI4YXl1ekVkVWh2TDB0b1dQRTRCV1dqM1Y5b01ySFFJREFRQUJBb0lCQUJGYjJYWUF6YlhKdk9uNwp1Z1paWVdEVkdqYnd1eWxTSnlBdWR1L3RndWdUUy8veFB0R1UyUkZ2YjArQ054OXZPQ0tlaXN2T0ovYkx5cUw0Cm1Tb3Y4MDJ1ZUdmODVLYm5uZ3pldUVqV0x3blkzRE13ZTJiblUxUjA1T3BOZ0loc1lIa3hsMU1jUkx2aXVEVW0KclFBaDZUdlluQjcyUjUzMGdUaWFFRjdpUVVYb2YzVU9tT25rTXMxSDhXVStpVno1Y2hwWWFWZ28rNVFzc3ZWagpuY1FTWmpWaVdWU2NCMCtJWFAxTThtUkVHTFhXSloyUmtHRHZrYWExTWlHM3dYa0dzRFkvYnNxNlBuMXNXREhrCit3b3ZoTXBPVmlFeFRBbmYwa2pJclRKSUNZcnhwalNEWFZ2M3ovWkpMTGdmVlRtcjVkb2o1MUFzVy93RkR6MVcKckpBcUh1MENnWUVBOERIaWErY1pmTnFzZGZORGdkZElHdklGcFRoTVJ5WUFoNHlLYWJyUUJ1b2t0ZGd4NE5TagpraGE3T09ydDdCMUdBTzdKMTRNN3lWQTRmdU9tb1QzRVd4cnhPSFRTNnpVRFhtRzRITGlTU1c5b3J5UUt5SEZvCmgveDE0UUIxUTZwYVlrY1lPNEFPejlWWWxWWnVuMjZIN2tBczdCVmptdW0xeENWWS9RcDh5eWNDZ1lFQXp5aXYKcG9RKzN3eXByOXpVYzNOZGVxaEEvdUNsNmJlQ2YzUWFBa1dxMkduWWlwODVJZitCbWVzOXRqdW8rL0tGTkc4WgpDRStFK0RCSG5nemd2YWN2Um01NkJaTXJmY3JHSy9pWEs0UHhRUi9WOVhaWmpodWdIekZtdUVrUCtMZnNlZTVrCjZVaWRDcWZRRXFqTWkwYkhtWExVSkM1Z3RoVURnY21RWktFSEVoc0NnWUJRM0lwY1J4VzJpYXVMbmRTNUxtK1EKMnE5NTJzVWJJcmtFNlJSajJjZFV2SmlWTzI0M1FYNjduTGwweE9wS0ZlVE9SWlZmMzBkT1U1cGhaV1JnWGZudgpyZGROYVU3a2JobHZPYmlRdXJaTTBKdk9jblRLM0JzVHhMTXVoMGZ5K3JPbzZFUkpLNmhRNFlNTDYyZ2Nka3ArCnM4NHJ3RnVpK0ZELzhvN055UzBQK3dLQmdRQ3hobXBRUnBBaVVSV3hVWXIyak95VXlrODRuSWRSN0NMMjJpWFgKd0tBUjZWTGFLR3lyaCt3bVhRTjdnVkRrNkFYaTB6b2VkeGE2SVpXZUNlY21YM2tSNEdiTkZEdDNCeWdnVWw0cAp1bDRxc3YrRjVMQUdLZ0pqK00vUUtUeDRwaFVPd0k3Vm81YUFwU0tZZXZNZWY3OVk3cUNCaVFUenhMcEdwTmNLCmhUd3I5UUtCZ0hjd2RDa2lmdW9ueVZSbHA5bVFnbkhvSks0cy9sb0JNNnh0bHB6ZkhCUzNmUC92T1FrRkw1Z2UKN0VNWnAxcnpxMzA1aHFvTXhLZy8rTFhFWHVqL2RtUm5Ld0haR0pzQzdodXQweWpmQnRpOVFvblhraUsrYmtCaQppUUxmcldUTHh0bDl5cTVGRXdMaStKN2g1cEkrU1JnUGJ2S3I0a2R6M0lTM25qcDYxNG1PCi0tLS0tRU5EIFJTQSBQUklWQVRFIEtFWS0tLS0tCg=="
+  ca.crt: "LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0tCk1JSURNVENDQWhtZ0F3SUJBZ0lRSEZFYmFjL1BMd3NTUk1vNExrbTBtakFOQmdrcWhraUc5dzBCQVFzRkFEQWoKTVNFd0h3WURWUVFERXhocmRXSmxMWEJ2YkdsamFXVnpMWGRsWW1odmIyc3RZMkV3SGhjTk1qWXdOakF4TWpBegpOREk1V2hjTk1qY3dOakF4TWpBek5ESTVXakFqTVNFd0h3WURWUVFERXhocmRXSmxMWEJ2YkdsamFXVnpMWGRsClltaHZiMnN0WTJFd2dnRWlNQTBHQ1NxR1NJYjNEUUVCQVFVQUE0SUJEd0F3Z2dFS0FvSUJBUUN3cC9zZTJKTFUKeGhmRHN3R2dSSFJLV21SV3BaT1F1ODhycGZ5bXZaVG9yWUUwc3VCdG04aW5qNUlUVUpuNnRubzA3SnZPNTVVUwpaNFo3S3dkSVhKd29uWktIOFpkemxOQlpPVEVRNWRCaTZ1WTJVQW5wRS9DYzJ1RWdFTzd3WFBFMUYramkrK3RpCmEyRjlKdWR0VkhHT0U0ZDFZSzJ5Ly90VldEbE1rcWlXN0IxTVBzbnZiWmpTeC8vRzduYjB3QVd1ZzFpaUNMblIKQlZCdWsyNVV2ME9KVkVjTnhWRVFsejllTUtCL09sY2dOR29ldGdDd2hSaGNxL1NDejJ2Nmx0QU5WT05iQXdHbAozV1M4ekd3QlNOSFlvcEp5bzFwWS9TUElJbEVwdlNjZ0NHZHJsaXFpMHVKeHIrdU5ObUg5NU5IUXFkRndXQXRCCjUxYUtVbU9ZK2NJUkFnTUJBQUdqWVRCZk1BNEdBMVVkRHdFQi93UUVBd0lDcERBZEJnTlZIU1VFRmpBVUJnZ3IKQmdFRkJRY0RBUVlJS3dZQkJRVUhBd0l3RHdZRFZSMFRBUUgvQkFVd0F3RUIvekFkQmdOVkhRNEVGZ1FVTmxjMQpzcXBzN0sxNWNxNjcrejduY0t3cENYc3dEUVlKS29aSWh2Y05BUUVMQlFBRGdnRUJBQmhwQmlnaU5zNlhCS0wzClBXMTBUVGkwcHdRZGY1b2xBbGpuK2RObytRR012bStkMUUzdkt5MkVUc3JQZmN4UmZEbmJLVTZROFMrMnVKc0IKUzJiZWpiNEtidkNydmxmQmpPNnUrR2pyVDFCaDdkcEZsVWVKbVY1WlZERTZIbnI1NzJDYVU5ZGdvalRGcFJSbQpySGdUMktxb2ZPNGFVWU5OWmF5LzlZZDFuM3pCRkJmK0EvZHJ4T0gvNWJmUjV1b3Q2KzNraTdZRy9UZEtGVGR6CnV4RTFBSWtDL0VvSk9Qb1RSY2FUT1A2Qml2a05WaDJOb1hsTmhzVFFyTDFEWkVLbGxDMEwrVWpzRWhReEwrY1IKWkt2YnZQNm8xbS9VaG50bXhoQVNKZzZFVGd5UVFkb2Foa2NKcGhoVWVoaXlkYkZPMDFnaUFuMDVaVlg2RFJKSgp3RHprSzU4PQotLS0tLUVORCBDRVJUSUZJQ0FURS0tLS0tCg=="
+---
+# Source: kube-policies/templates/policy-manager-tls.yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: kube-policies-policy-manager-certs
+  namespace: default
+  labels:
+    helm.sh/chart: kube-policies-1.2.0
+    app.kubernetes.io/name: kube-policies
+    app.kubernetes.io/instance: kube-policies
+    app.kubernetes.io/version: "1.0.0"
+    app.kubernetes.io/managed-by: Helm
+type: kubernetes.io/tls
+data:
+  tls.crt: "LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0tCk1JSUVCRENDQXV5Z0F3SUJBZ0lRSjFvSDYydkNRbUdsM0phV3JmYTVFekFOQmdrcWhraUc5dzBCQVFzRkFEQXEKTVNnd0pnWURWUVFERXg5cmRXSmxMWEJ2YkdsamFXVnpMWEJ2YkdsamVTMXRZVzVoWjJWeUxXTmhNQjRYRFRJMgpNRFl3TVRJd016UXlPVm9YRFRJM01EWXdNVEl3TXpReU9Wb3dKekVsTUNNR0ExVUVBeE1jYTNWaVpTMXdiMnhwClkybGxjeTF3YjJ4cFkza3RiV0Z1WVdkbGNqQ0NBU0l3RFFZSktvWklodmNOQVFFQkJRQURnZ0VQQURDQ0FRb0MKZ2dFQkFKcDhjYjFWZ3FRK3RBMi9kbGwyNjJ1VVFMV2ZKR1REWEprbkdEV1NQZHBMU0RmbmJDM1F4Rkh6UXpOUwpTZVUrcEkwYVArbjdNWXJhMGtxQnJFai9ERVhCWGtoY25NSjRUT1BpSzVSMEtySjhmcmRaVnBuS3ROZU85UHZBClZmY0R3cEg3eitkRXNPazk1ZDc2dGl2MFl3Z3g0cWdlZnRBTVB6L2NGQkJoWTNxdWNGUGY1WW5XYTBVQXlqdm0KR2FYNkZUM0dEYzZnZlR2TGNJN3Jnby9DNFRtN3d1aGUwZ05FTjVVRGRIdllIZVd1WUxROGZOT3RiWE1iRzU0cQp5QVRabURQWTFnMm04ckJTbHNMaXB0eFhBNjVicUVBVHB5dWRtTGd0c1lyN0xTRW5CNmx6aVJwWlpudENTS1BSCkFqNVltWnZlQkE4S2ZDZmtaaHZMSEE5MXowY0NBd0VBQWFPQ0FTY3dnZ0VqTUE0R0ExVWREd0VCL3dRRUF3SUYKb0RBZEJnTlZIU1VFRmpBVUJnZ3JCZ0VGQlFjREFRWUlLd1lCQlFVSEF3SXdEQVlEVlIwVEFRSC9CQUl3QURBZgpCZ05WSFNNRUdEQVdnQlJwM0FhUGhPOUhuNzdVaUJjbVI2T3RUV1hUZERDQndnWURWUjBSQklHNk1JRzNnaHhyCmRXSmxMWEJ2YkdsamFXVnpMWEJ2YkdsamVTMXRZVzVoWjJWeWdpUnJkV0psTFhCdmJHbGphV1Z6TFhCdmJHbGoKZVMxdFlXNWhaMlZ5TG1SbFptRjFiSFNDS0d0MVltVXRjRzlzYVdOcFpYTXRjRzlzYVdONUxXMWhibUZuWlhJdQpaR1ZtWVhWc2RDNXpkbU9DTm10MVltVXRjRzlzYVdOcFpYTXRjRzlzYVdONUxXMWhibUZuWlhJdVpHVm1ZWFZzCmRDNXpkbU11WTJ4MWMzUmxjaTVzYjJOaGJJSUpiRzlqWVd4b2IzTjBod1IvQUFBQk1BMEdDU3FHU0liM0RRRUIKQ3dVQUE0SUJBUUFpSHdFUjB3U2lNdzh4dGR0Z1JyM05lYmlheWJLSkxCcm9xMjdUV25GRTdJOFlheXlrbFRMbQpYVVlXWHpaUmo1dkl5bytJbzczUFJTVllneTNDOW1kR0tWbm1wa0kzZ3hidE01SnFadUlHTlpWaUpTZGdNeW0xClA2b3hyRk1zMEtWKy85ZkJ2RFBXMzRmRG9yYzZEUlJUN25qNXdjQjlwYTR5cS9ySGhtcGVtWkV2ei9tVVdxajAKK3IrNFFaVHF6Wk5hdFNhZUQ0ejFFN3pRY3FKbFpKL1FaV1BoL0gyUGFXSEkwZmdwM1BLWGUzckszUWhQenN2YQpzR0pMd1Jha1JLd1pFZFdLaUdFd1YxOVZnYUI3VDVWSTkzOTRLQ3hQRzljbkdydTJyRk5Hdk1DZFp0NFU3eDZSCmZvU0tGQWRkNU9ISG5HSnhXRVNIcFFkTlE1NGR0VC9tCi0tLS0tRU5EIENFUlRJRklDQVRFLS0tLS0K"
+  tls.key: "LS0tLS1CRUdJTiBSU0EgUFJJVkFURSBLRVktLS0tLQpNSUlFcFFJQkFBS0NBUUVBbW54eHZWV0NwRDYwRGI5MldYYnJhNVJBdFo4a1pNTmNtU2NZTlpJOTJrdElOK2RzCkxkREVVZk5ETTFKSjVUNmtqUm8vNmZzeGl0clNTb0dzU1A4TVJjRmVTRnljd25oTTQrSXJsSFFxc254K3QxbFcKbWNxMDE0NzArOEJWOXdQQ2tmdlA1MFN3NlQzbDN2cTJLL1JqQ0RIaXFCNSswQXcvUDl3VUVHRmplcTV3VTkvbAppZFpyUlFES08rWVpwZm9WUGNZTnpxQjlPOHR3anV1Q2o4TGhPYnZDNkY3U0EwUTNsUU4wZTlnZDVhNWd0RHg4CjA2MXRjeHNibmlySUJObVlNOWpXRGFieXNGS1d3dUttM0ZjRHJsdW9RQk9uSzUyWXVDMnhpdnN0SVNjSHFYT0oKR2xsbWUwSklvOUVDUGxpWm05NEVEd3A4SitSbUc4c2NEM1hQUndJREFRQUJBb0lCQUFjNnlhdmRvNWFDSkxUNwovOUxpQU5SeEJMSTdOMTNMMHJxTUhOTHMvQjRLSmVBUDRYMG5admlhMU10REQ1ZzkzVCtKT2ZKK1FleEluMHpEClVzZTd2OXhIMTF5MWtOUjlBc1FyWW5TNUZ3SnhWeERIaW9qNTlvcWI4eFVSQkRUaUpTbmx5ZTM5eGZXMFl0eVQKaVJEM2grYnJScnN0YWl2Y1Z0MXJORGtzQlpiSkhuVW9US2lpbWhpY1Arck53VUxIcFJnTjFHaEJkazBGbkh3dwpCVEJQZVZqZkE2TGpQUjlsM2lUTXF5R203OGRGclpxZFdJbzB0cG1ST0MzaUJ2a0VaNVpoQm9qM0FHYkhuZU1wCnNlL3dIYng2cjgwWEtEeGV1YlplSFUyWXBMVFMxNWpBQkRUS09QY0laM3M4TWxpdmlPT2xqTjFUdlUwaXBWSXgKRnI5SXhORUNnWUVBeEU3cXJQeFJWYnR1YzlhaUFNckdDOEpsZ2RNUm1iWDVaVUQzaVdEKzc1WkhtbkpCb1drUgpveFBtRDFyWlJFNTJCdjdhMmJVKzNjQzhYdlZYOXBKU0MvOUMzZ0ZjdFNYTHZNWTV2UFBmMHExc2pwcHl0UjF6CllEaklpY3h1YklpTzZZSTdncDZaQ28vbnBLVGQvRnZMS3V5RE9ndTZrUTgydHhnK0UrNmhxMDhDZ1lFQXlYWCsKMWRCd3ZYV3RWbVFmOHhWam9BQ0VVUXZZZGszOHA1TmJjWm5pY0ZEZlg2U0loOFpGSmdUWVNjN0Z6ZmlYTG9mUAp1RnVDbkRHWG1jTEQ0NlBVQ2RnM3ZVbFlPNDVkWlNZRERWUmpCT0haSDllaFZleUhzd1hMaEJYYzhPTEFwaE0zCjhneXptOVhmSlpIM0pkME5yVEF4dzFoNzJxblY5ZzlKTFNoTVBva0NnWUVBcTEyZ3F1V1FNdUR0cUoyQ3ltSTQKeEdjc3FVb1JvVGNqd09vWHJJdEp3T2hWRlZRTVN0VW5tazV5bEpEZi9TcnBDVzVNcWFQNGZ5Z1N5R293SVlUVgpycmRrTGR6T2l5dTFVTk5SNzhxTVpxTVJrdUxzbzRKVUIzbEtSbEI1VExGZzRDTFp4RXFpbW4vSTNRYzI2V2RRClVlWXBIL0RCS29RM1pWbjZSdmdYbFMwQ2dZRUF1T25mUUc0VUxUSm9LZFc1SmF2S1I4QnhzdHBHazBBOTJhcDkKMHFYR25BVC9JcENvNk1icURWMkJFUzREald6Umgxb05KVkNKYjhodE9DcjNGbWozWlJuYS81amtyYldjc0F6VgozRlJLbHQ2ZUpvWUxoZ3lXK1pFbUhsVGErUmVJY0dkUGdKSjhBVnVyZUphajNWTXJESDRpRHdXV21Ud3VNYTRTCklxck1ZTkVDZ1lFQW95UHpERTVXTmtNTkpuY1pTUEdVQW5SMGMyUGY4K0laUE91OHA1cFk4aFcvdERiQ3pxSnAKVytQaU9heGxaQTR5RDJIcVhYdzdPTktGc3lOd0dwU3F0MzZqL3AwWXVBN2dYUXRGVlVxdmEvWWMxSUNWV09LMgpQL1JJeVU2UU9vWGpLbmZTaXF4RG1UakpvbjFkZWlTOVJ5TFRBMUoxbkpHS2FBLzdwVWlKSWtzPQotLS0tLUVORCBSU0EgUFJJVkFURSBLRVktLS0tLQo="
+  ca.crt: "LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0tCk1JSURQekNDQWllZ0F3SUJBZ0lRQ283anJCL3VEMHFUNTcxZzhOVGRrekFOQmdrcWhraUc5dzBCQVFzRkFEQXEKTVNnd0pnWURWUVFERXg5cmRXSmxMWEJ2YkdsamFXVnpMWEJ2YkdsamVTMXRZVzVoWjJWeUxXTmhNQjRYRFRJMgpNRFl3TVRJd016UXlPRm9YRFRJM01EWXdNVEl3TXpReU9Gb3dLakVvTUNZR0ExVUVBeE1mYTNWaVpTMXdiMnhwClkybGxjeTF3YjJ4cFkza3RiV0Z1WVdkbGNpMWpZVENDQVNJd0RRWUpLb1pJaHZjTkFRRUJCUUFEZ2dFUEFEQ0MKQVFvQ2dnRUJBTjlEN043UHIxT1pUNjNJKy9DbUcrKzRCb3ptVEdDMmVIKzJVejFaQ3RkV3hxUEdaQk1aM1piTwpORmpJZmhjSCtrdDZGdVdpZHpRLzdKNHNScU45YkI4czZnWWx6Wm4rTW43MjFwaUtUV3BoTkpucnUydWZELy81CjZTOWI2ZVlMSmdmZTBxNnlueGhNWFNqT3MwTEU0UzJqQXhzVEx3ZXhnR2NlbUVKZkcrYkR2YVdQVXFiaU16YWQKamZGRlBibUlXSkU5R2Q1ZnBMTHNMS0RzVkFGOWNNVnAyQm5rS0ZpbHI2U1kxd0hFbE1xWGQyYU0xRGJFZk00NQplMFF1bkJnM1ZPMkVTZlZBVndwMlpEdFpyRWd4TlZJUXZqMU5BeU5OT1d2SWNjOXhpWGVvWDI5TjhyRHhsdVhKCnU3TUgrQlo1SW1kdy9uREdRVDR1YXBCa2FabGU5R3NDQXdFQUFhTmhNRjh3RGdZRFZSMFBBUUgvQkFRREFnS2sKTUIwR0ExVWRKUVFXTUJRR0NDc0dBUVVGQndNQkJnZ3JCZ0VGQlFjREFqQVBCZ05WSFJNQkFmOEVCVEFEQVFILwpNQjBHQTFVZERnUVdCQlJwM0FhUGhPOUhuNzdVaUJjbVI2T3RUV1hUZERBTkJna3Foa2lHOXcwQkFRc0ZBQU9DCkFRRUF6bTlrbWZvQy9kL0thQlFEbEpOTXlDd3lTZEtLMThzVHZ3ZmZoUWxIVGdreENLdS9UYldMcXVvajd1ZnYKWE5HNEZOK3dJeWQwUEFDYlVJTW8xS0g2d3BicndRTWprYXJmMVg2dkZtYUxWVmVsbmFSRGh0KzlCL1VSdEdRMQpwNG1TVTZBTHFtcnNnR2t5bm1TQVEvYm9nMk0ySE81d0R6K0l4TWNHVFBiMUlHZnFRMWJUM3VYTE5KK1p4RUEyCjJ1OGZGSUhNMFlTYjViY1VKSnZmYXMyL1dwZ3ZBa2JZR2dObE1HdU5sVG93Zk1EeGhtaWRyY29DNEVqMWdsbmkKYW9Ca2tjSkhNbGwyb2c1cWpQa2FvZTJnMm0xS244VlR2bGNXbG53ODJXVWxYMXdQOXhsRUZYRHhrWE5WOVg4NQpNYWdzSzBXTGlaSENOV0RsTmJoYlJFQlZGUT09Ci0tLS0tRU5EIENFUlRJRklDQVRFLS0tLS0K"
+---
+# Source: kube-policies/templates/configmap.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: kube-policies-config
+  namespace: default
+  labels:
+    helm.sh/chart: kube-policies-1.2.0
+    app.kubernetes.io/name: kube-policies
+    app.kubernetes.io/instance: kube-policies
+    app.kubernetes.io/version: "1.0.0"
+    app.kubernetes.io/managed-by: Helm
+data:
+  config.yaml: |
+    policy:
+      failure_mode: "fail-closed"
+      disable_defaults: false
+    audit:
+      enabled: true
+      backend: "file"
+      buffer_size: 1000
+      flush_interval: "10s"
+      retention: "90d"
+      config:
+        # Map the YAML directory `audit.backend.file.path` to a concrete
+        # filename. The audit logger's createBackend reads `config.filename`.
+        filename: "/var/log/kube-policies/audit.log"
+    security:
+      # Management API authentication (policy-manager :8080). When
+      # authentication.enabled=false the API is UNAUTHENTICATED (dev only;
+      # tracked gap). Production sets auth.enabled=true (values-production.yaml),
+      # which the render-fail guard above gates on issuer/jwks_url/audience.
+      authentication:
+        enabled: false
+      rbac:
+        # default_role grants a role to authenticated users without a matching
+        # binding; "" denies mutations to such users.
+        default_role: ""
+        role_bindings: []
+      # Rate-limiting / DoS-protection (NET-WU-14/15, RES-WU-17). Flows through
+      # the shared config.yaml ConfigMap so the webhook and policy-manager pick
+      # the same limits up via security.ratelimit.*. Limits are PER-REPLICA;
+      # defaults are tuned to protect the fail-closed webhook from a flood
+      # without throttling legitimate apiserver admission traffic.
+      ratelimit:
+        enabled: true
+        requests_per_second: 50
+        burst: 100
+        max_concurrent: 100
+        max_body_bytes: 3145728
+        max_stream_connections: 100
+---
+# Source: kube-policies/templates/policy-manager-pvc.yaml
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: kube-policies-data
+  namespace: default
+  labels:
+    helm.sh/chart: kube-policies-1.2.0
+    app.kubernetes.io/name: kube-policies
+    app.kubernetes.io/instance: kube-policies
+    app.kubernetes.io/version: "1.0.0"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/component: policy-manager
+spec:
+  accessModes:
+    - "ReadWriteOnce"
+  resources:
+    requests:
+      storage: "10Gi"
+---
+# Source: kube-policies/templates/rbac.yaml
+# Least-privilege ClusterRole for the admission-webhook (IAM-WU-08). The reconcilers
+# watch policies/policyexceptions across all namespaces (Namespaced CRDs, cluster-wide
+# watch) and patch their /status; nothing else in the apiserver is read or written at
+# runtime. No core/apps/rbac/networking/admissionregistration grants — the webhook does
+# NOT self-register webhook configs and the engine does not fetch related cluster
+# objects during evaluation (TLS certs are volume-mounted, not API-fetched).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: kube-policies-admission-webhook
+  labels:
+    helm.sh/chart: kube-policies-1.2.0
+    app.kubernetes.io/name: kube-policies
+    app.kubernetes.io/instance: kube-policies
+    app.kubernetes.io/version: "1.0.0"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/component: admission-webhook
+rules:
+# Policy resources
+- apiGroups: ["policies.kube-policies.io"]
+  resources:
+  - policies
+  - policyexceptions
+  verbs: ["get", "list", "watch"]
+
+# Policy status subresources.
+# PolicyReconciler.publishPolicyStatus / PolicyExceptionReconciler.publishExceptionStatus
+# write phase + conditions via r.Status().Patch(), which targets the
+# /<plural>/<name>/status endpoint. The apiserver enforces RBAC on the
+# subresource separately from the parent — without this rule the patch is
+# rejected with "cannot patch resource \"policies/status\"" and the e2e
+# spec polling for phase=Active times out at 30s.
+- apiGroups: ["policies.kube-policies.io"]
+  resources:
+  - policies/status
+  - policyexceptions/status
+  verbs: ["get", "update", "patch"]
+---
+# Source: kube-policies/templates/rbac.yaml
+# Separate ClusterRole for the policy-manager (IAM-WU-08), distinct object for
+# separation of duties even though the rule set matches the webhook's: both planes
+# reconcile the same CRDs with the same minimal apiserver footprint.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: kube-policies-policy-manager
+  labels:
+    helm.sh/chart: kube-policies-1.2.0
+    app.kubernetes.io/name: kube-policies
+    app.kubernetes.io/instance: kube-policies
+    app.kubernetes.io/version: "1.0.0"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/component: policy-manager
+rules:
+# Policy resources
+- apiGroups: ["policies.kube-policies.io"]
+  resources:
+  - policies
+  - policyexceptions
+  verbs: ["get", "list", "watch"]
+
+# Policy status subresources (see the webhook ClusterRole above for why the
+# /status subresource needs its own rule).
+- apiGroups: ["policies.kube-policies.io"]
+  resources:
+  - policies/status
+  - policyexceptions/status
+  verbs: ["get", "update", "patch"]
+# TokenReview validation for the inbound webhook decisions channel (IAM-WU-11).
+# TokenReview is a write-only (create), cluster-scoped subresource of the
+# authentication.k8s.io API: the apiserver evaluates the submitted token and
+# returns the verdict in the response body — nothing is persisted, so only
+# "create" is needed (no get/list/watch). Granted ONLY to the policy-manager and
+# ONLY in tokenreview mode.
+- apiGroups: ["authentication.k8s.io"]
+  resources:
+  - tokenreviews
+  verbs: ["create"]
+---
+# Source: kube-policies/templates/rbac.yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: kube-policies-admission-webhook
+  labels:
+    helm.sh/chart: kube-policies-1.2.0
+    app.kubernetes.io/name: kube-policies
+    app.kubernetes.io/instance: kube-policies
+    app.kubernetes.io/version: "1.0.0"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/component: admission-webhook
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: kube-policies-admission-webhook
+subjects:
+- kind: ServiceAccount
+  name: kube-policies-admission-webhook
+  namespace: default
+---
+# Source: kube-policies/templates/rbac.yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: kube-policies-policy-manager
+  labels:
+    helm.sh/chart: kube-policies-1.2.0
+    app.kubernetes.io/name: kube-policies
+    app.kubernetes.io/instance: kube-policies
+    app.kubernetes.io/version: "1.0.0"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/component: policy-manager
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: kube-policies-policy-manager
+subjects:
+- kind: ServiceAccount
+  name: kube-policies-policy-manager
+  namespace: default
+---
+# Source: kube-policies/templates/dashboard-rbac.yaml
+# Narrow Role: read-only access to policy-manager and admission-webhook Services only.
+# No access to CRDs, Secrets, or other namespace resources.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: kube-policies-dashboard
+  namespace: default
+  labels:
+    helm.sh/chart: kube-policies-1.2.0
+    app.kubernetes.io/name: kube-policies
+    app.kubernetes.io/instance: kube-policies
+    app.kubernetes.io/version: "1.0.0"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/component: dashboard
+rules:
+- apiGroups: [""]
+  resources: ["services"]
+  resourceNames:
+    - kube-policies-policy-manager
+    - kube-policies-admission-webhook
+  verbs: ["get"]
+---
+# Source: kube-policies/templates/rbac.yaml
+# Leader-election Role (IAM-WU-08, namespaced). The coordination.k8s.io/Lease is
+# created only in default, so the grant is a namespaced Role rather
+# than a ClusterRole. Distinct lease IDs (kube-policies-admission-webhook vs
+# kube-policies-policy-manager) mean each plane elects its own leader.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: kube-policies-admission-webhook-leader-election
+  namespace: default
+  labels:
+    helm.sh/chart: kube-policies-1.2.0
+    app.kubernetes.io/name: kube-policies
+    app.kubernetes.io/instance: kube-policies
+    app.kubernetes.io/version: "1.0.0"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/component: admission-webhook
+rules:
+- apiGroups: ["coordination.k8s.io"]
+  resources:
+  - leases
+  verbs: ["get", "list", "watch", "create", "update", "patch"]
+# controller-runtime leader election emits a namespaced "became leader" Event through
+# the client-go EventRecorder (resourcelock.RecordEvent) — a call inside the library,
+# not project code. Without this the apiserver Forbids the Event (a stray klog warning,
+# not a crashloop) and the leadership-change audit breadcrumb is lost. Namespaced, not
+# the cluster-wide events grant the old shared ClusterRole carried (IAM-WU-08).
+- apiGroups: [""]
+  resources:
+  - events
+  verbs: ["create", "patch"]
+---
+# Source: kube-policies/templates/rbac.yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: kube-policies-policy-manager-leader-election
+  namespace: default
+  labels:
+    helm.sh/chart: kube-policies-1.2.0
+    app.kubernetes.io/name: kube-policies
+    app.kubernetes.io/instance: kube-policies
+    app.kubernetes.io/version: "1.0.0"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/component: policy-manager
+rules:
+- apiGroups: ["coordination.k8s.io"]
+  resources:
+  - leases
+  verbs: ["get", "list", "watch", "create", "update", "patch"]
+# controller-runtime leader election emits a namespaced "became leader" Event through
+# the client-go EventRecorder (resourcelock.RecordEvent) — a call inside the library,
+# not project code. Without this the apiserver Forbids the Event (a stray klog warning,
+# not a crashloop) and the leadership-change audit breadcrumb is lost. Namespaced, not
+# the cluster-wide events grant the old shared ClusterRole carried (IAM-WU-08).
+- apiGroups: [""]
+  resources:
+  - events
+  verbs: ["create", "patch"]
+---
+# Source: kube-policies/templates/dashboard-rbac.yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: kube-policies-dashboard
+  namespace: default
+  labels:
+    helm.sh/chart: kube-policies-1.2.0
+    app.kubernetes.io/name: kube-policies
+    app.kubernetes.io/instance: kube-policies
+    app.kubernetes.io/version: "1.0.0"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/component: dashboard
+subjects:
+- kind: ServiceAccount
+  name: kube-policies-dashboard
+  namespace: default
+roleRef:
+  kind: Role
+  name: kube-policies-dashboard
+  apiGroup: rbac.authorization.k8s.io
+---
+# Source: kube-policies/templates/rbac.yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: kube-policies-admission-webhook-leader-election
+  namespace: default
+  labels:
+    helm.sh/chart: kube-policies-1.2.0
+    app.kubernetes.io/name: kube-policies
+    app.kubernetes.io/instance: kube-policies
+    app.kubernetes.io/version: "1.0.0"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/component: admission-webhook
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: kube-policies-admission-webhook-leader-election
+subjects:
+- kind: ServiceAccount
+  name: kube-policies-admission-webhook
+  namespace: default
+---
+# Source: kube-policies/templates/rbac.yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: kube-policies-policy-manager-leader-election
+  namespace: default
+  labels:
+    helm.sh/chart: kube-policies-1.2.0
+    app.kubernetes.io/name: kube-policies
+    app.kubernetes.io/instance: kube-policies
+    app.kubernetes.io/version: "1.0.0"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/component: policy-manager
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: kube-policies-policy-manager-leader-election
+subjects:
+- kind: ServiceAccount
+  name: kube-policies-policy-manager
+  namespace: default
+# NOTE: no monitoring ClusterRole here. The previous {{ monitoring.enabled }}
+# block granted cluster-wide read on nodes/pods/services/endpoints bound to the app
+# SA but had no consumer (no ServiceMonitor/Prometheus template ships with this
+# chart). A real Prometheus deployment ships its own RBAC; kube-policies does not
+# need to grant it on the operator's behalf.
+---
+# Source: kube-policies/templates/dashboard-service.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: kube-policies-dashboard
+  namespace: default
+  labels:
+    helm.sh/chart: kube-policies-1.2.0
+    app.kubernetes.io/name: kube-policies
+    app.kubernetes.io/instance: kube-policies
+    app.kubernetes.io/version: "1.0.0"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/component: dashboard
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: 8090
+      targetPort: http
+      protocol: TCP
+    - name: metrics
+      port: 9092
+      targetPort: metrics
+      protocol: TCP
+  selector:
+    app.kubernetes.io/name: kube-policies
+    app.kubernetes.io/instance: kube-policies
+    app.kubernetes.io/component: dashboard
+---
+# Source: kube-policies/templates/services.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: kube-policies-admission-webhook
+  namespace: default
+  labels:
+    helm.sh/chart: kube-policies-1.2.0
+    app.kubernetes.io/name: kube-policies
+    app.kubernetes.io/instance: kube-policies
+    app.kubernetes.io/version: "1.0.0"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/component: admission-webhook
+spec:
+  type: ClusterIP
+  ports:
+    - port: 8443
+      targetPort: 8443
+      protocol: TCP
+      name: webhook
+    # Metrics port targets the named `metrics` container port
+    # (admission-webhook binary listens on --metrics-port=9090). Using the
+    # port NAME keeps the Service authoritative regardless of any future
+    # numeric change in the deployment.
+    - port: 9090
+      targetPort: metrics
+      protocol: TCP
+      name: metrics
+  selector:
+    app.kubernetes.io/name: kube-policies
+    app.kubernetes.io/instance: kube-policies
+    app.kubernetes.io/component: admission-webhook
+---
+# Source: kube-policies/templates/services.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: kube-policies-policy-manager
+  namespace: default
+  labels:
+    helm.sh/chart: kube-policies-1.2.0
+    app.kubernetes.io/name: kube-policies
+    app.kubernetes.io/instance: kube-policies
+    app.kubernetes.io/version: "1.0.0"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/component: policy-manager
+spec:
+  type: ClusterIP
+  ports:
+    - port: 8080
+      targetPort: 8080
+      protocol: TCP
+      name: http
+    # Metrics port targets the named `metrics` container port (binary
+    # default --metrics-port=9091). Using the NAME insulates the Service
+    # from numeric drift in the deployment.
+    - port: 9091
+      targetPort: metrics
+      protocol: TCP
+      name: metrics
+  selector:
+    app.kubernetes.io/name: kube-policies
+    app.kubernetes.io/instance: kube-policies
+    app.kubernetes.io/component: policy-manager
+---
+# Source: kube-policies/templates/admission-webhook-deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kube-policies-admission-webhook
+  namespace: default
+  labels:
+    helm.sh/chart: kube-policies-1.2.0
+    app.kubernetes.io/name: kube-policies
+    app.kubernetes.io/instance: kube-policies
+    app.kubernetes.io/version: "1.0.0"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/component: admission-webhook
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: kube-policies
+      app.kubernetes.io/instance: kube-policies
+      app.kubernetes.io/component: admission-webhook
+  template:
+    metadata:
+      annotations:
+        checksum/config: a5068f0a1f921f5bd9d0a0df4a42fb1925a2ef35103ad2edf7ffde2b6a190540
+        # Lookup-based annotation per A-NEW-1 fix. Queries the live API for the cert
+        # Secret bytes; deterministic per render. On first install the Secret doesn't
+        # exist yet, so default to the literal "initial-install". On subsequent
+        # upgrades, the lookup finds the Secret data and the annotation stabilizes
+        # to sha256(data). On out-of-band Secret delete + upgrade, lookup returns
+        # empty → annotation goes back to "initial-install" → differs from previous
+        # stable hash → pod rolling restart picks up the freshly-generated cert.
+        # One-time cost: an extra rolling restart immediately after first install
+        # (lookup empty → stable hash transition). Operationally acceptable.
+        checksum/webhook-certs: 74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b
+        prometheus.io/path: /metrics
+        prometheus.io/port: "9090"
+        prometheus.io/scrape: "true"
+      labels:
+        app.kubernetes.io/name: kube-policies
+        app.kubernetes.io/instance: kube-policies
+        app.kubernetes.io/component: admission-webhook
+    spec:
+      serviceAccountName: kube-policies-admission-webhook
+      # IAM-WU-10 (CIS 5.1.5/5.1.6): the SA defaults automount off; the webhook opts
+      # the token back in here because the controller-runtime client + leader election
+      # authenticate to the apiserver with it.
+      automountServiceAccountToken: true
+      securityContext:
+        fsGroup: 65534
+        runAsGroup: 65534
+        runAsNonRoot: true
+        runAsUser: 65534
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: admission-webhook
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+              - ALL
+            readOnlyRootFilesystem: true
+            runAsGroup: 65534
+            runAsNonRoot: true
+            runAsUser: 65534
+            seccompProfile:
+              type: RuntimeDefault
+          image: "docker.io/kube-policies/admission-webhook:1.0.0"
+          imagePullPolicy: IfNotPresent
+          # Probes target the metrics server (port 9090) where /healthz and
+          # /readyz are mounted. The webhook TLS port (8443) cannot serve a
+          # plain-HTTP probe, so containerPort `metrics` is the only safe
+          # target for httpGet.
+          args:
+            - --port=8443
+            - --metrics-port=9090
+            - --cert-path=/etc/certs/tls.crt
+            - --key-path=/etc/certs/tls.key
+            - --config=/etc/config/config.yaml
+            - --disable-default-policies=false
+            # Apiserver mutual-TLS enforcement (IAM-WU-06). The render-fail guard
+            # in admission-webhook-tls.yaml ensures requireClientCert=true is paired
+            # with a clientCA bundle, so true never reaches a CA-less listener (the
+            # binary would otherwise fail closed at startup). Dev default is false
+            # (tracked gap); production sets true + clientCA.
+            - --require-client-cert=false
+            # Verify the policy-manager TLS cert on the decision-publisher
+            # connection (CRY-WU-06): trust the policy-manager serving CA.
+            - --policy-manager-ca-path=/etc/policy-manager-ca/ca.crt
+            # Present an audience-bound, short-TTL projected ServiceAccount token
+            # to the policy-manager decisions channel (IAM-WU-11). Gate on mode
+            # only — not policyManager.enabled — so a split/webhook-only deploy
+            # (PM external) still presents the credential (FIX 5).
+            - --policy-manager-token-path=/var/run/secrets/kube-policies/pm-token/token
+          ports:
+            - name: webhook
+              containerPort: 8443
+              protocol: TCP
+            - name: metrics
+              containerPort: 9090
+              protocol: TCP
+          env:
+            - name: LOG_LEVEL
+              value: "info"
+            - name: GODEBUG
+              value: "fips140=on"
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: POLICY_MANAGER_INTERNAL_URL
+              value: "https://kube-policies-policy-manager:8080/api/v1/decisions/internal"
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: metrics
+              # HTTPS when /metrics serves TLS (CRY-WU-08); /healthz stays
+              # token-exempt and the kubelet HTTPS probe skips cert verification.
+              scheme: HTTP
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          # /readyz is not registered on the admission-webhook metrics server
+          # (see cmd/admission-webhook/main.go::setupMetricsServer). Probe the
+          # /healthz endpoint that IS registered. Real readiness lives behind
+          # the TLS webhook server; that requires TLS-aware probing which a
+          # plain httpGet cannot do.
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: metrics
+              scheme: HTTP
+            initialDelaySeconds: 3
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 3
+          resources:
+            limits:
+              cpu: 500m
+              memory: 512Mi
+            requests:
+              cpu: 100m
+              memory: 128Mi
+          volumeMounts:
+            - name: certs
+              mountPath: /etc/certs
+              readOnly: true
+            - name: policy-manager-ca
+              mountPath: /etc/policy-manager-ca
+              readOnly: true
+            # Projected SA token for the decisions channel (IAM-WU-11). Gate on
+            # mode only (FIX 5) so a webhook-only / split deploy still mounts it.
+            - name: pm-internal-token
+              mountPath: /var/run/secrets/kube-policies/pm-token
+              readOnly: true
+            - name: config
+              mountPath: /etc/config
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+            - name: audit-log
+              mountPath: /var/log/kube-policies
+      volumes:
+        - name: certs
+          secret:
+            secretName: kube-policies-admission-webhook-certs
+        # Project ONLY ca.crt (public) from the policy-manager serving Secret —
+        # never its tls.key. optional: the cert-manager-managed Secret may not
+        # exist yet on first install; the webhook degrades to system roots until
+        # it appears (CRY-WU-06).
+        - name: policy-manager-ca
+          secret:
+            secretName: kube-policies-policy-manager-certs
+            items:
+              - key: ca.crt
+                path: ca.crt
+            optional: true
+        # Audience-bound, short-TTL projected ServiceAccount token for the
+        # webhook -> policy-manager decisions channel (IAM-WU-11). Gated on mode
+        # only (FIX 5) — a split/webhook-only deploy must still project the token.
+        # The kubelet mints a token scoped to audience=<internalAuth.audience>
+        # with the configured TTL and atomically swaps it as it rotates.
+        - name: pm-internal-token
+          projected:
+            defaultMode: 0440
+            sources:
+              - serviceAccountToken:
+                  path: token
+                  audience: "policy-manager"
+                  expirationSeconds: 3600
+        - name: config
+          configMap:
+            name: kube-policies-config
+        - name: tmp
+          emptyDir: {}
+        # Writable mount for the audit file backend. readOnlyRootFilesystem
+        # blocks mkdir at /var/log/kube-policies on the pod's overlay; this
+        # emptyDir gives the audit logger a writable directory matching the
+        # default filename. For persistence beyond pod lifetime, replace
+        # with a PVC.
+        - name: audit-log
+          emptyDir: {}
+---
+# Source: kube-policies/templates/dashboard-deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kube-policies-dashboard
+  namespace: default
+  labels:
+    helm.sh/chart: kube-policies-1.2.0
+    app.kubernetes.io/name: kube-policies
+    app.kubernetes.io/instance: kube-policies
+    app.kubernetes.io/version: "1.0.0"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/component: dashboard
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: kube-policies
+      app.kubernetes.io/instance: kube-policies
+      app.kubernetes.io/component: dashboard
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: kube-policies
+        app.kubernetes.io/instance: kube-policies
+        app.kubernetes.io/component: dashboard
+    spec:
+      serviceAccountName: kube-policies-dashboard
+      # IAM-WU-10 (CIS 5.1.5/5.1.6): the dashboard never calls the apiserver at runtime,
+      # so it does not mount an SA token. Defaults false; an operator can override.
+      automountServiceAccountToken: false
+      securityContext:
+        fsGroup: 65532
+        runAsGroup: 65532
+        runAsNonRoot: true
+        runAsUser: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: dashboard
+          image: "ghcr.io/Jibbscript/dashboard:1.0.0"
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8090
+              protocol: TCP
+            - name: metrics
+              containerPort: 9092
+              protocol: TCP
+          env:
+            - name: GODEBUG
+              value: "fips140=on"
+            # The policy-manager API + SSE stream serve TLS 1.3 (CRY-WU-05) →
+            # https; verified via the mounted policy-manager CA (CRY-WU-07). The
+            # metrics URLs follow metrics.tls.enabled (CRY-WU-08): http by
+            # default, https + bearer token when metrics TLS is on.
+            - name: POLICY_MANAGER_URL
+              value: "https://kube-policies-policy-manager:8080"
+            - name: POLICY_MANAGER_METRICS_URL
+              value: "http://kube-policies-policy-manager:9091/metrics"
+            - name: ADMISSION_WEBHOOK_METRICS_URL
+              value: "http://kube-policies-admission-webhook:9090/metrics"
+            - name: ALLOW_WRITES
+              value: "false"
+            # Rate-limiting / DoS-protection (NET-WU-15, RES-WU-17). The dashboard
+            # is env-configured (no shared config.yaml), so these mirror the
+            # shared security.ratelimit.* keys the webhook/PM read.
+            - name: DASHBOARD_RATELIMIT_ENABLED
+              value: "true"
+            - name: DASHBOARD_RATELIMIT_REQUESTS_PER_SECOND
+              value: "50"
+            - name: DASHBOARD_RATELIMIT_BURST
+              value: "100"
+            - name: DASHBOARD_RATELIMIT_MAX_CONCURRENT
+              value: "100"
+            - name: DASHBOARD_RATELIMIT_MAX_BODY_BYTES
+              # `| int64` before `| quote` so large byte counts are not rendered
+              # in scientific notation (Helm parses YAML numbers as float64).
+              value: "3145728"
+            - name: DASHBOARD_MAX_SSE_CONNECTIONS
+              value: "100"
+            - name: POLICY_MANAGER_STREAM_URL
+              value: "https://kube-policies-policy-manager:8080/api/v1/decisions/stream"
+            # Present an audience-bound, short-TTL projected ServiceAccount token
+            # on the upstream SSE subscription so the policy-manager's TokenReview
+            # gate on /api/v1/decisions/stream + /recent accepts it (IAM-WU-11,
+            # Inc7 Stream A). Gate on mode only — not policyManager.enabled — so a
+            # split deploy (PM external) still presents the credential, mirroring
+            # the webhook's pm-internal-token. The subscriber re-reads the file
+            # per connect to follow kubelet rotation.
+            - name: POLICY_MANAGER_STREAM_TOKEN_PATH
+              value: /var/run/secrets/kube-policies/pm-stream-token/token
+            - name: POLICY_MANAGER_CA_PATH
+              value: "/etc/policy-manager-ca/ca.crt"
+            # In-pod TLS serving + HSTS (CRY-WU-07). Default off (Ingress
+            # terminates TLS); the production overlay turns these on.
+            - name: DASHBOARD_TLS_ENABLED
+              value: "false"
+            - name: DASHBOARD_HSTS_ENABLED
+              value: "false"
+            - name: DASHBOARD_HSTS_MAX_AGE
+              # `| int` before `| quote`: Helm parses YAML numbers as float64 and
+              # sprig `quote` would render a large int in scientific notation
+              # (e.g. 3.1536e+07), which Go's strconv.Atoi cannot parse.
+              value: "31536000"
+            - name: DASHBOARD_HSTS_INCLUDE_SUBDOMAINS
+              # No `| default true`: sprig `default` treats boolean false as empty
+              # and would coerce an explicit false back to true, making the
+              # opt-out non-functional. values.yaml always defines this key.
+              value: "true"
+            # User authentication (IAM-WU-04/16, NET-WU-18). mode=disabled (default)
+            # leaves the dashboard unauthenticated (dev). oidc/forward-auth enable the
+            # gate; per-user authZ is then enforced upstream by the policy-manager.
+            - name: DASHBOARD_AUTH_MODE
+              value: "disabled"
+          # Probe scheme follows in-pod TLS: when the dashboard terminates TLS,
+          # the kubelet httpGet probe must use HTTPS (it skips cert verification
+          # and presents no client cert; server-auth-only TLS handshakes succeed).
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+              scheme: HTTP
+            initialDelaySeconds: 10
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+              scheme: HTTP
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+              - ALL
+            readOnlyRootFilesystem: true
+            runAsGroup: 65532
+            runAsNonRoot: true
+            runAsUser: 65532
+            seccompProfile:
+              type: RuntimeDefault
+          resources:
+            limits:
+              cpu: 200m
+              memory: 256Mi
+            requests:
+              cpu: 50m
+              memory: 64Mi
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            # Projected SA token the dashboard presents on the upstream SSE
+            # subscription (IAM-WU-11, Inc7 Stream A). Gate on mode only so a
+            # split/PM-external deploy still mounts it.
+            - name: pm-stream-token
+              mountPath: /var/run/secrets/kube-policies/pm-stream-token
+              readOnly: true
+            - name: policy-manager-ca
+              mountPath: /etc/policy-manager-ca
+              readOnly: true
+      volumes:
+        - name: tmp
+          emptyDir: {}
+        # Audience-bound, short-TTL projected ServiceAccount token for the
+        # dashboard -> policy-manager SSE read subscription (IAM-WU-11, Inc7
+        # Stream A). Gated on mode only (mirrors the webhook's pm-internal-token).
+        # The dashboard SA (kube-policies.fullname-dashboard) backs this projected
+        # volume; projected serviceAccountToken sources do NOT require
+        # automountServiceAccountToken, so the dashboard automount stays false
+        # (IAM-WU-10). The kubelet mints a token scoped to
+        # audience=<internalAuth.audience> with the configured TTL and atomically
+        # swaps it as it rotates. Reuses the same audience + default TTL as the
+        # webhook's projected token.
+        - name: pm-stream-token
+          projected:
+            defaultMode: 0440
+            sources:
+              - serviceAccountToken:
+                  path: token
+                  audience: "policy-manager"
+                  expirationSeconds: 3600
+        # Project ONLY ca.crt from the policy-manager serving Secret (CRY-WU-07);
+        # optional so a not-yet-issued cert-manager Secret does not block startup.
+        - name: policy-manager-ca
+          secret:
+            secretName: kube-policies-policy-manager-certs
+            items:
+              - key: ca.crt
+                path: ca.crt
+            optional: true
+---
+# Source: kube-policies/templates/policy-manager-deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kube-policies-policy-manager
+  namespace: default
+  labels:
+    helm.sh/chart: kube-policies-1.2.0
+    app.kubernetes.io/name: kube-policies
+    app.kubernetes.io/instance: kube-policies
+    app.kubernetes.io/version: "1.0.0"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/component: policy-manager
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: kube-policies
+      app.kubernetes.io/instance: kube-policies
+      app.kubernetes.io/component: policy-manager
+  template:
+    metadata:
+      annotations:
+        checksum/config: a5068f0a1f921f5bd9d0a0df4a42fb1925a2ef35103ad2edf7ffde2b6a190540
+        checksum/pm-certs: a986d2bc719e8c994a55a249442ed3b4f20b8a4a54c2cea5eed6760f3e020438
+        prometheus.io/path: /metrics
+        prometheus.io/port: "9091"
+        prometheus.io/scrape: "true"
+      labels:
+        app.kubernetes.io/name: kube-policies
+        app.kubernetes.io/instance: kube-policies
+        app.kubernetes.io/component: policy-manager
+    spec:
+      serviceAccountName: kube-policies-policy-manager
+      # IAM-WU-10 (CIS 5.1.5/5.1.6): the SA defaults automount off; the policy-manager
+      # opts the token back in here because the controller-runtime client + leader
+      # election authenticate to the apiserver with it.
+      automountServiceAccountToken: true
+      securityContext:
+        fsGroup: 65534
+        runAsGroup: 65534
+        runAsNonRoot: true
+        runAsUser: 65534
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: policy-manager
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+              - ALL
+            readOnlyRootFilesystem: true
+            runAsGroup: 65534
+            runAsNonRoot: true
+            runAsUser: 65534
+            seccompProfile:
+              type: RuntimeDefault
+          image: "docker.io/kube-policies/policy-manager:1.0.0"
+          imagePullPolicy: IfNotPresent
+          # cmd/policy-manager/main.go reads only flags (not env vars). The
+          # HTTP_PORT/METRICS_PORT env vars previously set here were ignored
+          # by the binary, which silently caused a port mismatch (binary
+          # listened on the flag defaults while the Service exposed the
+          # env-var values). Use explicit args for clarity.
+          args:
+            - --port=8080
+            - --metrics-port=9091
+            - --config=/etc/config/config.yaml
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+            - name: metrics
+              containerPort: 9091
+              protocol: TCP
+          env:
+            - name: LOG_LEVEL
+              value: "info"
+            - name: GODEBUG
+              value: "fips140=on"
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            # Validate the inbound webhook token via the Kubernetes TokenReview
+            # API, bound to this audience AND subject (IAM-WU-11). Subject pinning
+            # ties acceptance to the webhook's specific SA identity, preventing any
+            # other SA that happens to obtain the same audience token from passing
+            # (AU-2/AU-3). The PM calls TokenReview with its already-automounted
+            # apiserver SA token — no extra volume.
+            - name: POLICY_MANAGER_INTERNAL_AUTH_MODE
+              value: "tokenreview"
+            - name: POLICY_MANAGER_INTERNAL_AUDIENCE
+              value: "policy-manager"
+            - name: POLICY_MANAGER_INTERNAL_SUBJECT
+              value: "system:serviceaccount:default:kube-policies-admission-webhook"
+            # Read side of the decisions plane (GET /stream + /recent): pin the
+            # TokenReview to the DASHBOARD SA so the dashboard's upstream
+            # subscriber authenticates to the read feeds without weakening the
+            # webhook-SA pin on /internal (IAM-WU-11, Inc7 Stream A). Same audience
+            # as POLICY_MANAGER_INTERNAL_AUDIENCE above.
+            - name: POLICY_MANAGER_DECISIONS_READER_SUBJECT
+              value: "system:serviceaccount:default:kube-policies-dashboard"
+          # Probes target the plain-HTTP metrics port (9091) where /healthz and
+          # /readyz are mounted (NewMetricsRouter). The :8080 API now serves
+          # TLS (CRY-WU-05), so an HTTP probe against it would fail the
+          # handshake — mirror the admission-webhook pattern and probe :9091.
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 9091
+              # HTTPS when /metrics serves TLS (CRY-WU-08); /healthz + /readyz
+              # stay token-exempt and the kubelet HTTPS probe skips cert verify.
+              scheme: HTTP
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: 9091
+              scheme: HTTP
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 3
+          resources:
+            limits:
+              cpu: 500m
+              memory: 512Mi
+            requests:
+              cpu: 100m
+              memory: 128Mi
+          volumeMounts:
+            - name: certs
+              mountPath: /etc/certs
+              readOnly: true
+            - name: config
+              mountPath: /etc/config
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+            - name: data
+              mountPath: /var/lib/kube-policies
+      volumes:
+        - name: certs
+          secret:
+            secretName: kube-policies-policy-manager-certs
+        - name: config
+          configMap:
+            name: kube-policies-config
+        - name: tmp
+          emptyDir: {}
+        - name: data
+          persistentVolumeClaim:
+            claimName: kube-policies-data
+---
+# Source: kube-policies/templates/admission-webhook-tls.yaml
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingWebhookConfiguration
+metadata:
+  name: kube-policies-validating-webhook
+  labels:
+    helm.sh/chart: kube-policies-1.2.0
+    app.kubernetes.io/name: kube-policies
+    app.kubernetes.io/instance: kube-policies
+    app.kubernetes.io/version: "1.0.0"
+    app.kubernetes.io/managed-by: Helm
+webhooks:
+  - name: validate.kube-policies.io
+    admissionReviewVersions: ["v1"]
+    sideEffects: None
+    failurePolicy: Fail
+    timeoutSeconds: 10
+    clientConfig:
+      service:
+        name: kube-policies-admission-webhook
+        namespace: default
+        path: /validate
+        port: 8443
+      caBundle: "LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0tCk1JSURNVENDQWhtZ0F3SUJBZ0lRSEZFYmFjL1BMd3NTUk1vNExrbTBtakFOQmdrcWhraUc5dzBCQVFzRkFEQWoKTVNFd0h3WURWUVFERXhocmRXSmxMWEJ2YkdsamFXVnpMWGRsWW1odmIyc3RZMkV3SGhjTk1qWXdOakF4TWpBegpOREk1V2hjTk1qY3dOakF4TWpBek5ESTVXakFqTVNFd0h3WURWUVFERXhocmRXSmxMWEJ2YkdsamFXVnpMWGRsClltaHZiMnN0WTJFd2dnRWlNQTBHQ1NxR1NJYjNEUUVCQVFVQUE0SUJEd0F3Z2dFS0FvSUJBUUN3cC9zZTJKTFUKeGhmRHN3R2dSSFJLV21SV3BaT1F1ODhycGZ5bXZaVG9yWUUwc3VCdG04aW5qNUlUVUpuNnRubzA3SnZPNTVVUwpaNFo3S3dkSVhKd29uWktIOFpkemxOQlpPVEVRNWRCaTZ1WTJVQW5wRS9DYzJ1RWdFTzd3WFBFMUYramkrK3RpCmEyRjlKdWR0VkhHT0U0ZDFZSzJ5Ly90VldEbE1rcWlXN0IxTVBzbnZiWmpTeC8vRzduYjB3QVd1ZzFpaUNMblIKQlZCdWsyNVV2ME9KVkVjTnhWRVFsejllTUtCL09sY2dOR29ldGdDd2hSaGNxL1NDejJ2Nmx0QU5WT05iQXdHbAozV1M4ekd3QlNOSFlvcEp5bzFwWS9TUElJbEVwdlNjZ0NHZHJsaXFpMHVKeHIrdU5ObUg5NU5IUXFkRndXQXRCCjUxYUtVbU9ZK2NJUkFnTUJBQUdqWVRCZk1BNEdBMVVkRHdFQi93UUVBd0lDcERBZEJnTlZIU1VFRmpBVUJnZ3IKQmdFRkJRY0RBUVlJS3dZQkJRVUhBd0l3RHdZRFZSMFRBUUgvQkFVd0F3RUIvekFkQmdOVkhRNEVGZ1FVTmxjMQpzcXBzN0sxNWNxNjcrejduY0t3cENYc3dEUVlKS29aSWh2Y05BUUVMQlFBRGdnRUJBQmhwQmlnaU5zNlhCS0wzClBXMTBUVGkwcHdRZGY1b2xBbGpuK2RObytRR012bStkMUUzdkt5MkVUc3JQZmN4UmZEbmJLVTZROFMrMnVKc0IKUzJiZWpiNEtidkNydmxmQmpPNnUrR2pyVDFCaDdkcEZsVWVKbVY1WlZERTZIbnI1NzJDYVU5ZGdvalRGcFJSbQpySGdUMktxb2ZPNGFVWU5OWmF5LzlZZDFuM3pCRkJmK0EvZHJ4T0gvNWJmUjV1b3Q2KzNraTdZRy9UZEtGVGR6CnV4RTFBSWtDL0VvSk9Qb1RSY2FUT1A2Qml2a05WaDJOb1hsTmhzVFFyTDFEWkVLbGxDMEwrVWpzRWhReEwrY1IKWkt2YnZQNm8xbS9VaG50bXhoQVNKZzZFVGd5UVFkb2Foa2NKcGhoVWVoaXlkYkZPMDFnaUFuMDVaVlg2RFJKSgp3RHprSzU4PQotLS0tLUVORCBDRVJUSUZJQ0FURS0tLS0tCg=="
+    rules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["pods"]
+        scope: "Namespaced"
+    namespaceSelector:
+      matchExpressions:
+        - key: kubernetes.io/metadata.name
+          operator: NotIn
+          values:
+            - kube-system
+            - kube-public
+            - kube-node-lease
+            - local-path-storage
+            - default

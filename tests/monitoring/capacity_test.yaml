@@ -1,0 +1,38 @@
+# promtool unit tests for the kube-policies-capacity group (RES-WU-11):
+# backup-staleness on the CronJob's last-successful-time. Uses 1m series
+# interval (matching the evaluation_interval) to avoid promtool staleness
+# dropping between evaluations when a coarse interval is used.
+rule_files:
+  - ../../charts/kube-policies/files/alerts/capacity.yaml
+
+evaluation_interval: 1m
+
+tests:
+  # last_successful_time pinned at epoch 0; wall-clock advances to 1621m
+  # (26h 61m). age = 97260s > 93600s (26h); condition true from 1561m,
+  # held > 1h (for:1h) => KubePoliciesBackupStale fires at 1621m.
+  - interval: 1m
+    input_series:
+      - series: 'kube_cronjob_status_last_successful_time{cronjob="kube-policies-backup"}'
+        values: '0x1700'
+    alert_rule_test:
+      - eval_time: 1621m
+        alertname: KubePoliciesBackupStale
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              description: "The CRD-backup CronJob has not completed successfully in over 26h (1d 3h 1m 0s ago). The recovery point objective is at risk. Check the CronJob, its RBAC, and the object-store credentials per the DR runbook."
+              runbook_url: "https://github.com/Jibbscript/kube-policies/blob/main/docs/runbooks/disaster-recovery.md"
+              summary: "kube-policies CRD backup is stale"
+
+  # A fresh backup (last success advancing with wall-clock) must NOT fire.
+  # value tracks time() so age stays ~0.
+  - interval: 1m
+    input_series:
+      - series: 'kube_cronjob_status_last_successful_time{cronjob="kube-policies-backup"}'
+        values: '0+60x1700'
+    alert_rule_test:
+      - eval_time: 1621m
+        alertname: KubePoliciesBackupStale
+        exp_alerts: []

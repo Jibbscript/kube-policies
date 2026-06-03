@@ -62,6 +62,15 @@ create_registry() {
         fi
     else
         log "Creating new registry..."
+        # Pre-pull registry:2 with retries: it comes from Docker Hub, which
+        # intermittently rate-limits / times out anonymous pulls on CI runners,
+        # failing the whole job. Retry so a transient Docker Hub hiccup does not.
+        local _try
+        for _try in 1 2 3 4 5; do
+            docker pull registry:2 && break
+            warn "docker pull registry:2 failed (attempt ${_try}/5); retrying in 5s..."
+            sleep 5
+        done
         docker run -d --restart=always -p "127.0.0.1:${REGISTRY_PORT}:5000" --name "${REGISTRY_NAME}" registry:2
     fi
 
@@ -286,10 +295,52 @@ EOF
         log "Applying extra Helm values overlay: ${extra_values}"
         helm_values_args+=(--values "${extra_values}")
     fi
-    helm upgrade --install kube-policies charts/kube-policies \
+    # Resolve gitignored subchart deps (prometheus/grafana) so the install
+    # succeeds on a fresh CI runner / clone (used by e2e-kind, e2e-k3s, DAST).
+    bash "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/ci/helm-deps.sh"
+    # Disable the prometheus/grafana monitoring subcharts for e2e: the e2e suites
+    # validate admission/policy enforcement, not the monitoring stack, and waiting
+    # on the subcharts' pods (large images, StatefulSet) exhausts --wait's 600s
+    # budget on a resource-constrained Kind/k3s node. The app's own /metrics
+    # endpoint is unaffected (it is not part of the subchart).
+    #
+    # Disable NetworkPolicy for the functional e2e/DAST deploy: the chart's
+    # egress-apiserver policy is fail-closed until networkPolicy.apiServerCIDRs is
+    # set to the cluster's API-server CIDR(s) (NET-WU-03), and kindnet ENFORCES
+    # NetworkPolicy. An ephemeral Kind/k3s CI cluster has no stable API CIDR to
+    # configure, so leaving the policy on blocks the webhook/policy-manager
+    # controllers' apiserver egress (leader election, TokenReview, CRD watch +
+    # status patch) — the controllers never sync and the e2e suite times out. The
+    # functional suites here exercise admission/policy behaviour, not network
+    # isolation. The static NetworkPolicy manifests are still gated in CI by the
+    # Network-Posture Gate; NetworkPolicy *enforcement* behaviour is exercised by
+    # scripts/test/test-netpol-e2e.sh — a manual/local script, NOT a gated CI job.
+    if ! helm upgrade --install kube-policies charts/kube-policies \
         --namespace kube-policies-system \
         "${helm_values_args[@]}" \
-        --wait --timeout=600s
+        --set monitoring.enabled=false \
+        --set prometheus.enabled=false \
+        --set grafana.enabled=false \
+        --set networkPolicy.enabled=false \
+        --wait --timeout=600s; then
+        # On --wait timeout/failure, dump why the workloads never became ready
+        # (the bare "No resources found" diagnostic is uninformative). Captures
+        # helm state, pod status/events, and cert-manager issuance status.
+        error "helm upgrade --install failed or timed out; capturing diagnostics"
+        helm status kube-policies -n kube-policies-system 2>&1 | tail -40 || true
+        helm history kube-policies -n kube-policies-system 2>&1 | tail -20 || true
+        echo "--- resources in kube-policies-system ---"
+        kubectl get all -n kube-policies-system -o wide 2>&1 || true
+        echo "--- pod descriptions ---"
+        kubectl describe pods -n kube-policies-system 2>&1 | tail -150 || true
+        echo "--- namespace events ---"
+        kubectl get events -n kube-policies-system --sort-by=.lastTimestamp 2>&1 | tail -60 || true
+        echo "--- cert-manager Certificates/Issuers ---"
+        kubectl get certificates,issuers,clusterissuers -A 2>&1 || true
+        echo "--- cluster Warning events ---"
+        kubectl get events -A --field-selector type=Warning --sort-by=.lastTimestamp 2>&1 | tail -40 || true
+        return 1
+    fi
 
     success "Kube-Policies deployed successfully"
 }

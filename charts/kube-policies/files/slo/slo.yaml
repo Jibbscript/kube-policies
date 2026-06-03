@@ -1,0 +1,76 @@
+# SLO / error-budget burn-rate alerts as code (IRM-WU-18, NIST CA-7, SI-4,
+# FedRAMP ConMon). Formal SLO definitions and the numeric objectives live in
+# docs/observability/slo.md; this file is the machine-readable, promtool-tested
+# implementation. Multi-window, multi-burn-rate alerts (Google SRE workbook
+# style) page fast on a sharp burn and ticket on a slow burn.
+#
+# Availability SLO: 99.9% of admission requests succeed (non-error).
+#   error budget = 0.1% ; 30-day window.
+#   fast page : burn 14.4x over 1h AND 5m  -> 0.0144 error ratio
+#   slow page : burn 6x   over 6h AND 30m  -> 0.006  error ratio
+# Latency SLO: 95% of admission evaluations complete < 0.5s.
+groups:
+  - name: kube-policies-slo
+    rules:
+      # --- availability SLI recording rules -------------------------------
+      - record: kube_policies:admission_error_ratio:rate5m
+        expr: |
+          sum(rate(kube_policies_admission_requests_total{status="error"}[5m]))
+            /
+          sum(rate(kube_policies_admission_requests_total[5m]))
+      - record: kube_policies:admission_error_ratio:rate1h
+        expr: |
+          sum(rate(kube_policies_admission_requests_total{status="error"}[1h]))
+            /
+          sum(rate(kube_policies_admission_requests_total[1h]))
+      - record: kube_policies:admission_error_ratio:rate30m
+        expr: |
+          sum(rate(kube_policies_admission_requests_total{status="error"}[30m]))
+            /
+          sum(rate(kube_policies_admission_requests_total[30m]))
+      - record: kube_policies:admission_error_ratio:rate6h
+        expr: |
+          sum(rate(kube_policies_admission_requests_total{status="error"}[6h]))
+            /
+          sum(rate(kube_policies_admission_requests_total[6h]))
+
+      # --- availability burn-rate alerts ----------------------------------
+      - alert: KubePoliciesErrorBudgetBurnFast
+        expr: |
+          kube_policies:admission_error_ratio:rate1h > (14.4 * 0.001)
+            and
+          kube_policies:admission_error_ratio:rate5m > (14.4 * 0.001)
+        for: 2m
+        labels:
+          severity: critical
+          slo: availability
+        annotations:
+          summary: "kube-policies availability error budget burning fast (14.4x)"
+          description: "The admission error ratio is burning the 99.9% availability budget at >14.4x over both 1h and 5m windows ({{ $value | humanizePercentage }}). At this rate the 30-day budget is exhausted in ~2 days. Page on-call."
+          runbook_url: "https://github.com/Jibbscript/kube-policies/blob/main/docs/security/runbooks/high-error-rate.md"
+
+      - alert: KubePoliciesErrorBudgetBurnSlow
+        expr: |
+          kube_policies:admission_error_ratio:rate6h > (6 * 0.001)
+            and
+          kube_policies:admission_error_ratio:rate30m > (6 * 0.001)
+        for: 15m
+        labels:
+          severity: warning
+          slo: availability
+        annotations:
+          summary: "kube-policies availability error budget burning (6x)"
+          description: "The admission error ratio is burning the 99.9% availability budget at >6x over both 6h and 30m windows ({{ $value | humanizePercentage }}). Open a ticket and investigate before the budget is exhausted."
+          runbook_url: "https://github.com/Jibbscript/kube-policies/blob/main/docs/security/runbooks/high-error-rate.md"
+
+      # --- latency SLO ----------------------------------------------------
+      - alert: KubePoliciesLatencySLOBreach
+        expr: histogram_quantile(0.95, sum by (le) (rate(kube_policies_admission_evaluation_duration_seconds_bucket[30m]))) > 0.5
+        for: 15m
+        labels:
+          severity: warning
+          slo: latency
+        annotations:
+          summary: "kube-policies admission latency SLO breached (p95 > 0.5s)"
+          description: "p95 admission evaluation latency is {{ printf \"%.3f\" $value }}s over 30m, breaching the 0.5s latency SLO. Investigate policy-evaluation cost and load."
+          runbook_url: "https://github.com/Jibbscript/kube-policies/blob/main/docs/security/runbooks/high-error-rate.md"

@@ -1,0 +1,23 @@
+{{- if and .Values.dashboard.enabled .Values.dashboard.pdb.enabled }}
+# RES-WU-02 (CP-10): PodDisruptionBudget for the dashboard. Default off — the
+# dashboard defaults to replicaCount: 1, where minAvailable: 1 would block node
+# drains; enable it only alongside dashboard.replicaCount > 1.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "kube-policies.fullname" . }}-dashboard
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kube-policies.labels" . | nindent 4 }}
+    app.kubernetes.io/component: dashboard
+spec:
+  {{- if .Values.dashboard.pdb.maxUnavailable }}
+  maxUnavailable: {{ .Values.dashboard.pdb.maxUnavailable }}
+  {{- else }}
+  minAvailable: {{ .Values.dashboard.pdb.minAvailable | default 1 }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "kube-policies.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: dashboard
+{{- end }}

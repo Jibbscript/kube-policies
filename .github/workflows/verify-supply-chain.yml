@@ -1,0 +1,193 @@
+name: Verify Supply Chain
+
+# CRY-WU-20 (NIST SC-12, SI-7, SP 800-190, SLSA): post-release cosign VERIFY gate.
+# Complements the signing performed by the sign-attest-provenance job in release.yml.
+# On every published release and v* tag push, verify that both published images:
+#   1. Carry a valid keyless cosign signature from the documented OIDC identity, and
+#   2. Have a verifiable SPDX-JSON SBOM attestation recorded in the Sigstore Rekor log.
+#
+# workflow_dispatch accepts an explicit image-ref (digest-form) for ad-hoc spot-checks.
+# When omitted the tag is derived from the triggering ref and passed to cosign directly;
+# cosign resolves it to the immutable digest before verifying.
+#
+# Action SHAs match the pinned versions already used in ci.yml / release.yml.
+# All run: blocks use set -euo pipefail.  All untrusted inputs are passed via env:,
+# never interpolated directly into shell.
+
+on:
+  release:
+    types: [published]
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      image-ref:
+        description: >
+          Optional: full image reference to verify, e.g.
+          ghcr.io/jibbscript/kube-policies/admission-webhook@sha256:<digest>.
+          When omitted both published images are resolved from the triggering tag.
+        required: false
+        type: string
+
+permissions:
+  contents: read
+  packages: read
+  id-token: write    # required by cosign for Rekor transparency-log lookup
+
+env:
+  REGISTRY: ghcr.io
+  # Keyless OIDC signing identity documented in docs/compliance/supply-chain-crypto.md.
+  # A signature only validates if it was produced by THIS repo's release.yml on a
+  # refs/tags/v* ref — not a fork, a branch, or a workflow_dispatch on an arbitrary ref.
+  CERT_IDENTITY_REGEXP: '^https://github\.com/Jibbscript/kube-policies/\.github/workflows/release\.yml@refs/tags/v\.\*\$'
+  CERT_OIDC_ISSUER: 'https://token.actions.githubusercontent.com'
+
+jobs:
+  verify-images:
+    name: Verify Image Signatures & Attestations
+    runs-on: ubuntu-latest
+    # Skip on workflow_dispatch runs that target a non-tag ref — cosign signs only on
+    # refs/tags/v*, so verification on a branch ref would always fail.
+    if: >-
+      startsWith(github.ref, 'refs/tags/v') ||
+      github.event_name == 'release'        ||
+      github.event_name == 'workflow_dispatch'
+    steps:
+    - name: Harden runner
+      uses: step-security/harden-runner@ab7a9404c0f3da075243ca237b5fac12c98deaa5  # v2
+      with:
+        egress-policy: audit
+
+    - name: Install Cosign
+      uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac  # v3
+
+    - name: Log in to Container Registry
+      uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9  # v3
+      with:
+        registry: ${{ env.REGISTRY }}
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Set image references
+      id: refs
+      env:
+        INPUT_IMAGE_REF: ${{ inputs.image-ref }}
+        GH_REF: ${{ github.ref }}
+        REPO: ${{ github.repository }}
+      run: |
+        set -euo pipefail
+
+        WEBHOOK_BASE="ghcr.io/${REPO}/admission-webhook"
+        MANAGER_BASE="ghcr.io/${REPO}/policy-manager"
+
+        if [ -n "${INPUT_IMAGE_REF:-}" ]; then
+          # Ad-hoc single-image override via workflow_dispatch.
+          echo "webhook=${INPUT_IMAGE_REF}" >> "${GITHUB_OUTPUT}"
+          echo "manager=${INPUT_IMAGE_REF}" >> "${GITHUB_OUTPUT}"
+          echo "Spot-check override: ${INPUT_IMAGE_REF}"
+          exit 0
+        fi
+
+        # Derive the semver tag from refs/tags/v1.2.3.
+        TAG="${GH_REF#refs/tags/}"
+        echo "webhook=${WEBHOOK_BASE}:${TAG}" >> "${GITHUB_OUTPUT}"
+        echo "manager=${MANAGER_BASE}:${TAG}" >> "${GITHUB_OUTPUT}"
+        echo "Tag resolved: ${TAG}"
+        echo "  admission-webhook -> ${WEBHOOK_BASE}:${TAG}"
+        echo "  policy-manager    -> ${MANAGER_BASE}:${TAG}"
+
+    # ---------------------------------------------------------------------------
+    # Signature verification — admission-webhook
+    # cosign verify fetches the OCI referrers from GHCR, checks the Fulcio cert
+    # chain, and validates the Rekor inclusion proof.  The job fails if:
+    #   - the image is unsigned,
+    #   - the manifest was tampered,
+    #   - the signing cert does not match --certificate-identity-regexp, or
+    #   - the OIDC issuer does not match --certificate-oidc-issuer.
+    # ---------------------------------------------------------------------------
+    - name: Verify signature — admission-webhook
+      env:
+        IMAGE_REF: ${{ steps.refs.outputs.webhook }}
+        CERT_IDENTITY_REGEXP: ${{ env.CERT_IDENTITY_REGEXP }}
+        CERT_OIDC_ISSUER: ${{ env.CERT_OIDC_ISSUER }}
+      run: |
+        set -euo pipefail
+        echo "==> cosign verify: ${IMAGE_REF}"
+        cosign verify \
+          --certificate-identity-regexp "${CERT_IDENTITY_REGEXP}" \
+          --certificate-oidc-issuer     "${CERT_OIDC_ISSUER}" \
+          "${IMAGE_REF}"
+        echo "OK — admission-webhook signature verified"
+
+    # ---------------------------------------------------------------------------
+    # Signature verification — policy-manager
+    # ---------------------------------------------------------------------------
+    - name: Verify signature — policy-manager
+      env:
+        IMAGE_REF: ${{ steps.refs.outputs.manager }}
+        CERT_IDENTITY_REGEXP: ${{ env.CERT_IDENTITY_REGEXP }}
+        CERT_OIDC_ISSUER: ${{ env.CERT_OIDC_ISSUER }}
+      run: |
+        set -euo pipefail
+        echo "==> cosign verify: ${IMAGE_REF}"
+        cosign verify \
+          --certificate-identity-regexp "${CERT_IDENTITY_REGEXP}" \
+          --certificate-oidc-issuer     "${CERT_OIDC_ISSUER}" \
+          "${IMAGE_REF}"
+        echo "OK — policy-manager signature verified"
+
+    # ---------------------------------------------------------------------------
+    # SBOM attestation verification — admission-webhook
+    # cosign verify-attestation --type spdxjson checks that a valid SPDX-JSON
+    # SBOM attestation exists in Rekor, bound to the image digest, signed by the
+    # same documented OIDC identity.  Created by `cosign attest --type spdxjson`
+    # in the sign-attest-provenance job (release.yml §484-492).
+    # ---------------------------------------------------------------------------
+    - name: Verify SBOM attestation — admission-webhook
+      env:
+        IMAGE_REF: ${{ steps.refs.outputs.webhook }}
+        CERT_IDENTITY_REGEXP: ${{ env.CERT_IDENTITY_REGEXP }}
+        CERT_OIDC_ISSUER: ${{ env.CERT_OIDC_ISSUER }}
+      run: |
+        set -euo pipefail
+        echo "==> cosign verify-attestation --type spdxjson: ${IMAGE_REF}"
+        cosign verify-attestation \
+          --type spdxjson \
+          --certificate-identity-regexp "${CERT_IDENTITY_REGEXP}" \
+          --certificate-oidc-issuer     "${CERT_OIDC_ISSUER}" \
+          "${IMAGE_REF}" > /dev/null
+        echo "OK — admission-webhook SBOM attestation verified"
+
+    # ---------------------------------------------------------------------------
+    # SBOM attestation verification — policy-manager
+    # ---------------------------------------------------------------------------
+    - name: Verify SBOM attestation — policy-manager
+      env:
+        IMAGE_REF: ${{ steps.refs.outputs.manager }}
+        CERT_IDENTITY_REGEXP: ${{ env.CERT_IDENTITY_REGEXP }}
+        CERT_OIDC_ISSUER: ${{ env.CERT_OIDC_ISSUER }}
+      run: |
+        set -euo pipefail
+        echo "==> cosign verify-attestation --type spdxjson: ${IMAGE_REF}"
+        cosign verify-attestation \
+          --type spdxjson \
+          --certificate-identity-regexp "${CERT_IDENTITY_REGEXP}" \
+          --certificate-oidc-issuer     "${CERT_OIDC_ISSUER}" \
+          "${IMAGE_REF}" > /dev/null
+        echo "OK — policy-manager SBOM attestation verified"
+
+    - name: Verification summary
+      if: always()
+      env:
+        WEBHOOK_REF: ${{ steps.refs.outputs.webhook }}
+        MANAGER_REF: ${{ steps.refs.outputs.manager }}
+        CERT_IDENTITY_REGEXP: ${{ env.CERT_IDENTITY_REGEXP }}
+        CERT_OIDC_ISSUER: ${{ env.CERT_OIDC_ISSUER }}
+      run: |
+        echo "=== Supply-chain verification summary ==="
+        echo "admission-webhook : ${WEBHOOK_REF:-<not resolved>}"
+        echo "policy-manager    : ${MANAGER_REF:-<not resolved>}"
+        echo "Identity regexp   : ${CERT_IDENTITY_REGEXP}"
+        echo "OIDC issuer       : ${CERT_OIDC_ISSUER}"
+        echo "Controls          : NIST SC-12, SI-7, SP 800-190, SLSA — CRY-WU-20"

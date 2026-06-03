@@ -9,7 +9,11 @@ metadata:
     {{- include "kube-policies.labels" . | nindent 4 }}
     app.kubernetes.io/component: admission-webhook
 spec:
+  {{- if not .Values.admissionWebhook.hpa.enabled }}
+  # RES-WU-18: omit the static replica count when the HPA owns scaling so a helm
+  # upgrade does not reset replicas and fight the autoscaler.
   replicas: {{ .Values.admissionWebhook.replicaCount }}
+  {{- end }}
   selector:
     matchLabels:
       {{- include "kube-policies.selectorLabels" . | nindent 6 }}
@@ -28,6 +32,11 @@ spec:
         # One-time cost: an extra rolling restart immediately after first install
         # (lookup empty → stable hash transition). Operationally acceptable.
         checksum/webhook-certs: {{ (lookup "v1" "Secret" .Release.Namespace (printf "%s-admission-webhook-certs" (include "kube-policies.fullname" .))).data | toYaml | sha256sum | default "initial-install" }}
+        {{- if and .Values.audit.enabled .Values.audit.integrity.enabled }}
+        # Roll the pod when the audit HMAC key rotates — the chainer loads the
+        # key once at startup (AUD-WU-05).
+        checksum/audit-integrity: {{ include (print $.Template.BasePath "/audit-integrity-secret.yaml") . | sha256sum }}
+        {{- end }}
         {{- with .Values.admissionWebhook.podAnnotations }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
@@ -39,14 +48,26 @@ spec:
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
       {{- end }}
-      serviceAccountName: {{ include "kube-policies.serviceAccountName" . }}
+      serviceAccountName: {{ include "kube-policies.webhookServiceAccountName" . }}
+      # IAM-WU-10 (CIS 5.1.5/5.1.6): the SA defaults automount off; the webhook opts
+      # the token back in here because the controller-runtime client + leader election
+      # authenticate to the apiserver with it.
+      automountServiceAccountToken: {{ dig "automountServiceAccountToken" true .Values.admissionWebhook }}
+      # RES-WU-07 (CP-10/SC-5): bound the graceful-shutdown window. The binary's
+      # --shutdown-drain-delay (below) plus its 30s server Shutdown fit inside this.
+      terminationGracePeriodSeconds: {{ .Values.admissionWebhook.terminationGracePeriodSeconds | default 30 }}
+      {{- if .Values.priorityClass.enabled }}
+      # RES-WU-20 (CP-10/CP-2): schedule/preserve the fail-closed gatekeeper ahead
+      # of lower-priority workloads under node pressure.
+      priorityClassName: {{ include "kube-policies.priorityClassName" . }}
+      {{- end }}
       securityContext:
         {{- toYaml .Values.admissionWebhook.podSecurityContext | nindent 8 }}
       containers:
         - name: admission-webhook
           securityContext:
             {{- toYaml .Values.admissionWebhook.securityContext | nindent 12 }}
-          image: "{{ include "kube-policies.image" (dict "registry" (.Values.global.imageRegistry | default .Values.admissionWebhook.image.registry) "repository" .Values.admissionWebhook.image.repository "tag" .Values.admissionWebhook.image.tag "defaultTag" .Chart.AppVersion) }}"
+          image: "{{ include "kube-policies.image" (dict "registry" (.Values.global.imageRegistry | default .Values.admissionWebhook.image.registry) "repository" .Values.admissionWebhook.image.repository "tag" .Values.admissionWebhook.image.tag "digest" .Values.admissionWebhook.image.digest "defaultTag" .Chart.AppVersion) }}"
           imagePullPolicy: {{ .Values.admissionWebhook.image.pullPolicy }}
           # Probes target the metrics server (port 9090) where /healthz and
           # /readyz are mounted. The webhook TLS port (8443) cannot serve a
@@ -59,6 +80,47 @@ spec:
             - --key-path=/etc/certs/tls.key
             - --config=/etc/config/config.yaml
             - --disable-default-policies={{ or .Values.admissionWebhook.disableDefaultPolicies (not .Values.policies.enableDefaults) }}
+            # Apiserver mutual-TLS enforcement (IAM-WU-06). The render-fail guard
+            # in admission-webhook-tls.yaml ensures requireClientCert=true is paired
+            # with a clientCA bundle, so true never reaches a CA-less listener (the
+            # binary would otherwise fail closed at startup). Dev default is false
+            # (tracked gap); production sets true + clientCA.
+            - --require-client-cert={{ .Values.admissionWebhook.tls.requireClientCert }}
+            {{- if .Values.admissionWebhook.tls.clientCA }}
+            # Mutual TLS (CRY-WU-04): enforce RequireAndVerifyClientCert against
+            # the operator-supplied apiserver client-cert CA.
+            - --client-ca-path=/etc/client-ca/ca.crt
+            {{- end }}
+            {{- if .Values.policyManager.enabled }}
+            # Verify the policy-manager TLS cert on the decision-publisher
+            # connection (CRY-WU-06): trust the policy-manager serving CA.
+            - --policy-manager-ca-path=/etc/policy-manager-ca/ca.crt
+            {{- end }}
+            {{- if and .Values.policyManager.enabled .Values.policyManager.tls.mtls.enabled }}
+            # Present a client certificate to the policy-manager for mutual TLS
+            # (IAM-WU-03): an enforcing policy-manager (--require-client-cert)
+            # authenticates the webhook as a service caller via this identity.
+            - --policy-manager-client-cert-path=/etc/policy-manager-client/tls.crt
+            - --policy-manager-client-key-path=/etc/policy-manager-client/tls.key
+            {{- end }}
+            {{- if eq (include "kube-policies.internalAuthMode" .) "tokenreview" }}
+            # Present an audience-bound, short-TTL projected ServiceAccount token
+            # to the policy-manager decisions channel (IAM-WU-11). Gate on mode
+            # only — not policyManager.enabled — so a split/webhook-only deploy
+            # (PM external) still presents the credential (FIX 5).
+            - --policy-manager-token-path=/var/run/secrets/kube-policies/pm-token/token
+            {{- end }}
+            {{- if .Values.metrics.tls.enabled }}
+            # Serve /metrics over TLS 1.3 with bearer-token auth (CRY-WU-08).
+            - --metrics-tls
+            {{- end }}
+            {{- if gt (int (.Values.admissionWebhook.preStopDrainSeconds | default 5)) 0 }}
+            # RES-WU-07 (CP-10/SC-5): in-binary graceful drain — keep serving for
+            # this delay after SIGTERM so endpoints removal propagates and no
+            # admission call is fail-closed denied mid-rollout. Distroless +
+            # k8s<1.29 safe (no preStop sleep); pairs with the native preStop below.
+            - --shutdown-drain-delay={{ .Values.admissionWebhook.preStopDrainSeconds | default 5 | int }}s
+            {{- end }}
           ports:
             - name: webhook
               containerPort: 8443
@@ -69,49 +131,111 @@ spec:
           env:
             - name: LOG_LEVEL
               value: "info"
+            {{- include "kube-policies.fipsEnv" . | nindent 12 }}
             - name: POD_NAMESPACE
               valueFrom:
                 fieldRef:
                   fieldPath: metadata.namespace
-            - name: POLICY_MANAGER_URL
-              value: "http://{{ include "kube-policies.fullname" . }}-policy-manager:8080"
             - name: POLICY_MANAGER_INTERNAL_URL
-              value: "http://{{ include "kube-policies.fullname" . }}-policy-manager:8080/api/v1/decisions/internal"
+              value: "https://{{ include "kube-policies.fullname" . }}-policy-manager:8080/api/v1/decisions/internal"
+            {{- if eq (include "kube-policies.internalAuthMode" .) "static" }}
+            # Static shared bearer token (IAM-WU-11 escape hatch, mode=static
+            # only). In tokenreview mode the webhook presents the projected SA
+            # token via --policy-manager-token-path instead.
             - name: POLICY_MANAGER_INTERNAL_TOKEN
               valueFrom:
                 secretKeyRef:
                   name: {{ include "kube-policies.fullname" . }}-internal-token
                   key: token
                   optional: true
+            {{- end }}
           livenessProbe:
             httpGet:
               path: /healthz
               port: metrics
-              scheme: HTTP
+              # HTTPS when /metrics serves TLS (CRY-WU-08); /healthz stays
+              # token-exempt and the kubelet HTTPS probe skips cert verification.
+              scheme: {{ if .Values.metrics.tls.enabled }}HTTPS{{ else }}HTTP{{ end }}
             initialDelaySeconds: 15
             periodSeconds: 10
             timeoutSeconds: 5
             failureThreshold: 3
-          # /readyz is not registered on the admission-webhook metrics server
-          # (see cmd/admission-webhook/main.go::setupMetricsServer). Probe the
-          # /healthz endpoint that IS registered. Real readiness lives behind
-          # the TLS webhook server; that requires TLS-aware probing which a
-          # plain httpGet cannot do.
+          # RES-WU-06 (CP-10/SC-5): /readyz on the metrics server now reflects the
+          # REAL :8443 TLS-serving health. The webhook flips it ready only after
+          # the TLS listener binds and back to NotReady during graceful drain, so
+          # a pod whose TLS listener is down (or terminating) is removed from the
+          # Service endpoints and the apiserver stops dialing it for admission —
+          # avoiding fail-closed denials. /healthz (above) stays pure liveness.
           readinessProbe:
             httpGet:
-              path: /healthz
+              path: /readyz
               port: metrics
-              scheme: HTTP
+              scheme: {{ if .Values.metrics.tls.enabled }}HTTPS{{ else }}HTTP{{ end }}
             initialDelaySeconds: 3
             periodSeconds: 5
             timeoutSeconds: 3
             failureThreshold: 3
+          {{- if .Values.admissionWebhook.startupProbe.enabled }}
+          # RES-WU-05 (CP-10): gate liveness/readiness behind startup so a slow
+          # cold start (OPA bundle compile, CRD cache sync) cannot trip the
+          # livenessProbe and crash-loop the pod. Max startup window =
+          # periodSeconds * failureThreshold.
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: metrics
+              scheme: {{ if .Values.metrics.tls.enabled }}HTTPS{{ else }}HTTP{{ end }}
+            periodSeconds: {{ .Values.admissionWebhook.startupProbe.periodSeconds | default 5 }}
+            failureThreshold: {{ .Values.admissionWebhook.startupProbe.failureThreshold | default 30 }}
+            timeoutSeconds: {{ .Values.admissionWebhook.startupProbe.timeoutSeconds | default 3 }}
+          {{- end }}
+          {{- if and (gt (int (.Values.admissionWebhook.preStopDrainSeconds | default 5)) 0) (semverCompare ">= 1.29-0" .Capabilities.KubeVersion.GitVersion) }}
+          # RES-WU-07 (CP-10/SC-5): native sleep preStop. The `sleep` lifecycle
+          # action is a k8s >= 1.29 feature; on k8s < 1.29 the API server REJECTS
+          # an empty preStop handler ("must specify a handler type"), so it is
+          # rendered ONLY on >= 1.29 (gated on .Capabilities.KubeVersion). On older
+          # clusters the in-binary --shutdown-drain-delay performs the drain.
+          # Holds the pod in Terminating while it leaves the Service endpoints.
+          lifecycle:
+            preStop:
+              sleep:
+                seconds: {{ .Values.admissionWebhook.preStopDrainSeconds | default 5 | int }}
+          {{- end }}
           resources:
             {{- toYaml .Values.admissionWebhook.resources | nindent 12 }}
           volumeMounts:
             - name: certs
               mountPath: /etc/certs
               readOnly: true
+            {{- if .Values.admissionWebhook.tls.clientCA }}
+            - name: client-ca
+              mountPath: /etc/client-ca
+              readOnly: true
+            {{- end }}
+            {{- if .Values.policyManager.enabled }}
+            - name: policy-manager-ca
+              mountPath: /etc/policy-manager-ca
+              readOnly: true
+            {{- end }}
+            {{- if and .Values.policyManager.enabled .Values.policyManager.tls.mtls.enabled }}
+            - name: policy-manager-client
+              mountPath: /etc/policy-manager-client
+              readOnly: true
+            {{- end }}
+            {{- if eq (include "kube-policies.internalAuthMode" .) "tokenreview" }}
+            # Projected SA token for the decisions channel (IAM-WU-11). Gate on
+            # mode only (FIX 5) so a webhook-only / split deploy still mounts it.
+            - name: pm-internal-token
+              mountPath: /var/run/secrets/kube-policies/pm-token
+              readOnly: true
+            {{- end }}
+            {{- if and .Values.audit.enabled .Values.audit.integrity.enabled }}
+            - name: audit-integrity-key
+              # Mount dir derived from keyPath so it always matches the
+              # integrity_key_path the configmap renders (AUD-WU-05).
+              mountPath: {{ dir (.Values.audit.integrity.keyPath | default "/etc/audit-integrity/key") | quote }}
+              readOnly: true
+            {{- end }}
             - name: config
               mountPath: /etc/config
               readOnly: true
@@ -123,26 +247,96 @@ spec:
         - name: certs
           secret:
             secretName: {{ include "kube-policies.fullname" . }}-admission-webhook-certs
+        {{- if .Values.admissionWebhook.tls.clientCA }}
+        - name: client-ca
+          secret:
+            secretName: {{ include "kube-policies.fullname" . }}-admission-webhook-client-ca
+        {{- end }}
+        {{- if .Values.policyManager.enabled }}
+        # Project ONLY ca.crt (public) from the policy-manager serving Secret —
+        # never its tls.key. optional: the cert-manager-managed Secret may not
+        # exist yet on first install; the webhook degrades to system roots until
+        # it appears (CRY-WU-06).
+        - name: policy-manager-ca
+          secret:
+            secretName: {{ include "kube-policies.policyManagerCertSecretName" . }}
+            items:
+              - key: ca.crt
+                path: ca.crt
+            optional: true
+        {{- end }}
+        {{- if and .Values.policyManager.enabled .Values.policyManager.tls.mtls.enabled }}
+        # Client identity the webhook presents to the policy-manager for mTLS
+        # (IAM-WU-03), issued by the shared cert-manager issuer. NOT optional:
+        # when mTLS is enabled the webhook must hold this cert to reach the PM.
+        - name: policy-manager-client
+          secret:
+            secretName: {{ include "kube-policies.webhookClientCertSecretName" . }}
+        {{- end }}
+        {{- if eq (include "kube-policies.internalAuthMode" .) "tokenreview" }}
+        # Audience-bound, short-TTL projected ServiceAccount token for the
+        # webhook -> policy-manager decisions channel (IAM-WU-11). Gated on mode
+        # only (FIX 5) — a split/webhook-only deploy must still project the token.
+        # The kubelet mints a token scoped to audience=<internalAuth.audience>
+        # with the configured TTL and atomically swaps it as it rotates.
+        - name: pm-internal-token
+          projected:
+            defaultMode: 0440
+            sources:
+              - serviceAccountToken:
+                  path: token
+                  audience: {{ include "kube-policies.internalAuthAudience" . | quote }}
+                  expirationSeconds: {{ dig "internalAuth" "expirationSeconds" 3600 .Values.policyManager }}
+        {{- end }}
+        {{- if and .Values.audit.enabled .Values.audit.integrity.enabled }}
+        # Audit-integrity HMAC key (AUD-WU-05), projected to the file the audit
+        # logger reads (audit.integrity.keyPath default /etc/audit-integrity/key).
+        - name: audit-integrity-key
+          secret:
+            secretName: {{ include "kube-policies.fullname" . }}-audit-integrity
+            items:
+              # Filename derived from keyPath so the key lands exactly at the
+              # integrity_key_path the configmap renders (AUD-WU-05).
+              - key: key
+                path: {{ base (.Values.audit.integrity.keyPath | default "/etc/audit-integrity/key") | quote }}
+        {{- end }}
         - name: config
           configMap:
             name: {{ include "kube-policies.fullname" . }}-config
         - name: tmp
           emptyDir: {}
-        # Writable mount for the audit file backend. readOnlyRootFilesystem
-        # blocks mkdir at /var/log/kube-policies on the pod's overlay; this
-        # emptyDir gives the audit logger a writable directory matching the
-        # default filename. For persistence beyond pod lifetime, replace
-        # with a PVC.
+        # AUD-WU-08 (NIST AU-9/AU-11): writable audit log directory.
+        # readOnlyRootFilesystem blocks mkdir on the overlay; this volume gives
+        # the audit logger a writable directory at the path the ConfigMap targets.
+        # Default: emptyDir (ephemeral, per-pod). When audit.persistence.enabled=true
+        # the emptyDir is replaced by the <fullname>-audit PVC (see
+        # admission-webhook-audit-pvc.yaml).
         - name: audit-log
+          {{- if .Values.audit.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ include "kube-policies.fullname" . }}-audit
+          {{- else }}
           emptyDir: {}
+          {{- end }}
       {{- with .Values.admissionWebhook.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}
       {{- end }}
-      {{- with .Values.admissionWebhook.affinity }}
+      # RES-WU-04 (CP-2/CP-6/CP-10): default soft pod anti-affinity (one replica
+      # per node) unless the operator overrides admissionWebhook.affinity.
       affinity:
+        {{- with .Values.admissionWebhook.affinity }}
         {{- toYaml . | nindent 8 }}
-      {{- end }}
+        {{- else }}
+        {{- include "kube-policies.defaultPodAntiAffinity" (dict "ctx" . "component" "admission-webhook") | nindent 8 }}
+        {{- end }}
+      # RES-WU-04: default zone+host topology spread unless overridden.
+      topologySpreadConstraints:
+        {{- with .Values.admissionWebhook.topologySpreadConstraints }}
+        {{- toYaml . | nindent 8 }}
+        {{- else }}
+        {{- include "kube-policies.defaultTopologySpreadConstraints" (dict "ctx" . "component" "admission-webhook") | nindent 8 }}
+        {{- end }}
       {{- with .Values.admissionWebhook.tolerations }}
       tolerations:
         {{- toYaml . | nindent 8 }}

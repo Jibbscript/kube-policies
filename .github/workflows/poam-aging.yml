@@ -1,0 +1,232 @@
+# VUL-WU-17 / VUL-WU-18 — POA&M Aging and SLA-Breach Alerting
+# NIST controls: RA-5 (Vulnerability Scanning), CA-5 (Plan of Action & Milestones),
+#                PM-4 (Plan of Action & Milestones Process), SI-2 (Flaw Remediation),
+#                SI-4 (System Monitoring)
+#
+# Runs weekly (Monday 07:00 UTC) and on manual dispatch.
+# Enumerates open GitHub Issues labelled "vuln", computes age vs SLA due-date,
+# and produces a weekly aging report artifact.
+# VUL-WU-18: if any item is past its SLA, posts a Slack notification
+# (guarded by secrets.SLACK_WEBHOOK availability).
+
+name: POA&M Aging
+
+on:
+  schedule:
+    - cron: '0 7 * * 1'   # every Monday, 07:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: read
+
+jobs:
+  poam-aging:
+    name: POA&M Aging Report
+    runs-on: ubuntu-latest
+
+    steps:
+      # ------------------------------------------------------------------ #
+      # Checkout (needed for actionlint / yq validation; also good hygiene) #
+      # ------------------------------------------------------------------ #
+      - name: Checkout code
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+
+      # ------------------------------------------------------------------ #
+      # Enumerate open vuln issues and compute aging                        #
+      # All dynamic values are passed via env: — safe against injection    #
+      # ------------------------------------------------------------------ #
+      - name: Compute POA&M aging
+        id: aging
+        uses: actions/github-script@60a0d83138ddba5ccdc100e76d2f31a14089aa57  # v7
+        env:
+          GITHUB_RUN_ID: ${{ github.run_id }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_SERVER_URL: ${{ github.server_url }}
+        with:
+          script: |
+            const runUrl = [
+              process.env.GITHUB_SERVER_URL,
+              process.env.GITHUB_REPOSITORY,
+              'actions/runs',
+              process.env.GITHUB_RUN_ID,
+            ].join('/');
+
+            const today = new Date();
+
+            // SLA windows in days by severity label or keyword in title/body
+            const SLA_DAYS = {
+              critical: 30,
+              high:     30,
+              moderate: 90,
+              medium:   90,
+              low:      180,
+            };
+
+            // Derive severity from issue labels (fall back to 'low')
+            function severityFromLabels(labels) {
+              const names = labels.map(l => l.name.toLowerCase());
+              for (const sev of ['critical', 'high', 'moderate', 'medium', 'low']) {
+                if (names.includes(sev)) return sev;
+              }
+              return 'low';
+            }
+
+            // Parse a "due: YYYY-MM-DD" field from the issue body if present
+            function parseDueDate(body) {
+              if (!body) return null;
+              const m = body.match(/due:\s*(\d{4}-\d{2}-\d{2})/i);
+              if (!m) return null;
+              const d = new Date(m[1]);
+              return isNaN(d.getTime()) ? null : d;
+            }
+
+            // Fetch all open issues labelled 'vuln' (paginate up to 500)
+            let page = 1;
+            const allIssues = [];
+            while (true) {
+              const { data } = await github.rest.issues.listForRepo({
+                owner:    context.repo.owner,
+                repo:     context.repo.repo,
+                labels:   'vuln',
+                state:    'open',
+                per_page: 100,
+                page,
+              });
+              allIssues.push(...data);
+              if (data.length < 100) break;
+              page++;
+            }
+
+            core.info(`Found ${allIssues.length} open vuln issue(s).`);
+
+            const reportRows = [];
+            const breachedRows = [];
+
+            for (const issue of allIssues) {
+              const sev      = severityFromLabels(issue.labels);
+              const slaDays  = SLA_DAYS[sev] ?? 180;
+              const created  = new Date(issue.created_at);
+              const slaDue   = parseDueDate(issue.body)
+                             ?? new Date(created.getTime() + slaDays * 86400000);
+              const ageDays  = Math.floor((today - created) / 86400000);
+              const overDays = Math.floor((today - slaDue)  / 86400000);
+              const breached = today > slaDue;
+              const dueStr   = slaDue.toISOString().slice(0, 10);
+
+              const row = {
+                number:   issue.number,
+                title:    issue.title,
+                severity: sev,
+                created:  created.toISOString().slice(0, 10),
+                due:      dueStr,
+                ageDays,
+                overDays: breached ? overDays : 0,
+                breached,
+                url:      issue.html_url,
+              };
+
+              reportRows.push(row);
+              if (breached) breachedRows.push(row);
+            }
+
+            // Sort: breached first, then by overDays desc
+            reportRows.sort((a, b) => {
+              if (a.breached !== b.breached) return a.breached ? -1 : 1;
+              return b.overDays - a.overDays;
+            });
+
+            // Build Markdown report
+            const reportDate = today.toISOString().slice(0, 10);
+            const lines = [
+              `# POA&M Aging Report — ${reportDate}`,
+              ``,
+              `> **VUL-WU-17** | NIST CA-5, PM-4, RA-5, SI-2, SI-4`,
+              ``,
+              `**Total open vuln items:** ${reportRows.length}`,
+              `**SLA-breached items:** ${breachedRows.length}`,
+              ``,
+              `## Items`,
+              ``,
+              `| # | Title | Severity | Created | SLA Due | Age (days) | Over SLA | Status |`,
+              `|---|-------|----------|---------|---------|-----------|----------|--------|`,
+            ];
+
+            for (const r of reportRows) {
+              const overStr = r.breached ? `+${r.overDays}d` : '—';
+              const status  = r.breached ? `BREACHED (+${r.overDays}d)` : 'On Track';
+              lines.push(
+                `| [#${r.number}](${r.url}) | ${r.title} | ${r.severity} | ${r.created} | ${r.due} | ${r.ageDays} | ${overStr} | ${status} |`
+              );
+            }
+
+            lines.push(``);
+            lines.push(`## SLA Policy`);
+            lines.push(``);
+            lines.push(`| Severity | SLA Window |`);
+            lines.push(`|----------|------------|`);
+            lines.push(`| Critical | 30 days from discovery |`);
+            lines.push(`| High     | 30 days from discovery |`);
+            lines.push(`| Moderate | 90 days from discovery |`);
+            lines.push(`| Low      | 180 days from discovery |`);
+            lines.push(``);
+            lines.push(`---`);
+            lines.push(`*Report generated: ${runUrl}*`);
+            lines.push(`*Controls: NIST SP 800-53 CA-5, PM-4, RA-5, SI-2, SI-4 | VUL-WU-17*`);
+
+            const report = lines.join('\n');
+
+            // Write report to file for artifact upload
+            const fs = require('fs');
+            fs.writeFileSync(`poam-aging-${reportDate}.md`, report);
+            core.info(`Report written to poam-aging-${reportDate}.md`);
+
+            // Set outputs
+            core.setOutput('breached_count', String(breachedRows.length));
+            core.setOutput('total_count',    String(reportRows.length));
+            core.setOutput('report_date',    reportDate);
+            core.setOutput('run_url',        runUrl);
+
+            // Compact breach summary for Slack (script-generated, not user content)
+            if (breachedRows.length > 0) {
+              const summary = breachedRows
+                .slice(0, 10)
+                .map(r => `  • #${r.number} [${r.severity}] — ${r.overDays}d over SLA`)
+                .join('\n');
+              core.setOutput('breach_summary', summary);
+            } else {
+              core.setOutput('breach_summary', '');
+            }
+
+      # ------------------------------------------------------------------ #
+      # Upload aging report artifact                                        #
+      # ------------------------------------------------------------------ #
+      - name: Upload aging report artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+        with:
+          name: poam-aging-${{ steps.aging.outputs.report_date }}
+          path: poam-aging-${{ steps.aging.outputs.report_date }}.md
+          retention-days: 365
+
+      # ------------------------------------------------------------------ #
+      # VUL-WU-18: Slack notification on SLA breach                        #
+      # Reuses the repo's pinned 8398a7/action-slack SHA from ci.yml.      #
+      # Guarded by SLACK_WEBHOOK secret availability.                      #
+      # breach_summary is script-generated (issue numbers + severities     #
+      # only — no raw user content) so injection risk is negligible.       #
+      # ------------------------------------------------------------------ #
+      - name: Notify Slack on SLA breach (VUL-WU-18)
+        if: >-
+          steps.aging.outputs.breached_count != '0' &&
+          env.SLACK_WEBHOOK != ''
+        uses: 8398a7/action-slack@77eaa4f1c608a7d68b38af4e3f739dcd8cba273e  # v3
+        with:
+          status: custom
+          channel: '#kube-policies-ci'
+          fields: repo,workflow,eventName
+          custom_payload: |
+            {
+              "text": ":rotating_light: *POA&M SLA Breach — ${{ steps.aging.outputs.breached_count }} item(s) overdue*\n${{ steps.aging.outputs.breach_summary }}\n\nReport: ${{ steps.aging.outputs.run_url }}\nControls: NIST CA-5, PM-4, SI-2 | VUL-WU-18"
+            }
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK }}

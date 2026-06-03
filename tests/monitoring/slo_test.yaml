@@ -1,0 +1,41 @@
+# promtool unit tests for the kube-policies-slo burn-rate alerts (IRM-WU-18).
+# The recording rules (error-ratio over 5m/1h/30m/6h) are evaluated in-group
+# before the alerts that consume them.
+rule_files:
+  - ../../charts/kube-policies/files/slo/slo.yaml
+
+evaluation_interval: 1m
+
+tests:
+  # Fast burn: 5 errors/min + 95 ok/min => 5% error ratio, > 14.4 * 0.001
+  # over both 1h and 5m windows => KubePoliciesErrorBudgetBurnFast (critical).
+  - interval: 1m
+    input_series:
+      - series: 'kube_policies_admission_requests_total{operation="validate",status="error",reason="evaluation_error"}'
+        values: '0+5x70'
+      - series: 'kube_policies_admission_requests_total{operation="validate",status="allowed",reason="ok"}'
+        values: '0+95x70'
+    alert_rule_test:
+      - eval_time: 65m
+        alertname: KubePoliciesErrorBudgetBurnFast
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              slo: availability
+            exp_annotations:
+              description: "The admission error ratio is burning the 99.9% availability budget at >14.4x over both 1h and 5m windows (5%). At this rate the 30-day budget is exhausted in ~2 days. Page on-call."
+              runbook_url: "https://github.com/Jibbscript/kube-policies/blob/main/docs/security/runbooks/high-error-rate.md"
+              summary: "kube-policies availability error budget burning fast (14.4x)"
+
+  # Healthy: zero errors => no burn-rate alert fires.
+  - interval: 1m
+    input_series:
+      - series: 'kube_policies_admission_requests_total{operation="validate",status="allowed",reason="ok"}'
+        values: '0+100x70'
+    alert_rule_test:
+      - eval_time: 65m
+        alertname: KubePoliciesErrorBudgetBurnFast
+        exp_alerts: []
+      - eval_time: 65m
+        alertname: KubePoliciesErrorBudgetBurnSlow
+        exp_alerts: []

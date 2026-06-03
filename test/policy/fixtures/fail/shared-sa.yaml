@@ -1,0 +1,35 @@
+# NEGATIVE fixture for sa.shared (IAM-WU-17), evaluated under `conftest --combine`.
+#
+# The admission-webhook and policy-manager Deployments both reference a single
+# shared ServiceAccount — the pre-IAM-WU-08/09 regression the SA split removed.
+# Both SAs set automountServiceAccountToken: false so this fixture isolates the
+# shared-SA failure (sa.token stays green here).
+#
+# conftest test --combine MUST exit non-zero with a deny from package sa.shared.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: regression-shared
+automountServiceAccountToken: false
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: regression-admission-webhook
+  labels:
+    app.kubernetes.io/component: admission-webhook
+spec:
+  template:
+    spec:
+      serviceAccountName: regression-shared
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: regression-policy-manager
+  labels:
+    app.kubernetes.io/component: policy-manager
+spec:
+  template:
+    spec:
+      serviceAccountName: regression-shared

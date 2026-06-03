@@ -1,0 +1,242 @@
+# .github/workflows/dast.yml — DAST scan workflow
+# SDL-WU-26 / VUL-WU-16
+# NIST controls: CA-8 (penetration testing), SA-11 (developer security testing),
+#                SC-8 (transmission confidentiality / TLS), RA-5(5) (vulnerability scanning)
+#
+# Runs OWASP ZAP baseline scans against the policy-manager REST API (:8080) and
+# the dashboard BFF (:3000), plus TLS/cipher checks against the admission-webhook
+# HTTPS endpoint (:8443). The stack is stood up on Kind (reusing the e2e-kind
+# pattern from ci.yml). SARIF results are uploaded to the GitHub Security tab.
+#
+# Triggers:
+#   - schedule: nightly at 03:00 UTC
+#   - workflow_dispatch: manual run with configurable severity threshold
+#   - pull_request: when web/ or cmd/dashboard changes (dashboard attack surface)
+
+name: DAST Scan
+
+on:
+  schedule:
+    # Nightly at 03:00 UTC (offset from CI's 02:00 to avoid runner contention)
+    - cron: '0 3 * * *'
+  workflow_dispatch:
+    inputs:
+      fail_on:
+        description: 'Minimum ZAP severity to fail the build (High|Medium|Low)'
+        required: false
+        default: 'High'
+        type: choice
+        options:
+          - High
+          - Medium
+          - Low
+  pull_request:
+    branches: [ main, develop ]
+    paths:
+      - 'web/**'
+      - 'cmd/dashboard/**'
+
+permissions:
+  contents: read
+  security-events: write
+
+env:
+  GO_VERSION: '1.25'
+  # GOTOOLCHAIN=auto: download + enforce the go.mod-pinned toolchain (go1.25.11)
+  # even when setup-go's release manifest lags a new Go patch (SI-2 / VUL-WU-03).
+  GOTOOLCHAIN: auto
+  GOFLAGS: -mod=readonly
+  KUBERNETES_VERSION: 'v1.28.15'
+  KIND_CLUSTER_NAME: 'kube-policies-dast'
+  REGISTRY_NAME: 'dast-registry'
+  REGISTRY_PORT: '5002'
+  ZAP_IMAGE: 'ghcr.io/zaproxy/zaproxy:stable'
+  # The policy-manager :8080 REST API always serves TLS (CRY-WU-05); scan + probe
+  # over https. The Kind/DAST serving cert is self-signed, so the readiness curls
+  # use -k and ZAP (no cert validation) scans the endpoint directly.
+  TARGET_API_URL: 'https://localhost:8080'
+  TARGET_BFF_URL: 'http://localhost:3000'
+  TLS_HOST: 'localhost'
+  TLS_PORT: '8443'
+
+jobs:
+  dast:
+    name: DAST Scan (ZAP + TLS)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+
+    - name: Set up Go
+      uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff  # v5
+      with:
+        go-version: ${{ env.GO_VERSION }}
+
+    # ── Kind cluster install (mirrors e2e-kind in ci.yml) ─────────────────────
+    - name: Install Kind
+      run: |
+        curl -Lo ./kind https://kind.sigs.k8s.io/dl/v0.25.0/kind-linux-amd64
+        chmod +x ./kind
+        sudo mv ./kind /usr/local/bin/kind
+
+    - name: Install kubectl
+      run: |
+        curl -LO "https://dl.k8s.io/release/${{ env.KUBERNETES_VERSION }}/bin/linux/amd64/kubectl"
+        chmod +x kubectl
+        sudo mv kubectl /usr/local/bin/
+
+    - name: Install Helm
+      run: |
+        curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+
+    # ── Stand up the stack ────────────────────────────────────────────────────
+    - name: Stand up Kind cluster and deploy kube-policies
+      env:
+        KIND_CLUSTER_NAME: ${{ env.KIND_CLUSTER_NAME }}
+        REGISTRY_NAME: ${{ env.REGISTRY_NAME }}
+        REGISTRY_PORT: ${{ env.REGISTRY_PORT }}
+      run: |
+        set -euo pipefail
+        export CLEANUP=false
+        # DEPLOY_ONLY: stand up the stack and stop once it is Ready — this job
+        # scans the running deployment (port-forward + ZAP below), it does not run
+        # the in-cluster go test suite (that is the e2e-kind/e2e-k3s jobs' role).
+        export DEPLOY_ONLY=true
+        ./scripts/test/test-kind.sh
+
+    # ── Port-forward services so ZAP and TLS checks can reach them ────────────
+    - name: Port-forward policy-manager API (:8080)
+      run: |
+        kubectl port-forward -n kube-policies-system \
+          svc/kube-policies-policy-manager 8080:8080 \
+          >/tmp/pf-api.log 2>&1 &
+        echo "PF_API_PID=$!" >> "${GITHUB_ENV}"
+
+    - name: Port-forward dashboard BFF (:3000) if service exists
+      run: |
+        if kubectl get svc -n kube-policies-system kube-policies-dashboard >/dev/null 2>&1; then
+          kubectl port-forward -n kube-policies-system \
+            svc/kube-policies-dashboard 3000:3000 \
+            >/tmp/pf-bff.log 2>&1 &
+          echo "PF_BFF_PID=$!" >> "${GITHUB_ENV}"
+        else
+          echo "Dashboard service not found — BFF scan will be skipped"
+          echo "TARGET_BFF_URL=" >> "${GITHUB_ENV}"
+        fi
+
+    - name: Port-forward admission webhook TLS (:8443)
+      run: |
+        kubectl port-forward -n kube-policies-system \
+          svc/kube-policies-admission-webhook 8443:8443 \
+          >/tmp/pf-webhook.log 2>&1 &
+        echo "PF_WEBHOOK_PID=$!" >> "${GITHUB_ENV}"
+
+    - name: Wait for API readiness
+      run: |
+        set -euo pipefail
+        echo "Waiting for policy-manager API at ${TARGET_API_URL}/healthz..."
+        for i in $(seq 1 30); do
+          if curl -sfk -o /dev/null -m 3 "${TARGET_API_URL}/healthz" 2>/dev/null; then
+            echo "Policy-manager API ready"
+            exit 0
+          fi
+          echo "  attempt ${i}/30 — waiting 2s"
+          sleep 2
+        done
+        echo "::error::Policy-manager API did not become ready within 60s"
+        exit 1
+
+    - name: Wait for webhook TLS readiness
+      run: |
+        set -euo pipefail
+        echo "Waiting for admission webhook TLS at ${TLS_HOST}:${TLS_PORT}..."
+        for _ in $(seq 1 15); do
+          if curl -sk -o /dev/null -m 2 "https://${TLS_HOST}:${TLS_PORT}/livez" 2>/dev/null; then
+            echo "Webhook TLS ready"
+            exit 0
+          fi
+          sleep 2
+        done
+        echo "::warning::Webhook TLS did not respond on :${TLS_PORT} within 30s — TLS check will proceed anyway"
+
+    # ── DAST scan ─────────────────────────────────────────────────────────────
+    # workflow_dispatch input is a restricted choice enum (High|Medium|Low) so
+    # injection is not possible, but we still route it through an env var to
+    # keep the run: block free of direct expression interpolation.
+    - name: Run DAST scan (ZAP baseline + TLS checks)
+      env:
+        FAIL_ON: ${{ github.event.inputs.fail_on || 'High' }}
+        RESULTS_DIR: ${{ github.workspace }}/test-results/dast
+        ZAP_CONF: ${{ github.workspace }}/test/security/zap-baseline.conf
+      run: |
+        set -euo pipefail
+        chmod +x ./scripts/test/dast.sh
+        export BRING_UP_STACK=false
+        ./scripts/test/dast.sh
+
+    # ── Upload SARIF to GitHub Security tab ───────────────────────────────────
+    - name: Upload API SARIF to Security tab
+      if: always()
+      uses: github/codeql-action/upload-sarif@03e4368ac7daa2bd82b3e85262f3bf87ee112f57  # v3
+      with:
+        sarif_file: test-results/dast/api-report.sarif
+        category: dast-api
+      continue-on-error: true
+
+    - name: Upload BFF SARIF to Security tab
+      if: always()
+      uses: github/codeql-action/upload-sarif@03e4368ac7daa2bd82b3e85262f3bf87ee112f57  # v3
+      with:
+        sarif_file: test-results/dast/bff-report.sarif
+        category: dast-bff
+      continue-on-error: true
+
+    # ── Upload all DAST artifacts ─────────────────────────────────────────────
+    - name: Upload DAST report artifacts
+      if: always()
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+      with:
+        name: dast-results
+        path: test-results/dast/
+        if-no-files-found: warn
+
+    # ── Cluster diagnostics on failure ────────────────────────────────────────
+    - name: Collect diagnostics on failure
+      if: failure()
+      run: |
+        mkdir -p test-results/dast/diagnostics
+        kubectl get pods -A -o wide > test-results/dast/diagnostics/pods.txt || true
+        kubectl get events -A --sort-by='.lastTimestamp' > test-results/dast/diagnostics/events.txt || true
+        kubectl logs -n kube-policies-system -l app=kube-policies-policy-manager --tail=200 \
+          > test-results/dast/diagnostics/policy-manager.log || true
+        kubectl logs -n kube-policies-system -l app=kube-policies-admission-webhook --tail=200 \
+          > test-results/dast/diagnostics/diagnostics-webhook.log || true
+        cp /tmp/pf-api.log     test-results/dast/diagnostics/pf-api.log     2>/dev/null || true
+        cp /tmp/pf-bff.log     test-results/dast/diagnostics/pf-bff.log     2>/dev/null || true
+        cp /tmp/pf-webhook.log test-results/dast/diagnostics/pf-webhook.log 2>/dev/null || true
+
+    - name: Upload diagnostics on failure
+      if: failure()
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+      with:
+        name: dast-diagnostics
+        path: test-results/dast/diagnostics/
+        if-no-files-found: ignore
+
+    # ── Cluster teardown ──────────────────────────────────────────────────────
+    - name: Teardown Kind cluster
+      if: always()
+      env:
+        KIND_CLUSTER_NAME: ${{ env.KIND_CLUSTER_NAME }}
+        REGISTRY_NAME: ${{ env.REGISTRY_NAME }}
+      run: |
+        kill "${PF_API_PID:-}" 2>/dev/null || true
+        kill "${PF_BFF_PID:-}" 2>/dev/null || true
+        kill "${PF_WEBHOOK_PID:-}" 2>/dev/null || true
+        kind delete cluster --name "${KIND_CLUSTER_NAME}" 2>/dev/null || true
+        docker stop "${REGISTRY_NAME}" 2>/dev/null || true
+        docker rm   "${REGISTRY_NAME}" 2>/dev/null || true

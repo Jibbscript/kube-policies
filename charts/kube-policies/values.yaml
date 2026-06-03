@@ -10,24 +10,171 @@ global:
   # Global storage class
   storageClass: ""
 
+# Namespace lifecycle (NET-WU-19).
+# DEFAULT create=false: the common install path is `helm install --create-namespace`,
+# which provisions the target namespace BEFORE the release objects are applied.
+# Having the chart ALSO render a Namespace object that it then installs INTO is
+# order-sensitive (Helm has no guaranteed apply ordering for a namespace it is
+# simultaneously deploying resources into) and conflicts with --create-namespace.
+# Set create=true ONLY when you manage the namespace declaratively via this chart
+# and do NOT pass --create-namespace. When true, the chart renders a Namespace named
+# after .Release.Namespace carrying Pod Security Admission labels (restricted, the
+# FedRAMP/CIS baseline) so the namespace is hardened the moment it exists.
+namespace:
+  create: false
+  # Pod Security Admission labels applied to the rendered Namespace. Default
+  # "restricted" on all three modes (enforce/audit/warn) is the hardened baseline;
+  # loosen a single mode only with explicit justification.
+  podSecurity:
+    enforce: restricted
+    audit: restricted
+    warn: restricted
+
+# Network segmentation via NetworkPolicy (NET-WU-01..09, IAM-WU-15).
+# Secure-by-default: enabled=true ships a default-deny baseline plus the minimum
+# allow-list each component needs to function. Your CNI MUST enforce NetworkPolicy
+# (Calico, Cilium, Antrea, etc.) — on a CNI without NetworkPolicy support these
+# objects render but are inert. Set enabled=false to render NO NetworkPolicy
+# objects at all (e.g. when segmentation is owned by a cluster-wide policy layer).
+networkPolicy:
+  enabled: true
+
+  # Default-deny baseline (NET-WU-01): a podSelector:{} policy with empty
+  # Ingress+Egress rule sets, denying ALL traffic to/from every kube-policies pod
+  # unless explicitly allowed by one of the policies below. Keep true; the
+  # per-component allow policies are written assuming this baseline is present.
+  defaultDeny: true
+
+  # kube-apiserver egress (NET-WU-03). Kubernetes attaches NO label to the
+  # apiserver/control-plane endpoints, so an egress allow rule cannot select them
+  # via pod/namespace selectors — it must target IP CIDRs. Operators MUST set the
+  # control-plane address range(s) here (e.g. the CIDR of the kube-apiserver
+  # endpoint(s), commonly the first IP of the service CIDR for the in-cluster
+  # `kubernetes` Service, plus any external apiserver VIPs). When this list is
+  # EMPTY the apiserver-egress policy is STILL rendered but selects an empty
+  # ipBlock set, which DENIES apiserver egress (fail-closed) and a warning is
+  # emitted in NOTES.txt — we deliberately do NOT fall back to 0.0.0.0/0, which
+  # would defeat segmentation. The webhook (leader election, TokenReview) and the
+  # policy-manager (TokenReview) require this to reach the apiserver.
+  apiServerCIDRs: []
+  #   - 10.96.0.1/32
+  #   - 172.18.0.0/16
+  # Ports the apiserver is reached on. 443 is the in-cluster `kubernetes` Service
+  # port; 6443 is the typical node-local / external apiserver port.
+  apiServerPorts:
+    - 443
+    - 6443
+
+  # admission-webhook ingress (NET-WU-04). The kube-apiserver connects to the
+  # webhook :8443 from the control plane. K8s does not label apiserver source
+  # traffic, so this is expressed as ipBlock CIDRs and/or namespaceSelectors.
+  # Operators MUST set ingressFrom to the control-plane source CIDR(s). When BOTH
+  # lists are empty the policy is STILL rendered selecting the webhook pods with
+  # policyTypes [Ingress] and an EMPTY ingress rule set, which DENIES all ingress
+  # (fail-closed), and a warning is emitted in NOTES.txt. The allow rule is only
+  # emitted once a peer is set — a `ports` rule with no `from` would match every
+  # source (allow-all-on-port), so it is never rendered unscoped.
+  webhook:
+    ingressFrom:
+      # ipBlock CIDRs the apiserver connects from (control-plane node range).
+      ipBlocks: []
+      #   - 10.0.0.0/24
+      # namespaceSelector matchLabels for in-cluster callers (rarely needed; the
+      # apiserver is not in a labeled namespace). Each entry is a label map.
+      namespaceSelectors: []
+      #   - kubernetes.io/metadata.name: some-namespace
+
+  # Metrics scraper (NET-WU-06). Ingress to each component's metrics port
+  # (9090/9091/9092) is allowed ONLY from the monitoring scraper identified here.
+  # Default targets a Prometheus pod in the `monitoring` namespace; adjust to your
+  # observability stack. Both selectors are ANDed within a single `from` peer.
+  metricsScraperSelector:
+    namespaceSelector:
+      kubernetes.io/metadata.name: monitoring
+    podSelector:
+      app.kubernetes.io/name: prometheus
+
+  # dashboard ingress (NET-WU-07). Browser traffic to the dashboard :8090 normally
+  # arrives via an ingress controller; allow only that controller's namespace.
+  # Default targets ingress-nginx; adjust to your ingress controller. Only rendered
+  # when dashboard.enabled=true.
+  dashboard:
+    ingressFrom:
+      namespaceSelectors:
+        - kubernetes.io/metadata.name: ingress-nginx
+      ipBlocks: []
+
+# FIPS 140-3 cryptographic posture (CRY-WU-01, CRY-WU-02).
+# Images are built with the Go FIPS 140-3 module (GOFIPS140) and default to
+# fips140=on at runtime. These values surface the runtime controls:
+#   - required: when true, REQUIRE_FIPS=true is injected and each binary aborts
+#     at startup if the FIPS module is not active. Default false so the chart
+#     installs on non-FIPS dev clusters; production overlays set it true
+#     (see values-production.yaml).
+#   - godebug: the GODEBUG value selecting FIPS runtime mode ("fips140=on" or
+#     "fips140=only" to additionally reject non-approved algorithms).
+fips:
+  required: false
+  godebug: "fips140=on"
+
+# cert-manager integration for webhook TLS (CRY-WU-09). Default OFF so the
+# chart installs on clusters without cert-manager CRDs (kind / ct / demo).
+# Enable in production (see values-production.yaml), where cert-manager is
+# pre-installed: the chart then renders an Issuer + Certificate to provision the
+# webhook TLS Secret and annotates the ValidatingWebhookConfiguration with
+# cert-manager.io/inject-ca-from so ca-injector populates the caBundle (no
+# inline self-signed Secret or caBundle is rendered).
+certManager:
+  enabled: false
+  # issuerType selects how the issuing Issuer is provided:
+  #   selfsigned — chart renders a selfSigned Issuer (turnkey; per-release root)
+  #   ca         — chart renders a CA Issuer referencing caSecretName
+  #   existing   — no Issuer rendered; use the operator-supplied issuerRef
+  issuerType: selfsigned
+  # Used when issuerType=existing.
+  issuerRef:
+    name: ""
+    kind: Issuer            # Issuer or ClusterIssuer
+    group: cert-manager.io
+  # Secret (tls.crt/tls.key) backing a CA Issuer when issuerType=ca.
+  caSecretName: ""
+  duration: 8760h0m0s       # 1 year
+  renewBefore: 720h0m0s     # 30 days
+  # Approved key strength for the issued cert (CRY-WU-11). cert-manager defaults
+  # to RSA-2048 if omitted, which is below the FedRAMP-Moderate bar — so this
+  # block is mandatory. ECDSA size is the curve bit-length (256=P-256,
+  # 384=P-384); RSA size is the modulus (>=3072).
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+    rotationPolicy: Always
+
 # Admission Webhook Configuration
 admissionWebhook:
   enabled: true
   name: admission-webhook
   replicaCount: 2
-  
+  # IAM-WU-10 (CIS 5.1.5/5.1.6): SA tokens are off by default on the SA; the webhook
+  # opts back in at pod level because the controller-runtime client + leader election
+  # need an apiserver token. Set false only if the pod no longer talks to the apiserver.
+  automountServiceAccountToken: true
+
   image:
     registry: docker.io
     repository: kube-policies/admission-webhook
     tag: "1.0.0"
+    # CFG-WU-10 (CM-2/SI-7): set digest to pin the image immutably
+    # (repository@sha256:...). When set, the mutable tag above is dropped.
+    # RECOMMENDED for production. Bare hash or sha256:-prefixed both accepted.
+    digest: ""
     pullPolicy: IfNotPresent
-  
+
   service:
     type: ClusterIP
     port: 8443
     targetPort: 8443
     annotations: {}
-  
+
   resources:
     limits:
       cpu: 500m
@@ -35,13 +182,19 @@ admissionWebhook:
     requests:
       cpu: 100m
       memory: 128Mi
-  
+
   # Pod Security Context
   podSecurityContext:
     runAsNonRoot: true
     runAsUser: 65534
+    runAsGroup: 65534
     fsGroup: 65534
-  
+    # CFG-WU-01/CFG-WU-21 (CIS 5.2.6/5.7.3): RuntimeDefault syscall filter at the
+    # pod level. Operators may override to type: Localhost + localhostProfile:
+    # <path> for higher-assurance deployments; the default is RuntimeDefault.
+    seccompProfile:
+      type: RuntimeDefault
+
   # Container Security Context
   securityContext:
     allowPrivilegeEscalation: false
@@ -51,38 +204,151 @@ admissionWebhook:
     readOnlyRootFilesystem: true
     runAsNonRoot: true
     runAsUser: 65534
-  
+    runAsGroup: 65534
+    # CFG-WU-01/CFG-WU-21: RuntimeDefault at the container level (CIS 5.2.6).
+    seccompProfile:
+      type: RuntimeDefault
+
   # Node selector
   nodeSelector: {}
-  
+
   # Tolerations
   tolerations: []
-  
-  # Affinity
+
+  # Affinity. RES-WU-04: when EMPTY ({}) the chart renders a default SOFT pod
+  # anti-affinity (one replica per node, kubernetes.io/hostname). Set a value to
+  # fully override the default (e.g. a required anti-affinity for hard HA).
   affinity: {}
-  
-  # Pod annotations
+
+  # Topology spread (RES-WU-04). When EMPTY ([]) the chart renders default
+  # constraints spreading replicas across zones + nodes (maxSkew=1,
+  # whenUnsatisfiable=ScheduleAnyway). Set a non-empty list to override — e.g.
+  # whenUnsatisfiable: DoNotSchedule for hard multi-node placement.
+  topologySpreadConstraints: []
+
+  # RES-WU-07 (CP-10/SC-5): graceful drain on rollout/scale-down so the fail-closed
+  # webhook never denies admissions attributable to a terminating pod.
+  terminationGracePeriodSeconds: 30
+  # preStopDrainSeconds keeps the pod serving after SIGTERM: it sets the binary's
+  # --shutdown-drain-delay (works on ALL k8s incl. the distroless image, no shell)
+  # AND renders a native lifecycle `sleep` preStop ONLY on k8s >= 1.29 (gated on
+  # .Capabilities.KubeVersion; k8s < 1.29 rejects an empty preStop handler, so the
+  # chart omits it there and relies on --shutdown-drain-delay). 0 disables both.
+  # Keep <= terminationGracePeriodSeconds.
+  preStopDrainSeconds: 5
+  # RES-WU-05 (CP-10): startupProbe bounds cold start (OPA bundle compile) so a
+  # slow start cannot trip livenessProbe. Max startup = periodSeconds*failureThreshold.
+  startupProbe:
+    enabled: true
+    periodSeconds: 5
+    failureThreshold: 30
+    timeoutSeconds: 3
+
+  # RES-WU-01 (CP-10/SC-5/CP-2): PodDisruptionBudget for the webhook. With the
+  # default replicaCount: 2, minAvailable: 1 lets a voluntary disruption (node
+  # drain) evict at most one replica at a time, keeping the gatekeeper serving.
+  # Set maxUnavailable instead of minAvailable for percentage-based budgets on
+  # larger replica counts (set one, leave the other null).
+  pdb:
+    enabled: true
+    minAvailable: 1
+    maxUnavailable: null
+
+  # RES-WU-18 (CP-10/SC-5/CP-2): HorizontalPodAutoscaler for the webhook.
+  # Disabled by default (operators choose whether to autoscale the admission
+  # path). minReplicas must be >= 2 to preserve availability; composes with the
+  # PDB above and the resource requests below.
+  hpa:
+    enabled: false
+    minReplicas: 2
+    maxReplicas: 6
+    targetCPUUtilizationPercentage: 80
+    # Optional memory target; null disables the memory metric.
+    targetMemoryUtilizationPercentage: null
+    # Optional scaleDown/scaleUp behavior passed verbatim to spec.behavior.
+    behavior: {}
+
+  # Pod annotations. Scrape the plain-HTTP metrics port (9090); :8443 is the
+  # TLS admission listener and does not serve /metrics.
   podAnnotations:
     prometheus.io/scrape: "true"
-    prometheus.io/port: "8443"
+    prometheus.io/port: "9090"
     prometheus.io/path: "/metrics"
-  
-  # Webhook configuration
+
+  # Webhook configuration (RES-WU-09: the chart is the single source of truth for
+  # both the Validating and Mutating webhook configurations).
   webhook:
+    # Validating webhook fails CLOSED (Fail) to mirror the runtime fail-closed
+    # default — a Policy violation (or an unreachable webhook) blocks admission.
     failurePolicy: Fail
     admissionReviewVersions: ["v1", "v1beta1"]
     timeoutSeconds: 10
     namespaceSelector: {}
     objectSelector: {}
-  
+    # Namespaces excluded from BOTH webhooks (the release namespace is always
+    # appended so the webhook never gates its own control plane → deadlock).
+    excludedNamespaces:
+      - kube-system
+      - kube-public
+      - kube-node-lease
+      - local-path-storage
+    # Validating webhook rules. DEFAULT = Pods, matching the kind the bundled
+    # default policies evaluate. Each kind added here under failurePolicy=Fail
+    # widens the fail-closed blast radius (the webhook is then on the write path
+    # for that kind), so extend deliberately when you load CRD Policies for other
+    # kinds. This is the full rule list rendered into the ValidatingWebhookConfiguration.
+    rules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["pods"]
+        scope: "Namespaced"
+    # Mutating webhook (RES-WU-09). failurePolicy defaults to Ignore: a transient
+    # mutation error must NOT block admission (the fail-closed guarantee is the
+    # validating webhook above). reinvocationPolicy re-runs mutate if a later
+    # webhook in the chain changes the object. Set enabled=false to omit it.
+    mutating:
+      enabled: true
+      failurePolicy: Ignore
+      reinvocationPolicy: IfNeeded
+      timeoutSeconds: 10
+      rules:
+        - apiGroups: [""]
+          apiVersions: ["v1"]
+          operations: ["CREATE", "UPDATE"]
+          resources: ["pods"]
+          scope: "Namespaced"
+
   # TLS configuration
   tls:
-    # Auto-generate certificates
+    # Auto-generate certificates.
+    # NOTE: the autoGenerate path uses Helm/sprig genCA/genSignedCert, which
+    # emit a FIXED RSA-2048 / SHA-256 key pair and is DEMO-ONLY (CRY-WU-11).
+    # Production must use cert-manager (certManager.enabled=true) or supply an
+    # approved-strength cert via the inline caCert/cert/key fields.
     autoGenerate: true
     # Custom certificate (if autoGenerate is false)
     caCert: ""
     cert: ""
     key: ""
+    # clientCA is the PEM bundle of the CA that signs the kube-apiserver's
+    # webhook client certificate. When set, mutual TLS is ENFORCED on the
+    # webhook listener (RequireAndVerifyClientCert) via --client-ca-path
+    # (CRY-WU-04). This is the apiserver client-cert CA — distinct from the
+    # serving-cert CA above — and is cluster-specific / operator-supplied.
+    # Empty (default) leaves the webhook server-auth-only (permissive) so the
+    # kind/dev demo works without apiserver client certs.
+    clientCA: ""
+    # requireClientCert toggles apiserver mTLS enforcement on the webhook
+    # listener (IAM-WU-06). The BINARY defaults this true (fail closed); this
+    # chart value defaults it FALSE so the dev/turnkey install (kind / ct / demo
+    # clusters, which do not supply an apiserver client cert) runs WITHOUT
+    # apiserver-client-cert verification — a tracked, honest gap. PRODUCTION MUST
+    # set this true AND provide clientCA above (see values-production.yaml); the
+    # render then fails closed unless clientCA is supplied. When true, the chart
+    # passes --require-client-cert=true and the webhook requires + verifies the
+    # apiserver client certificate.
+    requireClientCert: false
 
   # Set to true to skip loading bundled default policies at startup.
   # Useful in e2e / integration test environments where test-authored
@@ -93,20 +359,31 @@ admissionWebhook:
 policyManager:
   enabled: true
   name: policy-manager
-  replicaCount: 1
-  
+  # RES-WU-03 (CP-2/CP-10): default to 2 for HA. The reconcilers run leaderless
+  # (every replica reconciles into its own in-memory registry), so a kubectl-applied
+  # Policy is visible from both replicas and killing the lease-holder does not stall
+  # reconciliation. No ReadWriteOnce PVC blocks scaling — persistence defaults off
+  # (RES-WU-08); the CRDs in etcd are the source of truth, rebuilt on restart.
+  replicaCount: 2
+  # IAM-WU-10 (CIS 5.1.5/5.1.6): SA tokens are off by default on the SA; the
+  # policy-manager opts back in at pod level because the controller-runtime client +
+  # leader election need an apiserver token.
+  automountServiceAccountToken: true
+
   image:
     registry: docker.io
     repository: kube-policies/policy-manager
     tag: "1.0.0"
+    # CFG-WU-10: set digest to pin immutably (repository@sha256:...); drops tag.
+    digest: ""
     pullPolicy: IfNotPresent
-  
+
   service:
     type: ClusterIP
     port: 8080
     targetPort: 8080
     annotations: {}
-  
+
   resources:
     limits:
       cpu: 500m
@@ -114,13 +391,19 @@ policyManager:
     requests:
       cpu: 100m
       memory: 128Mi
-  
+
   # Pod Security Context
   podSecurityContext:
     runAsNonRoot: true
     runAsUser: 65534
+    runAsGroup: 65534
     fsGroup: 65534
-  
+    # CFG-WU-01/CFG-WU-21 (CIS 5.2.6/5.7.3): RuntimeDefault syscall filter at the
+    # pod level. Operators may override to type: Localhost + localhostProfile:
+    # <path> for higher-assurance deployments; the default is RuntimeDefault.
+    seccompProfile:
+      type: RuntimeDefault
+
   # Container Security Context
   securityContext:
     allowPrivilegeEscalation: false
@@ -130,23 +413,209 @@ policyManager:
     readOnlyRootFilesystem: true
     runAsNonRoot: true
     runAsUser: 65534
-  
+    runAsGroup: 65534
+    # CFG-WU-01/CFG-WU-21: RuntimeDefault at the container level (CIS 5.2.6).
+    seccompProfile:
+      type: RuntimeDefault
+
   # Node selector
   nodeSelector: {}
-  
+
   # Tolerations
   tolerations: []
-  
-  # Affinity
+
+  # Affinity. RES-WU-04: when EMPTY ({}) the chart renders a default SOFT pod
+  # anti-affinity (one replica per node, kubernetes.io/hostname). Set a value to
+  # fully override the default.
   affinity: {}
-  
-  # Pod annotations
+
+  # Topology spread (RES-WU-04). When EMPTY ([]) the chart renders default
+  # constraints spreading replicas across zones + nodes (maxSkew=1,
+  # whenUnsatisfiable=ScheduleAnyway). Set a non-empty list to override.
+  topologySpreadConstraints: []
+
+  # RES-WU-07 (CP-10): graceful drain on rollout/scale-down.
+  terminationGracePeriodSeconds: 30
+  # preStopDrainSeconds sets --shutdown-drain-delay (all k8s) AND renders a native
+  # sleep preStop (k8s >= 1.29). 0 disables both. Keep <= terminationGracePeriodSeconds.
+  preStopDrainSeconds: 5
+  # RES-WU-05 (CP-10): startupProbe bounds cold start (CRD cache sync, lease).
+  startupProbe:
+    enabled: true
+    periodSeconds: 5
+    failureThreshold: 30
+    timeoutSeconds: 3
+
+  # RES-WU-02 (CP-10/SC-5): PodDisruptionBudget for the policy-manager. Only
+  # meaningful with replicaCount > 1 (the HA default is 2, RES-WU-03); at
+  # replicaCount: 1 a minAvailable: 1 PDB blocks voluntary node drains, so reduce
+  # replicas or relax the PDB in single-replica deployments.
+  pdb:
+    enabled: true
+    minAvailable: 1
+    maxUnavailable: null
+
+  # Pod annotations. Scrape the plain-HTTP metrics port (9091); :8080 is the
+  # TLS 1.3 API listener (CRY-WU-05) and does not serve /metrics.
   podAnnotations:
     prometheus.io/scrape: "true"
-    prometheus.io/port: "8080"
+    prometheus.io/port: "9091"
     prometheus.io/path: "/metrics"
 
+  # TLS configuration for the :8080 API (CRY-WU-05). The API serves TLS 1.3;
+  # the internal bearer token never crosses it in plaintext. When
+  # certManager.enabled=true the cert is issued by cert-manager (ECDSA P-256);
+  # otherwise the chart provisions it.
+  # NOTE: the autoGenerate path uses sprig genCA/genSignedCert (fixed RSA-2048 /
+  # SHA-256) and is DEMO-ONLY (CRY-WU-11); production uses cert-manager or inline
+  # caCert/cert/key.
+  tls:
+    autoGenerate: true
+    caCert: ""
+    cert: ""
+    key: ""
+    # Mutual TLS on the :8080 API (IAM-WU-03). Optional; default off. When
+    # enabled the policy-manager REQUIRES + VERIFIES a client certificate from
+    # the admission-webhook and dashboard (defense-in-depth on top of the
+    # OIDC/bearer authN layers), and cert-manager issues client certs for them.
+    # REQUIRES certManager.enabled=true — demo self-signed certs are each signed
+    # by their own CA and cannot share a client-CA trust chain, so the chart
+    # fails the render when mtls.enabled is set without cert-manager.
+    mtls:
+      enabled: false
+
+  # Inter-service auth for the webhook -> policy-manager decisions channel
+  # (/api/v1/decisions/internal, IAM-WU-11). This is DISTINCT from the management
+  # API auth (auth: block below) and from mTLS (tls.mtls above).
+  internalAuth:
+    # tokenreview (default, secure-by-default): the webhook mounts an
+    # audience-bound, short-TTL projected ServiceAccount token and presents it;
+    # the policy-manager validates it via the Kubernetes TokenReview API and
+    # rejects wrong-audience/expired tokens. Works on any real cluster (incl.
+    # kind). No shared secret is rendered in this mode.
+    # static: the documented escape hatch for non-cluster/demo deployments where
+    # TokenReview is unavailable — falls back to the shared internalToken below.
+    mode: tokenreview
+    # Audience the projected token is bound to and the policy-manager expects.
+    # Dedicated to this channel (NOT the OIDC audience). Must be non-empty when
+    # mode=tokenreview, or the chart fails the render.
+    audience: "policy-manager"
+    # TTL (seconds) of the projected token the kubelet mints for the webhook.
+    # Kept <= 1h; the kubelet rotates it well before expiry. tokenreview mode only.
+    expirationSeconds: 3600
+
+# Management API authentication & authorization (P3 Increment 1).
+# Controls the policy-manager management API (:8080). These keys are rendered
+# into security.authentication / security.rbac in the shared ConfigMap and
+# unmarshal into the runtime SecurityConfig.
+#
+# DEV DEFAULT IS UNAUTHENTICATED: with auth.enabled=false the management API
+# accepts requests WITHOUT an OIDC bearer token. This is a tracked gap suitable
+# only for kind / ct / demo clusters. PRODUCTION MUST set auth.enabled=true
+# (see values-production.yaml); when enabled, the chart REFUSES TO RENDER unless
+# auth.issuer, auth.jwksUrl, and a non-empty auth.audience are supplied
+# (fail-closed boundary, mirrors the metrics.tls / webhook-TLS guards).
+auth:
+  # When false, the management API is UNAUTHENTICATED (dev only; tracked gap).
+  # When true, OIDC bearer-token auth is enforced and issuer/jwksUrl/audience
+  # become REQUIRED (the render fails otherwise).
+  enabled: false
+  # OIDC issuer URL (e.g. https://oidc.example.com). REQUIRED when enabled.
+  issuer: ""
+  # OIDC JWKS endpoint used to fetch token-signing keys. REQUIRED when enabled.
+  jwksUrl: ""
+  # Accepted token audiences. At least one entry REQUIRED when enabled.
+  audience: []
+  # JWT claim carrying the username. Optional; runtime defaults to "sub".
+  usernameClaim: "sub"
+  # JWT claim carrying the user's groups (used for RBAC role bindings).
+  # Optional; runtime defaults to "groups".
+  groupsClaim: "groups"
+  # Role-based access control for the management API.
+  rbac:
+    # Role granted to authenticated users with no matching role binding.
+    # "" => no default role: such users are denied mutations.
+    # One of: "" | viewer | editor | admin.
+    defaultRole: ""
+    # Bind OIDC groups to roles. Each entry maps a role to a list of groups.
+    # Example:
+    #   roleBindings:
+    #     - role: admin
+    #       groups: ["platform-admins"]
+    #     - role: viewer
+    #       groups: ["sre", "auditors"]
+    roleBindings: []
+
 # Policy Configuration
+# Rate-limiting / DoS-protection (NET-WU-14/15, RES-WU-17). Flows into the
+# shared config.yaml ConfigMap as security.ratelimit.* and is consumed by the
+# webhook and policy-manager. Limits are PER-REPLICA (per pod): the effective
+# cluster-wide ceiling is roughly limit * replicaCount. Defaults are tuned to
+# protect the fail-closed admission webhook — on the cluster's critical write
+# path — from a request flood WITHOUT throttling legitimate apiserver admission
+# traffic. The dashboard reads its own DASHBOARD_RATELIMIT_* env (see the
+# dashboard block / deployment) which defaults match these.
+rateLimit:
+  # Master switch. When false the limiter, concurrency cap, and body cap are
+  # all no-ops (pass-through).
+  enabled: true
+  # Sustained token-bucket refill rate (req/s) for the global request limiter.
+  # 0 disables the rate limiter while leaving the other protections active.
+  requestsPerSecond: 50
+  # Token-bucket depth (max instantaneous burst before the per-second rate
+  # applies). 0 disables the rate limiter.
+  burst: 100
+  # Max in-flight requests handled simultaneously; excess get HTTP 429
+  # (non-blocking acquire — never queued). 0 disables the concurrency cap.
+  maxConcurrent: 100
+  # Max request body size in bytes; oversized requests get HTTP 413. 3 MiB
+  # leaves headroom for large AdmissionReviews while rejecting absurd payloads.
+  # 0 disables the body cap.
+  maxBodyBytes: 3145728
+  # Max concurrent SSE stream connections on /decisions/stream (the N+1th gets
+  # 429), capped separately from maxConcurrent since SSE connections are
+  # long-lived. 0 disables the stream cap.
+  maxStreamConnections: 100
+
+# Namespace ResourceQuota (RES-WU-17). OPT-IN (default false): a mis-sized quota
+# can block the chart's own pods from scheduling, so operators enable it
+# explicitly and size it for their topology. When enabled, it caps the aggregate
+# compute and object counts in the release namespace. `hard` is passed verbatim
+# to the ResourceQuota spec; tune it before enabling.
+resourceQuota:
+  enabled: false
+  hard:
+    requests.cpu: "4"
+    requests.memory: 8Gi
+    limits.cpu: "8"
+    limits.memory: 16Gi
+    pods: "50"
+  # Optional scopes / scopeSelector (left empty by default).
+  scopes: []
+  scopeSelector: {}
+
+# Namespace LimitRange (RES-WU-17). OPT-IN (default false): a default request
+# larger than a pod's actual usage can block scheduling, so operators enable it
+# explicitly. When enabled, it applies per-container default requests/limits and
+# min/max bounds so a pod created without resource constraints cannot consume
+# unbounded CPU/memory. `limits` is passed verbatim to the LimitRange spec.
+limitRange:
+  enabled: false
+  limits:
+    - type: Container
+      default:
+        cpu: 500m
+        memory: 512Mi
+      defaultRequest:
+        cpu: 100m
+        memory: 128Mi
+      max:
+        cpu: "2"
+        memory: 2Gi
+      min:
+        cpu: 10m
+        memory: 16Mi
+
 policies:
   # Enable default security policies
   enableDefaults: true
@@ -155,20 +624,144 @@ policies:
 rbac:
   # Create RBAC resources
   create: true
-  
-  # Service account configuration
+
+  # Service account configuration. Each component has its OWN ServiceAccount
+  # (IAM-WU-09 separation of duties): <fullname>-admission-webhook,
+  # <fullname>-policy-manager, and <fullname>-dashboard.
   serviceAccount:
-    # Create service account
+    # Create the webhook + policy-manager ServiceAccounts. When false you MUST
+    # pre-create ServiceAccounts named like the defaults below (or set the
+    # *Name overrides to your pre-created names) — there is no fallback to the
+    # cluster "default" SA, which would defeat least-privilege.
     create: true
-    # Service account name (auto-generated if not specified)
-    name: ""
+    # Optional name overrides for the per-component SAs (default to
+    # <fullname>-admission-webhook / <fullname>-policy-manager when empty).
+    webhookName: ""
+    policyManagerName: ""
     # Service account annotations
     annotations: {}
 
-# Monitoring Configuration
+# Metrics endpoint protection (CRY-WU-08). When enabled, the webhook (:9090)
+# and policy-manager (:9091) /metrics endpoints serve TLS 1.3 and require a
+# bearer token (the shared internal token); /healthz + /readyz stay open for
+# probes. Default OFF so plain-HTTP scraping/probing works on kind/ct/demo; the
+# production overlay turns it on. Enabling it requires the Prometheus scrape
+# config to use https + ca_file + bearer_token_file (see monitoring/).
+metrics:
+  tls:
+    enabled: false
+
+# Monitoring Configuration.
+# NOTE: monitoring.enabled is currently inert in the chart — the over-privileged
+# monitoring ClusterRole it used to gate (cluster-wide nodes/pods/services read
+# bound to the app SA) was removed as dead privilege (IAM-WU-08). A real
+# Prometheus ships its own RBAC (see deployments/kubernetes/monitoring/). The
+# real monitoring integration is the PrometheusRule + ServiceMonitor below.
 monitoring:
   # Enable monitoring stack
   enabled: true
+
+  # PrometheusRule CRD (IRM-WU-14, NIST SI-4/CA-7). When enabled, the chart
+  # renders ONE PrometheusRule containing every alert group, sourced from the
+  # single-source rule files under charts/kube-policies/files/alerts/*.yaml (the
+  # same files promtool tests in CI). Requires the Prometheus Operator
+  # (monitoring.coreos.com CRDs) to be installed. Default OFF so the chart
+  # renders cleanly on clusters without the operator.
+  prometheusRule:
+    enabled: false
+    # Extra labels so a kube-prometheus-stack ruleSelector picks the rule up
+    # (commonly `release: <prometheus release name>`).
+    labels: {}
+    # SLO / error-budget burn-rate rules (IRM-WU-18). Rendered as a SEPARATE
+    # PrometheusRule (templates/slo-prometheusrule.yaml) from
+    # files/slo/*.yaml so SLO alerting can be toggled independently.
+    slo:
+      enabled: true
+
+  # ServiceMonitor CRDs (IRM-WU-14) for the webhook (:9090) and policy-manager
+  # (:9091) `metrics` ports. Requires the Prometheus Operator. Default OFF.
+  serviceMonitor:
+    enabled: false
+    interval: "30s"
+    scrapeTimeout: "10s"
+    # Extra labels for the operator's serviceMonitorSelector.
+    labels: {}
+    # honorLabels for the scraped endpoints.
+    honorLabels: false
+    # TLS scrape settings, used only when metrics.tls.enabled=true. insecureSkipVerify
+    # defaults true for the demo path (the metrics cert is signed by the chart's
+    # internal CA); for production set caFile + serverName and flip
+    # insecureSkipVerify to false so transit integrity is actually verified (SC-8).
+    tlsConfig:
+      insecureSkipVerify: true
+      serverName: ""
+      caFile: ""
+
+  # Alertmanager integration (IRM-WU-16/22). The chart renders an
+  # Alertmanager configuration (severity-routed, secret-backed receivers,
+  # inhibition, heartbeat) and optionally an HA StatefulSet with persistent
+  # storage. Default OFF — most operators run a cluster-wide Alertmanager and
+  # only need the routing config. See docs/security/on-call-escalation.md.
+  alertmanager:
+    # Render the Alertmanager config Secret (templates/alertmanager-config.yaml).
+    config:
+      enabled: false
+      # Name of an existing Secret holding receiver credentials (PagerDuty
+      # routing key, Slack/webhook URLs, SMTP password). Keys referenced below.
+      # NEVER inline these in values; reference the Secret.
+      existingSecret: ""
+      # Receiver toggles + the Secret keys their credentials come from.
+      receivers:
+        pagerduty:
+          enabled: false
+          # Secret key holding the PagerDuty routing/service key.
+          routingKeySecretKey: "pagerduty-routing-key"
+        slack:
+          enabled: false
+          # Secret key holding the Slack incoming-webhook URL.
+          apiUrlSecretKey: "slack-api-url"
+          channel: "#kube-policies-alerts"
+        email:
+          enabled: false
+          to: ""
+          from: "alertmanager@kube-policies.local"
+          smarthost: ""
+          # Secret key holding the SMTP auth password.
+          authPasswordSecretKey: "smtp-password"
+      # Dead-man's-switch heartbeat receiver (consumes the Watchdog alert).
+      heartbeat:
+        enabled: false
+        # Secret key holding the heartbeat push URL (e.g. Dead Man's Snitch).
+        urlSecretKey: "heartbeat-url"
+    # HA Alertmanager StatefulSet with a PVC (IRM-WU-22). Most operators leave
+    # this OFF and point the chart's routing config at their existing HA
+    # Alertmanager.
+    ha:
+      enabled: false
+      replicas: 2
+      image:
+        repository: quay.io/prometheus/alertmanager
+        tag: "v0.27.0"
+        pullPolicy: IfNotPresent
+      persistence:
+        size: 1Gi
+        storageClass: ""
+      resources:
+        requests:
+          cpu: 25m
+          memory: 64Mi
+        limits:
+          cpu: 100m
+          memory: 128Mi
+
+# Runtime detection (IRM-WU-23, NIST SI-4). Opt-in: when enabled, the chart
+# ships the kube-policies Falco ruleset (charts/kube-policies/files/falco/) as a
+# ConfigMap an existing Falco DaemonSet can load. Falco itself is deployed
+# separately; findings forward to the SIEM via falcosidekick or the audit
+# forwarder. See docs/security/runtime-detection.md. The webhook ingress/egress
+# is already restricted by the NetworkPolicy objects (networkPolicy.enabled).
+runtimeDetection:
+  enabled: false
 
 # Audit Configuration
 audit:
@@ -176,26 +769,245 @@ audit:
   bufferSize: 1000
   flushInterval: "10s"
   retention: "90d"
-  
+
   # Audit backend configuration
   backend:
     # Backend type: file or stdout. The runtime rejects unsupported backends.
     type: file
-    
+
     # File backend configuration.
     # The path must match the writable mount in
     # templates/admission-webhook-deployment.yaml (emptyDir at
     # /var/log/kube-policies). The audit logger appends `/audit.log`.
     file:
       path: "/var/log/kube-policies"
-    
-# Persistence Configuration
+
+  # Tamper-evidence for the audit log (AUD-WU-04/05, NIST AU-9). When enabled,
+  # each record carries a sequence + HMAC-SHA256 hash chain keyed by a mounted
+  # Secret; audit.VerifyChain detects any mutation/reorder/deletion. Default off;
+  # the production overlay enables it.
+  integrity:
+    enabled: false
+    # In-pod path of the mounted HMAC key.
+    keyPath: "/etc/audit-integrity/key"
+    # Operator-supplied HMAC key (recommended). If empty and enabled, the chart
+    # generates a demo key (template-time RNG — DEMO-ONLY, like internalToken);
+    # production should supply a CSPRNG-generated key or an external secret.
+    key: ""
+
+  # Durable audit storage (AUD-WU-08, NIST AU-9/AU-11).
+  # When enabled, a dedicated PVC named <fullname>-audit is created and mounted
+  # at the audit log directory instead of the default emptyDir.
+  #
+  # IMPORTANT — RWO + replicaCount > 1 WARNING:
+  #   The admission-webhook runs replicaCount: 2 by default. A single
+  #   ReadWriteOnce (RWO) PVC can only be mounted by pods on ONE node at a
+  #   time. If the two webhook replicas land on different nodes the second pod
+  #   will fail to schedule (VolumeMount conflict).
+  #
+  #   Scalable durability options:
+  #   1. Use accessMode: ReadWriteMany (RWX) with a shared filesystem
+  #      StorageClass (NFS, EFS, CephFS, etc.) — all replicas can mount
+  #      simultaneously (logs will be interleaved; ensure the forwarder
+  #      deduplicates).
+  #   2. Set admissionWebhook.replicaCount: 1 when RWX is unavailable.
+  #   3. Preferred at scale: enable audit.forwarder (AUD-WU-10) with a
+  #      forward backend (Loki/Elasticsearch/Splunk/syslog). The DaemonSet
+  #      forwarder ships logs off-pod without requiring shared storage.
+  #
+  #   SCOPE: this PVC backs the ADMISSION-WEBHOOK decision audit only. The
+  #   policy-manager mounts its own emptyDir at the audit path (it cannot
+  #   co-mount this RWO PVC), so its management-plane ConfigurationChange audit
+  #   stream stays pod-local-ephemeral; rely on the forwarder/SIEM path for its
+  #   durable retention.
+  persistence:
+    enabled: false
+    storageClass: ""
+    # ReadWriteOnce is the safest default but incompatible with replicaCount > 1
+    # on most StorageClasses. Set ReadWriteMany for multi-replica deployments.
+    accessMode: ReadWriteOnce
+    size: 5Gi
+    annotations: {}
+
+  # Audit log-shipping DaemonSet (AUD-WU-10, NIST AU-6).
+  # When enabled, a Fluent Bit DaemonSet tails the webhook's audit log and
+  # forwards to a configurable destination. Disabled by default.
+  forwarder:
+    enabled: false
+
+    image:
+      repository: fluent/fluent-bit
+      tag: "3.3"
+      pullPolicy: IfNotPresent
+
+    # Destination configuration. Set one backend to active: true.
+    # All backends are disabled by default — set your target before enabling.
+    destination:
+      # Loki (push API)
+      loki:
+        enabled: false
+        host: "loki.monitoring.svc.cluster.local"
+        port: 3100
+        labels: "job=kube-policies-audit"
+      # Elasticsearch / OpenSearch
+      elasticsearch:
+        enabled: false
+        host: "elasticsearch.logging.svc.cluster.local"
+        port: 9200
+        index: "kube-policies-audit"
+        tls: false
+      # Splunk HEC
+      splunk:
+        enabled: false
+        host: "splunk.logging.svc.cluster.local"
+        port: 8088
+        token: ""
+        tls: true
+      # Generic syslog (RFC 5424 over TCP/TLS)
+      syslog:
+        enabled: false
+        host: "syslog.logging.svc.cluster.local"
+        port: 514
+        # tcp | tls — use tls to ship to a SIEM over an encrypted syslog channel.
+        mode: tcp
+      # Generic HTTP/OTLP SIEM endpoint over TLS (IRM-WU-13). The most portable
+      # SIEM target: POSTs each audit record as JSON to https://host:port/uri.
+      # tls=true enables TLS (recommended); caFile points Fluent Bit at the SIEM's
+      # CA bundle when it uses a private PKI. This is the path the SIEM-delivery
+      # integration test (internal/audit/siem_forward_test.go) exercises against a
+      # mock TLS receiver.
+      http:
+        enabled: false
+        host: "siem.logging.svc.cluster.local"
+        port: 443
+        uri: "/"
+        tls: true
+        # In-pod path of a mounted CA bundle for the SIEM's TLS cert (optional).
+        caFile: ""
+
+    resources:
+      requests:
+        cpu: 50m
+        memory: 64Mi
+      limits:
+        cpu: 200m
+        memory: 128Mi
+
+    # Node selector, tolerations, and affinity for the forwarder DaemonSet.
+    nodeSelector: {}
+    tolerations: []
+    affinity: {}
+
+# Persistence Configuration for the policy-manager.
+#
+# RES-WU-08 (CP-2/CP-9/CP-10): DEFAULT DISABLED. The policy-manager keeps all
+# state in memory (internal/policymanager) with the Policy/PolicyException CRDs in
+# etcd as the source of truth, rebuilt on every restart — the mounted PVC at
+# /var/lib/kube-policies is never written. A ReadWriteOnce PVC mounted by a
+# multi-replica Deployment (policyManager.replicaCount: 2, RES-WU-03) blocks
+# scheduling of the second replica, so persistence is off by default and HA works
+# out of the box. See docs/state-model.md.
+#
+# If you enable it (e.g. for a future on-disk cache), EITHER keep
+# policyManager.replicaCount: 1 OR set accessMode: ReadWriteMany with a shared
+# StorageClass — the render fails closed (see _helpers.tpl) if you request a
+# ReadWriteOnce PVC alongside replicaCount > 1.
 persistence:
-  enabled: true
+  enabled: false
   storageClass: ""
   accessMode: ReadWriteOnce
   size: 10Gi
   annotations: {}
+
+# PriorityClass for the kube-policies control-plane components (RES-WU-20,
+# CP-10/CP-2). OPT-IN (default false): a high PriorityClass schedules and
+# preserves the fail-closed gatekeeper (admission-webhook + policy-manager) ahead
+# of lower-priority workloads under node pressure, reducing the chance it is
+# evicted first. When enabled the chart renders a PriorityClass (unless
+# useExisting) and sets priorityClassName on the webhook + policy-manager pods.
+priorityClass:
+  enabled: false
+  # Name of the PriorityClass. Empty defaults to <fullname>-control-plane.
+  name: ""
+  # When true the chart does NOT render the PriorityClass object and only
+  # references the (pre-existing) name above — use when a platform team owns
+  # cluster-scoped PriorityClasses.
+  useExisting: false
+  # Priority value. Kept BELOW system-cluster-critical (2000000000) and
+  # system-node-critical (2000001000) so kube-policies never outranks core
+  # control-plane components, while still beating ordinary workloads.
+  value: 1000000000
+  # MUST stay false — true would make this the default PriorityClass for EVERY
+  # pod in the cluster that does not set one.
+  globalDefault: false
+  description: "Priority for kube-policies control-plane components (admission webhook + policy-manager)."
+
+# Scheduled CRD backup (RES-WU-13, CP-9/CP-9(1)/CP-6). DEFAULT DISABLED. When
+# enabled, a CronJob periodically exports all Policy + PolicyException CRs (an
+# init kubectl container) and uploads them to an off-cluster S3-compatible object
+# store (an aws-cli container) using a least-privilege, read-only ServiceAccount.
+# The CronJob's status.lastSuccessfulTime is the backup-staleness signal (the
+# RES-WU-11 alert in P9 consumes kube_cronjob_status_last_successful_time).
+# Retention is enforced by the bucket lifecycle policy (recommended). A
+# Velero-based alternative is documented in docs/backup-restore.md. The
+# backup→delete→restore equivalence is proven by test/e2e/backup_restore_test.go.
+backup:
+  enabled: false
+  # Cron schedule (UTC). Default every 6 hours.
+  schedule: "0 */6 * * *"
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  # Hard cap on a single backup run.
+  activeDeadlineSeconds: 3600
+  # Documents the retention enforced by the bucket lifecycle policy; the CronJob
+  # itself does not delete objects (least privilege — no S3 delete needed).
+  retentionDays: 30
+  # initContainer image that runs `kubectl get -o yaml` (cluster export).
+  kubectl:
+    image:
+      registry: docker.io
+      repository: bitnami/kubectl
+      tag: "1.30"
+      digest: ""
+      pullPolicy: IfNotPresent
+  # initContainer image that strips server-populated fields + status from the raw
+  # export so the uploaded artifact is RESTORE-READY (re-appliable with kubectl
+  # apply). Pin a digest in production.
+  yq:
+    image:
+      registry: docker.io
+      repository: mikefarah/yq
+      tag: "4.44.3"
+      digest: ""
+      pullPolicy: IfNotPresent
+  # Uploader container + S3-compatible destination.
+  s3:
+    image:
+      registry: docker.io
+      repository: amazon/aws-cli
+      tag: "2.15.0"
+      digest: ""
+      pullPolicy: IfNotPresent
+    # REQUIRED when backup.enabled (the render fails otherwise).
+    bucket: ""
+    region: "us-east-1"
+    prefix: "kube-policies"
+    # S3-compatible endpoint (MinIO/Ceph/etc.); empty targets AWS S3.
+    endpoint: ""
+    # REQUIRED when backup.enabled: an existing Secret with keys
+    # AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY for the uploader. Never embedded
+    # in the chart.
+    existingSecret: ""
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 200m
+      memory: 128Mi
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
 
 # Configuration for external dependencies
 prometheus:
@@ -253,8 +1065,60 @@ dashboard:
   # Off by default; set enabled=true to deploy the read-only Svelte SPA + Go BFF.
   enabled: false
 
-  # Two-flag write gate: ALLOW_WRITES env is only "true" when this AND enabled are both true.
+  # IAM-WU-10 (CIS 5.1.5/5.1.6): the dashboard never calls the apiserver at runtime,
+  # so no SA token is mounted. Keep false; the webhook/manager need the token, the
+  # dashboard does not.
+  automountServiceAccountToken: false
+
+  # Two-flag write gate: ALLOW_WRITES env is only "true" when this AND enabled are
+  # both true. With user auth enabled (auth.mode below), ALLOW_WRITES is a coarse
+  # cluster-wide kill-switch / defense-in-depth, NOT per-user authorization —
+  # per-user authZ is enforced upstream by the policy-manager (IAM-WU-05).
   allowWrites: false
+
+  # Rate-limiting / DoS-protection for the dashboard BFF (NET-WU-15, RES-WU-17).
+  # The dashboard is env-configured (it does not read the shared config.yaml), so
+  # these map to DASHBOARD_RATELIMIT_* / DASHBOARD_MAX_SSE_CONNECTIONS env on the
+  # dashboard container. Defaults match the shared rateLimit.* block above.
+  rateLimit:
+    enabled: true
+    requestsPerSecond: 50
+    burst: 100
+    maxConcurrent: 100
+    maxBodyBytes: 3145728
+  # Max concurrent browser SSE connections on GET /api/decisions/stream (the
+  # N+1th gets 429), separate from the general request concurrency cap since SSE
+  # connections are long-lived.
+  maxSSEConnections: 100
+
+  # User authentication for the dashboard BFF (IAM-WU-04 / NET-WU-18 / IAM-WU-16).
+  auth:
+    # disabled (default; unauthenticated dev posture) | oidc | forward-auth.
+    mode: disabled
+    oidc:
+      # Required when mode=oidc (the chart fails the render otherwise).
+      issuer: ""
+      clientID: ""
+      redirectURL: "" # e.g. https://dashboard.example.com/auth/callback
+      scopes: "openid profile email groups"
+      usernameClaim: sub
+      groupsClaim: groups
+      # Sensitive material (the OIDC client secret + a 32-byte AES-256 session key,
+      # base64) is read from an existing Secret with keys: client-secret,
+      # session-key, and optionally session-key-previous (zero-downtime rotation).
+      existingSecret: ""
+    session:
+      idleTimeout: 15m # FedRAMP AC-11/AC-12 inactivity timeout
+      absoluteTimeout: 12h # hard maximum session lifetime
+    # forward-auth trusts identity headers from an upstream identity-aware proxy.
+    # SECURITY: only safe when the dashboard is NOT directly reachable and the
+    # proxy strips client-supplied copies of these headers (enforce with a
+    # NetworkPolicy so only the proxy can reach the dashboard).
+    forwardAuth:
+      userHeader: X-Forwarded-User
+      emailHeader: X-Forwarded-Email
+      groupsHeader: X-Forwarded-Groups
+      tokenHeader: X-Forwarded-Access-Token
 
   replicaCount: 1
 
@@ -263,6 +1127,8 @@ dashboard:
     repository: ghcr.io/Jibbscript/dashboard
     # Defaults to .Chart.AppVersion when empty.
     tag: ""
+    # CFG-WU-10: set digest to pin immutably (repository@sha256:...); drops tag.
+    digest: ""
     pullPolicy: IfNotPresent
 
   service:
@@ -271,13 +1137,48 @@ dashboard:
   ingress:
     enabled: false
     className: nginx
+    # Operator-supplied annotations. These are MERGED with (and override) the
+    # generated DoS/TLS annotations below, so an operator can tune or remove any
+    # default by re-specifying the same key here.
     annotations: {}
     hosts:
       - host: kube-policies-dashboard.local
         paths:
           - path: /
             pathType: Prefix
+    # TLS for the dashboard Ingress. Populate with a host + the name of a
+    # kubernetes.io/tls Secret holding the cert/key for that host, e.g.:
+    #   tls:
+    #     - hosts:
+    #         - kube-policies-dashboard.example.com
+    #       secretName: kube-policies-dashboard-tls
+    # Provision the Secret out-of-band (cert-manager Certificate, or
+    # `kubectl create secret tls`). force-ssl-redirect below makes the
+    # browser-facing hop HTTPS regardless, but without a TLS Secret nginx serves
+    # its default certificate.
     tls: []
+
+    # DoS protection on the dashboard Ingress (NET-WU-16). Renders nginx rate-limit
+    # annotations plus forced TLS redirect. Defaults are conservative for a low-
+    # traffic admin dashboard; raise the limits if legitimate clients are throttled.
+    # These annotations only take effect with the nginx ingress controller.
+    dosProtection:
+      enabled: true
+      # nginx.ingress.kubernetes.io/limit-rps — requests/second per client IP.
+      limitRps: 20
+      # nginx.ingress.kubernetes.io/limit-connections — concurrent connections per IP.
+      limitConnections: 10
+
+    # Source-range allowlist (NET-WU-17). When non-empty, renders
+    # nginx.ingress.kubernetes.io/whitelist-source-range so ONLY these client CIDRs
+    # may reach the dashboard via the Ingress. Secure-by-default EMPTY means NO
+    # allowlist annotation is rendered (nginx then permits all sources) — set this
+    # to your admin/VPN CIDR(s) to restrict access. WARNING: leaving this empty
+    # exposes the dashboard Ingress to every client the ingress controller accepts;
+    # rely on dashboard.auth and/or networkPolicy.dashboard.ingressFrom in that case.
+    sourceRanges: []
+    #   - 10.0.0.0/8
+    #   - 192.168.0.0/16
 
   resources:
     requests:
@@ -287,19 +1188,127 @@ dashboard:
       cpu: 200m
       memory: 256Mi
 
+  # CFG-WU-02/03/21: dashboard pod + container securityContext are values-driven
+  # (mirroring admissionWebhook/policyManager) so they are operator-overridable
+  # and lockable by the restricted-PSS gate + helm-unittest. The dashboard image
+  # is distroless-nonroot (UID/GID 65532), distinct from webhook/PM (65534).
+  # seccompProfile defaults to RuntimeDefault; override to type: Localhost +
+  # localhostProfile: <path> for higher assurance.
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 65532
+    runAsGroup: 65532
+    fsGroup: 65532
+    seccompProfile:
+      type: RuntimeDefault
+  securityContext:
+    allowPrivilegeEscalation: false
+    capabilities:
+      drop:
+      - ALL
+    readOnlyRootFilesystem: true
+    runAsNonRoot: true
+    runAsUser: 65532
+    runAsGroup: 65532
+    seccompProfile:
+      type: RuntimeDefault
+
   podAnnotations: {}
   nodeSelector: {}
   tolerations: []
   affinity: {}
+
+  # RES-WU-07 (CP-10): graceful drain. The dashboard is a read-only BFF on a
+  # scratch image (no in-binary drain flag), so preStopDrainSeconds renders ONLY
+  # the native sleep preStop (k8s >= 1.29); on older clusters its own graceful
+  # HTTP shutdown drains within terminationGracePeriodSeconds. 0 disables the hook.
+  terminationGracePeriodSeconds: 30
+  preStopDrainSeconds: 5
+  # RES-WU-05 (CP-10): startupProbe bounds dashboard cold start.
+  startupProbe:
+    enabled: true
+    periodSeconds: 5
+    failureThreshold: 30
+    timeoutSeconds: 3
+  # RES-WU-02 (CP-10): PodDisruptionBudget for the dashboard. DEFAULT OFF — the
+  # dashboard defaults to replicaCount: 1, where a minAvailable: 1 PDB would block
+  # voluntary node drains. Raise dashboard.replicaCount and enable this together.
+  pdb:
+    enabled: false
+    minAvailable: 1
+    maxUnavailable: null
 
   # Override the upstream policy-manager SSE URL. Empty = use the
   # in-cluster policy-manager Service via the default rendered into the
   # deployment env.
   streamURL: ""
 
-# Shared bearer secret used by admission-webhook → policy-manager
-# /api/v1/decisions/internal POSTs and as the trust anchor for the
-# /api/v1/decisions/stream SSE fan-out (see svelte-dashboard plan §7).
-# If empty (default), the chart auto-generates a 48-char random token
-# at first install and preserves it across helm upgrades via lookup.
+  # In-pod TLS serving + HSTS for the dashboard (CRY-WU-07). Default OFF: the
+  # common topology terminates TLS at the Ingress (see .ingress.tls), where the
+  # pod sees plaintext. Set enabled=true to terminate TLS inside the pod
+  # (cert provisioned by cert-manager when certManager.enabled, else the demo
+  # self-signed path — which is fixed RSA-2048, DEMO-ONLY per CRY-WU-11).
+  tls:
+    enabled: false
+    autoGenerate: true
+    caCert: ""
+    cert: ""
+    key: ""
+    # HSTS is gated independently: it is correct whenever the browser-facing hop
+    # is HTTPS (typically the Ingress), regardless of in-pod TLS. Leave off if
+    # the Ingress already emits Strict-Transport-Security to avoid a conflicting
+    # max-age.
+    hsts:
+      enabled: false
+      maxAge: 31536000
+      includeSubdomains: true
+
+# Shared bearer secret for the admission-webhook → policy-manager
+# /api/v1/decisions/internal channel.
+#
+# CONSUMED ONLY WHEN policyManager.internalAuth.mode=static (IAM-WU-11).
+# The DEFAULT mode is "tokenreview": the webhook presents an audience-bound,
+# short-TTL projected ServiceAccount token validated via the Kubernetes
+# TokenReview API — this internalToken value and its derived Secret are NOT
+# rendered in that mode and have no effect on cluster security posture.
+#
+# Set policyManager.internalAuth.mode=static ONLY for non-cluster/demo
+# deployments where TokenReview is unavailable. When mode=static and this is
+# empty, the chart auto-generates a 48-char demo token (template-time RNG —
+# NOT a CSPRNG, DEMO-ONLY) at first install and preserves it across helm
+# upgrades via lookup. Production static deployments MUST supply a value
+# generated by a CSPRNG (e.g. openssl rand -base64 48).
 internalToken: ""
+
+# Image signature verification at admission/deploy time (CFG-WU-15 / SUP-WU-07).
+# Controls: NIST SR-4, SR-11, CM-5, CM-14; SLSA L3; NIST SP 800-190 §4.3.
+#
+# When enabled, the chart renders a Sigstore policy-controller ClusterImagePolicy
+# that REQUIRES kube-policies images to carry a keyless cosign signature issued to
+# this project's GitHub Actions release workflow (the identity produced by
+# release.yml's sign-attest-provenance job) before the cluster will run them —
+# closing the loop on the signatures produced at release time.
+#
+# DEFAULT DISABLED, and it is a SOFT prerequisite: the policy is enforced by the
+# Sigstore policy-controller admission webhook, which MUST be installed in the
+# cluster separately (https://docs.sigstore.dev/policy-controller/installation/).
+# Rendering this object without the controller present has no effect. The
+# in-process webhook rules (the bundled, opt-in `image-provenance` policy:
+# allowed-registries + require-image-digest) provide registry/digest enforcement
+# WITHOUT the controller; this block adds the cryptographic-signature layer.
+# See docs/compliance/supply-chain.md and docs/policies/image-signing.md.
+imageVerification:
+  enabled: false
+  # Sigstore keyless trust anchor. These MUST match release.yml's signing job:
+  #   - oidcIssuer:        the GitHub Actions OIDC token issuer.
+  #   - identityRegexp:    SAN (certificate identity) of the release workflow.
+  oidcIssuer: "https://token.actions.githubusercontent.com"
+  identityRegexp: "^https://github.com/Jibbscript/kube-policies/.github/workflows/release.yml@refs/tags/v.*$"
+  # Glob(s) of image references this policy governs. Defaults to this project's
+  # published images so unrelated images in the namespace are not blocked.
+  imagePatterns:
+    - "ghcr.io/jibbscript/kube-policies/**"
+  # Action when a matched image has no valid signature: "warn" (audit) or
+  # "enforce"/"deny" via policy-controller's `mode`. Start in "warn", then flip
+  # to "enforce" once verification is confirmed working in the cluster.
+  mode: "enforce"

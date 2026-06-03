@@ -1,6 +1,7 @@
 package policymanager
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -16,6 +17,13 @@ import (
 
 	"github.com/Jibbscript/kube-policies/internal/policy"
 )
+
+// rpcEvalTimeout bounds a single ad-hoc policy evaluation served by the
+// playground RPCs (/policies/evaluate and /policies/:id/test). These accept
+// caller-supplied Rego/resources, so a slow or looping rule must be canceled
+// rather than tying up a request goroutine indefinitely (eval-DoS). 5s is
+// generous for interactive use while still bounding worst-case work.
+const rpcEvalTimeout = 5 * time.Second
 
 // EvaluateRequest is the body shape for POST /api/v1/policies/evaluate.
 //
@@ -105,6 +113,11 @@ func (m *Manager) EvaluatePolicy(c *gin.Context) {
 		Operation: admissionv1.Create,
 		Kind:      metav1.GroupVersionKind{Group: group, Version: version, Kind: kind},
 		Namespace: namespace,
+		// IAM-WU-14: this UserInfo is the EVALUATED-object actor that OPA sees as
+		// request.userInfo for the synthesized admission request — NOT the API
+		// caller. It is intentionally a fixed playground identity. This RPC
+		// persists nothing, so it emits no ConfigurationChange audit event; the
+		// caller's attribution is irrelevant here.
 		UserInfo: authenticationv1.UserInfo{
 			Username: "playground",
 			Groups:   []string{"system:unauthenticated"},
@@ -129,7 +142,9 @@ func (m *Manager) EvaluatePolicy(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("failed to build evaluator: %v", err)})
 		return
 	}
-	result, err := engine.Evaluate(c.Request.Context(), &policy.EvaluationRequest{
+	evalCtx, cancel := context.WithTimeout(c.Request.Context(), rpcEvalTimeout)
+	defer cancel()
+	result, err := engine.Evaluate(evalCtx, &policy.EvaluationRequest{
 		AdmissionRequest: admReq,
 		Operation:        "evaluate",
 	})

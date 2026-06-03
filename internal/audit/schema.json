@@ -1,0 +1,88 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Jibbscript/kube-policies/internal/audit/schema.json",
+  "title": "kube-policies audit record",
+  "description": "Versioned, privacy-aware audit record (AUD-WU-17, NIST AU-3 / AU-3(1)). schema_version is stamped on every emitted record; bump it on any breaking change to this shape. When audit integrity is enabled each line on disk is a sealed envelope {\"record\": <this object>, \"hmac\": <hex>}; otherwise each line is this object directly.",
+  "type": "object",
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "description": "Audit record schema version (AuditSchemaVersion). Current: 1.0.0."
+    },
+    "timestamp": { "type": "string", "format": "date-time" },
+    "request_received_timestamp": {
+      "type": "string",
+      "format": "date-time",
+      "description": "AU-8: when the controller received the request (UTC)."
+    },
+    "stage_timestamp": {
+      "type": "string",
+      "format": "date-time",
+      "description": "AU-8: when this audit record was emitted (UTC)."
+    },
+    "request_id": { "type": "string" },
+    "correlation_id": {
+      "type": "string",
+      "description": "AU-12(1): correlates all records for one logical request across components."
+    },
+    "event_type": {
+      "type": "string",
+      "description": "Open set (not constrained). Common values emitted today: PolicyDecision, ConfigurationChange, ExceptionExpired, DashboardWriteAttempt, and other LogSystemEvent types.",
+      "examples": ["PolicyDecision", "ConfigurationChange", "ExceptionExpired", "DashboardWriteAttempt"]
+    },
+    "user_info": {
+      "type": "object",
+      "description": "AU-3 who: authenticated principal (Kubernetes authentication.k8s.io UserInfo).",
+      "properties": {
+        "username": { "type": "string" },
+        "uid": { "type": "string" },
+        "groups": { "type": "array", "items": { "type": "string" } },
+        "extra": { "type": "object" }
+      }
+    },
+    "namespace": { "type": "string" },
+    "kind": {
+      "type": "object",
+      "properties": {
+        "group": { "type": "string" },
+        "version": { "type": "string" },
+        "kind": { "type": "string" }
+      }
+    },
+    "name": { "type": "string" },
+    "operation": { "type": "string", "description": "AU-3 what: CREATE/UPDATE/DELETE or a management verb." },
+    "decision": { "type": "string", "description": "AU-3 outcome: allow/deny (admission)." },
+    "reason": { "type": "string" },
+    "message": { "type": "string" },
+    "source_ip": {
+      "type": "string",
+      "description": "AU-3 where/source: the webhook's HTTP peer (apiserver/proxy hop), not necessarily the originating client."
+    },
+    "user_agent": { "type": "string" },
+    "request_uri": { "type": "string" },
+    "apiserver_id": {
+      "type": "string",
+      "description": "AU-3: kube-apiserver identity; correlated from the cluster apiserver audit policy (the AdmissionRequest does not carry it)."
+    },
+    "admission_webhook_config": { "type": "string" },
+    "policy_violations": { "type": "array", "items": { "type": "object" } },
+    "mutations": { "type": "array", "items": { "type": "object" } },
+    "processing_time": { "type": "integer", "description": "Nanoseconds." },
+    "object": {
+      "description": "AU-3(1)/SI-12: the admitted object. Secret data and credential-like keys are REDACTED to [REDACTED] before persistence when audit.redact_objects is enabled (default)."
+    },
+    "old_object": { "description": "Prior object on UPDATE; same redaction policy as object." },
+    "metadata": { "type": "object" },
+    "suppressed_by": { "type": "array", "items": { "type": "object" } },
+    "sequence": {
+      "type": "integer",
+      "description": "AU-9: strictly increasing record sequence in the tamper-evidence chain (present only when audit integrity is enabled)."
+    },
+    "prev_hash": {
+      "type": "string",
+      "description": "AU-9: HMAC of the prior record (present only when audit integrity is enabled)."
+    }
+  },
+  "required": ["timestamp", "event_type", "operation"],
+  "additionalProperties": true
+}

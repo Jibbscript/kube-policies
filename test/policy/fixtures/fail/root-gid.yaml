@@ -1,0 +1,41 @@
+# NEGATIVE fixture for restricted.pss (CFG-WU-12), evaluated per-document.
+#
+# An in-scope control-plane Deployment (policy-manager component) whose
+# container effectively runs with the root GID (runAsGroup: 0 at both the pod
+# and container level). PSS-Restricted "Running as Non-root user/group" forbids
+# GID 0; the runAsGroup rule MUST deny.
+#
+# conftest test --namespace restricted.pss MUST exit non-zero.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: regression-root-gid
+  labels:
+    app.kubernetes.io/name: kube-policies
+    app.kubernetes.io/component: policy-manager
+spec:
+  template:
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        runAsGroup: 0
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: manager
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsGroup: 0
+            capabilities:
+              drop:
+                - ALL
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi

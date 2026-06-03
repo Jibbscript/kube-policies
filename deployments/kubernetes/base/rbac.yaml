@@ -1,3 +1,7 @@
+# This raw-manifest base ships ONLY the admission-webhook identity. The policy-manager
+# is deployed via the Helm chart (charts/kube-policies), which renders its own scoped
+# ServiceAccount + ClusterRole + leader-election Role. Keep this file's RBAC in sync
+# with charts/kube-policies/templates/rbac.yaml for the webhook.
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -6,7 +10,17 @@ metadata:
   labels:
     app: kube-policies-admission-webhook
     component: admission-webhook
+# IAM-WU-10 (CIS 5.1.5/5.1.6): SA tokens are off by default; the webhook Deployment
+# opts the token back in at pod level (it needs an apiserver token for the
+# controller-runtime client + leader election).
+automountServiceAccountToken: false
 ---
+# Least-privilege ClusterRole for the admission-webhook (IAM-WU-08). The reconcilers
+# watch policies/policyexceptions across all namespaces (Namespaced CRDs, cluster-wide
+# watch) and patch their /status; nothing else in the apiserver is read or written at
+# runtime. No core/apps/rbac/networking/admissionregistration grants — the webhook does
+# NOT self-register webhook configs and the engine does not fetch related cluster
+# objects during evaluation (TLS certs are volume-mounted, not API-fetched).
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
@@ -15,60 +29,12 @@ metadata:
     app: kube-policies-admission-webhook
     component: admission-webhook
 rules:
-# Core Kubernetes resources
-- apiGroups: [""]
-  resources:
-  - pods
-  - services
-  - endpoints
-  - persistentvolumeclaims
-  - configmaps
-  - secrets
-  - serviceaccounts
-  - namespaces
-  - nodes
-  verbs: ["get", "list", "watch"]
-
-# Apps resources
-- apiGroups: ["apps"]
-  resources:
-  - deployments
-  - replicasets
-  - daemonsets
-  - statefulsets
-  verbs: ["get", "list", "watch"]
-
-# Extensions resources
-- apiGroups: ["extensions"]
-  resources:
-  - deployments
-  - replicasets
-  - daemonsets
-  - ingresses
-  verbs: ["get", "list", "watch"]
-
-# Networking resources
-- apiGroups: ["networking.k8s.io"]
-  resources:
-  - networkpolicies
-  - ingresses
-  verbs: ["get", "list", "watch"]
-
-# RBAC resources
-- apiGroups: ["rbac.authorization.k8s.io"]
-  resources:
-  - roles
-  - rolebindings
-  - clusterroles
-  - clusterrolebindings
-  verbs: ["get", "list", "watch"]
-
 # Policy resources
 - apiGroups: ["policies.kube-policies.io"]
   resources:
   - policies
   - policyexceptions
-  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  verbs: ["get", "list", "watch"]
 
 # Policy status subresources.
 # PolicyReconciler.publishPolicyStatus / PolicyExceptionReconciler.publishExceptionStatus
@@ -82,31 +48,6 @@ rules:
   - policies/status
   - policyexceptions/status
   verbs: ["get", "update", "patch"]
-
-# Admission registration
-- apiGroups: ["admissionregistration.k8s.io"]
-  resources:
-  - validatingwebhookconfigurations
-  - mutatingwebhookconfigurations
-  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
-
-# Events
-- apiGroups: [""]
-  resources:
-  - events
-  verbs: ["create", "patch"]
-
-# Leader election (coordination.k8s.io/Lease resource).
-# The Lease is namespaced; this ClusterRole grants the verbs globally
-# but the actual Lease is only created in kube-policies-system.
-- apiGroups: ["coordination.k8s.io"]
-  resources:
-  - leases
-  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
-
-# Metrics
-- nonResourceURLs: ["/metrics"]
-  verbs: ["get"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
@@ -119,6 +60,47 @@ roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
   name: kube-policies-admission-webhook
+subjects:
+- kind: ServiceAccount
+  name: kube-policies-admission-webhook
+  namespace: kube-policies-system
+---
+# Leader-election Role (IAM-WU-08, namespaced). The coordination.k8s.io/Lease is
+# created only in kube-policies-system, so the grant is a namespaced Role rather than
+# a ClusterRole.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: kube-policies-admission-webhook-leader-election
+  namespace: kube-policies-system
+  labels:
+    app: kube-policies-admission-webhook
+    component: admission-webhook
+rules:
+- apiGroups: ["coordination.k8s.io"]
+  resources:
+  - leases
+  verbs: ["get", "list", "watch", "create", "update", "patch"]
+# controller-runtime leader election emits a namespaced "became leader" Event through
+# the client-go EventRecorder (a library call, not project code). Namespaced grant —
+# not the cluster-wide events access the old shared ClusterRole carried (IAM-WU-08).
+- apiGroups: [""]
+  resources:
+  - events
+  verbs: ["create", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: kube-policies-admission-webhook-leader-election
+  namespace: kube-policies-system
+  labels:
+    app: kube-policies-admission-webhook
+    component: admission-webhook
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: kube-policies-admission-webhook-leader-election
 subjects:
 - kind: ServiceAccount
   name: kube-policies-admission-webhook

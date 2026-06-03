@@ -1,0 +1,93 @@
+{{- if .Values.policyManager.enabled -}}
+{{- $svc := include "kube-policies.policyManagerName" . -}}
+{{- $ns := .Release.Namespace -}}
+{{- $secretName := include "kube-policies.policyManagerCertSecretName" . -}}
+{{- if .Values.certManager.enabled -}}
+{{- /* cert-manager ENABLED (CRY-WU-05/09): cert-manager issues the policy-manager
+       serving cert (ECDSA P-256, CRY-WU-11) into the Secret the deployment
+       mounts. The issuer is shared with the webhook so the webhook/dashboard
+       trust the same CA when connecting to the policy-manager (CRY-WU-06/07). */ -}}
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ include "kube-policies.policyManagerName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kube-policies.labels" . | nindent 4 }}
+spec:
+  secretName: {{ $secretName }}
+  duration: {{ .Values.certManager.duration | quote }}
+  renewBefore: {{ .Values.certManager.renewBefore | quote }}
+  privateKey:
+    algorithm: {{ .Values.certManager.privateKey.algorithm }}
+    size: {{ .Values.certManager.privateKey.size }}
+    rotationPolicy: {{ .Values.certManager.privateKey.rotationPolicy | default "Always" }}
+  usages:
+    - server auth
+  dnsNames:
+    - {{ $svc }}
+    - {{ printf "%s.%s" $svc $ns }}
+    - {{ printf "%s.%s.svc" $svc $ns }}
+    - {{ printf "%s.%s.svc.cluster.local" $svc $ns }}
+    - localhost
+  ipAddresses:
+    - 127.0.0.1
+  issuerRef:
+{{- if eq .Values.certManager.issuerType "existing" }}
+    name: {{ required "certManager.issuerRef.name is required when certManager.issuerType=existing" .Values.certManager.issuerRef.name }}
+    kind: {{ .Values.certManager.issuerRef.kind | default "Issuer" }}
+    group: {{ .Values.certManager.issuerRef.group | default "cert-manager.io" }}
+{{- else }}
+    name: {{ include "kube-policies.fullname" . }}-webhook-issuer
+    kind: Issuer
+    group: cert-manager.io
+{{- end }}
+{{- else -}}
+{{- /* cert-manager DISABLED (demo): chart provisions the policy-manager serving
+       cert. Three-branch render mirroring admission-webhook-tls.yaml. */ -}}
+{{- $existingSecret := lookup "v1" "Secret" .Release.Namespace $secretName -}}
+{{- $tlsCrt := "" -}}
+{{- $tlsKey := "" -}}
+{{- $caBundle := "" -}}
+{{- if and $existingSecret $existingSecret.data -}}
+  {{- $tlsCrt = index $existingSecret.data "tls.crt" | default "" -}}
+  {{- $tlsKey = index $existingSecret.data "tls.key" | default "" -}}
+  {{- $caBundle = index $existingSecret.data "ca.crt" | default "" -}}
+{{- else if and (not .Values.policyManager.tls.autoGenerate) .Values.policyManager.tls.caCert .Values.policyManager.tls.cert .Values.policyManager.tls.key -}}
+  {{- $tlsCrt = .Values.policyManager.tls.cert | b64enc -}}
+  {{- $tlsKey = .Values.policyManager.tls.key | b64enc -}}
+  {{- $caBundle = .Values.policyManager.tls.caCert | b64enc -}}
+{{- else if .Values.policyManager.tls.autoGenerate -}}
+  {{- /* DEMO-ONLY (CRY-WU-11): sprig genCA/genSignedCert emit FIXED RSA-2048 /
+         SHA-256, below the FedRAMP-Moderate bar. Production uses cert-manager
+         (certManager.enabled=true → ECDSA P-256). See crypto-standards.md. */ -}}
+  {{- $altNames := list
+       $svc
+       (printf "%s.%s" $svc $ns)
+       (printf "%s.%s.svc" $svc $ns)
+       (printf "%s.%s.svc.cluster.local" $svc $ns)
+       "localhost"
+  -}}
+  {{- $ca := genCA "kube-policies-policy-manager-ca" 365 -}}
+  {{- $cert := genSignedCert $svc (list "127.0.0.1") $altNames 365 $ca -}}
+  {{- $tlsCrt = $cert.Cert | b64enc -}}
+  {{- $tlsKey = $cert.Key | b64enc -}}
+  {{- $caBundle = $ca.Cert | b64enc -}}
+{{- else -}}
+  {{- fail (printf "policyManager.tls: no Secret %s exists, no inline tls.caCert/cert/key provided, and tls.autoGenerate=false. Set tls.autoGenerate=true, supply tls.caCert/cert/key inline, or enable certManager." $secretName) -}}
+{{- end -}}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ $secretName }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kube-policies.labels" . | nindent 4 }}
+type: kubernetes.io/tls
+data:
+  tls.crt: {{ $tlsCrt | quote }}
+  tls.key: {{ $tlsKey | quote }}
+  ca.crt: {{ $caBundle | quote }}
+{{- end }}
+{{- end }}

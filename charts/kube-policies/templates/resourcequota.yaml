@@ -1,0 +1,29 @@
+{{- /*
+ResourceQuota for the kube-policies namespace (RES-WU-17, DoS protection).
+
+OPT-IN (resourceQuota.enabled defaults false): a mis-sized quota can block the
+chart's own pods from scheduling, so operators must explicitly enable it and
+size it for their topology. When enabled, it caps the aggregate compute and
+object counts in the release namespace so a runaway workload cannot exhaust the
+node/namespace budget the kube-policies control plane depends on.
+*/ -}}
+{{- if .Values.resourceQuota.enabled }}
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: {{ include "kube-policies.fullname" . }}-quota
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kube-policies.labels" . | nindent 4 }}
+spec:
+  hard:
+    {{- toYaml .Values.resourceQuota.hard | nindent 4 }}
+  {{- with .Values.resourceQuota.scopes }}
+  scopes:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  {{- with .Values.resourceQuota.scopeSelector }}
+  scopeSelector:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+{{- end }}

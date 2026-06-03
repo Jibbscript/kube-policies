@@ -1,10 +1,7 @@
 package policymanager
 
 import (
-	"context"
 	"fmt"
-
-	"github.com/open-policy-agent/opa/rego"
 
 	"github.com/Jibbscript/kube-policies/internal/policy"
 )
@@ -44,11 +41,14 @@ func compileRegoModule(moduleName, ruleName, regoBody string) error {
 		// assigned an ID yet). OPA otherwise refuses an unnamed module.
 		moduleName = "validate_module"
 	}
-	_, err := rego.New(
-		rego.Query("data.kube_policies.evaluate"),
-		rego.Module(moduleName, regoBody),
-	).PrepareForEval(context.Background())
-	if err != nil {
+	// Delegate to the policy package's validator so CRD rules are compiled with
+	// the SAME shared library modules the engine uses (POL-WU-01/POL-WU-24) — a
+	// rule importing data.kube_policies.lib must validate here exactly as it runs
+	// in the engine — and so the engine contract (evaluate defined, returns a
+	// boolean "allowed") is enforced before the policy is published. The "rego
+	// syntax error in rule %q" wrapper is preserved: callers and tests detect
+	// compile failures via the "syntax" substring.
+	if err := policy.ValidateRuleRego(moduleName, regoBody); err != nil {
 		return fmt.Errorf("rego syntax error in rule %q: %w", ruleName, err)
 	}
 	return nil

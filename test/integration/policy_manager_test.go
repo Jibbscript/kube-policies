@@ -133,8 +133,8 @@ func (suite *PolicyManagerIntegrationTestSuite) SetupSuite() {
 		})
 	}()
 
-	suite.apiServer = httptest.NewServer(policymanager.NewAPIRouter(mgr))
-	suite.metricsServer = httptest.NewServer(policymanager.NewMetricsRouter())
+	suite.apiServer = httptest.NewServer(policymanager.NewAPIRouter(mgr, config.AuthConfig{}, config.RBACConfig{}, nil, config.RateLimitConfig{}, nil))
+	suite.metricsServer = httptest.NewServer(policymanager.NewMetricsRouter(nil))
 }
 
 func (suite *PolicyManagerIntegrationTestSuite) TearDownSuite() {

@@ -1,0 +1,18 @@
+# NEGATIVE fixture for sa.token (IAM-WU-17).
+#
+# Two ServiceAccounts that reintroduce the token-automount regression
+# (IAM-WU-10, CIS 5.1.5/5.1.6):
+#   1. automountServiceAccountToken omitted entirely (cluster default = mount), and
+#   2. automountServiceAccountToken explicitly true.
+#
+# conftest MUST exit non-zero with a deny from package sa.token for each.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: regression-automount-absent
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: regression-automount-true
+automountServiceAccountToken: true

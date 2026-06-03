@@ -11,14 +11,14 @@ Implements the policy-manager service: in-memory storage for policies, bundles, 
 | File | Description |
 |------|-------------|
 | `manager.go` | `Manager` struct, supporting types (`PolicyBundle`, `Exception`, `ExceptionScope`, `ComplianceReport`/`Summary`/`Violation`), all Gin HTTP handlers, validation, and background loops |
-| `controller.go` | `ControllerOptions`, `StartControllers`, `PolicySink` + `ExceptionSink` interfaces, `PolicyReconciler` + `PolicyExceptionReconciler` (leader-elected by default; `LeaderlessReconcilers: true` for the webhook host). |
+| `controller.go` | `ControllerOptions`, `StartControllers`, `PolicySink` + `ExceptionSink` interfaces, `PolicyReconciler` + `PolicyExceptionReconciler`. `LeaderlessReconcilers: true` for BOTH hosts (webhook + policy-manager, RES-WU-03) so every replica reconciles into its per-pod registry; reconcile-audit emission is gated on leadership via `auditWhenLeader` so config changes are audited once, not per replica. |
 | `crd_sync.go` | `ExceptionFromCRD` — the canonical converter from `policiesv1.PolicyException` to the internal `Exception` value. Reused by both the policy-manager's reconciler and the admission-webhook's `exceptionSink`. |
 | `decisions_handler.go` / `_test.go` | `/api/v1/decisions/internal` ingestion. Lenient JSON decode (no `DisallowUnknownFields()`); `suppressed_by` round-trips intact, asserted by `TestIngestInternal_SuppressedByRoundTrip`. |
 
 ## For AI Agents
 
 ### Working In This Directory
-- Storage is currently in-memory maps guarded by `sync.RWMutex`. There is no persistence layer — restart loses all state. When introducing one, abstract behind an interface and keep the in-memory implementation as the test default.
+- Storage is in-memory maps guarded by `sync.RWMutex` and is **intentionally non-persistent**: the Policy/PolicyException CRDs in etcd are the source of truth, and every replica rebuilds its registry from them on startup (RES-WU-08; see `docs/state-model.md`). This is why the chart defaults `persistence.enabled: false` and runs the policy-manager HA with leaderless reconcilers — there is no on-disk state to share. If you ever add a persistence layer, abstract it behind an interface, keep in-memory as the test default, and update the chart's RWO-vs-replicaCount render guard.
 - `Manager.Start(ctx)` spawns `syncPolicies` (30s ticker — currently a no-op debug log) and `monitorExceptions` (1h ticker calling `checkExpiredExceptions`). Both terminate on context cancellation.
 - Compliance handlers (`ListComplianceReports`, `GenerateComplianceReport`, `ListComplianceFrameworks`) currently return `501 Not Implemented`. Real implementations should populate `ComplianceReport` from audit log analysis.
 - Validation in `validatePolicy` requires non-empty `Name`, at least one `Rule`, and each rule must have a `Name` and `Rego` body. Strengthen this when adding fields, not weaken it.

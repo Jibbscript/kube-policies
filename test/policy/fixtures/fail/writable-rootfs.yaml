@@ -1,0 +1,40 @@
+# NEGATIVE fixture for restricted.pss (CFG-WU-12), evaluated per-document.
+#
+# An in-scope control-plane Deployment (admission-webhook component) whose
+# container omits readOnlyRootFilesystem (defaults to a writable root fs). The
+# hardening rule requires readOnlyRootFilesystem: true, so it MUST deny. Also
+# exercises the runAsGroup rule indirectly by leaving runAsGroup unset on the
+# container while the pod sets a non-root GID (the pod value is inherited).
+#
+# conftest test --namespace restricted.pss MUST exit non-zero.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: regression-writable-rootfs
+  labels:
+    app.kubernetes.io/name: kube-policies
+    app.kubernetes.io/component: admission-webhook
+spec:
+  template:
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        runAsGroup: 65534
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: webhook
+          securityContext:
+            allowPrivilegeEscalation: false
+            runAsNonRoot: true
+            capabilities:
+              drop:
+                - ALL
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi

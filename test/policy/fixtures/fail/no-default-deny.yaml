@@ -1,0 +1,42 @@
+# NEGATIVE fixture for network.posture (NET-WU-20), evaluated under `conftest --combine`.
+#
+# A set of NetworkPolicies WITHOUT the keystone default-deny: every policy here
+# selects a specific component (none has podSelector: {} + Ingress/Egress), so
+# the fail-closed baseline is absent. The combine existence check MUST deny.
+# (It will also flag the missing per-component ingress listeners, which is fine —
+# any deny makes conftest exit non-zero.)
+#
+# conftest test --combine --namespace network.posture MUST exit non-zero.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: regression-ingress-policy-manager
+  labels:
+    app.kubernetes.io/component: policy-manager
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/component: policy-manager
+  policyTypes:
+    - Ingress
+  ingress:
+    - ports:
+        - protocol: TCP
+          port: 8080
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: regression-ingress-webhook
+  labels:
+    app.kubernetes.io/component: admission-webhook
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/component: admission-webhook
+  policyTypes:
+    - Ingress
+  ingress:
+    - ports:
+        - protocol: TCP
+          port: 8443

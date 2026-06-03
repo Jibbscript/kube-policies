@@ -1,0 +1,280 @@
+# AUD-WU-16 (CIS Kubernetes Benchmark 3.2.x / 1.2.x, NIST AU-2/AU-3/AU-12).
+# Kubernetes apiserver audit policy — audit.k8s.io/v1.
+#
+# Design rationale:
+#   - Security-relevant resources (secrets, configmaps, RBAC, webhook configs,
+#     kube-policies CRDs) are captured at RequestResponse level to provide full
+#     before/after state for compliance and incident response.
+#   - Workload mutations (pods, deployments, daemonsets, statefulsets) are
+#     captured at Metadata level — captures WHO and WHAT was changed without
+#     logging potentially large pod specs in the response body.
+#   - Namespace and node changes are captured at Metadata level.
+#   - Read-only list/watch on high-volume non-security resources are omitted to
+#     control log volume (CIS 3.2.2 recommends filtering excessive verbosity).
+#   - omitStages: [RequestReceived] — the RequestReceived stage fires before the
+#     request is authenticated/authorized; it is high-volume and low-value for
+#     compliance use. All other stages (ResponseStarted, ResponseComplete,
+#     Panic) are retained.
+#
+# Pass this policy to the apiserver via:
+#   --audit-policy-file=/etc/kubernetes/audit-policy.yaml
+#   --audit-log-path=/var/log/kubernetes/audit.log
+#   --audit-log-maxage=90        # NIST AU-11: retain 90 days
+#   --audit-log-maxbackup=10
+#   --audit-log-maxsize=100      # MB per file
+#
+# For kubeadm clusters, add the policy file to the control-plane node and
+# set the audit flags in /etc/kubernetes/manifests/kube-apiserver.yaml.
+apiVersion: audit.k8s.io/v1
+kind: Policy
+metadata:
+  name: kube-policies-audit-policy
+omitStages:
+  - "RequestReceived"
+
+rules:
+  # -------------------------------------------------------------------------
+  # Secrets — always RequestResponse (NIST AU-9: protect audit information).
+  # Captures create/update/delete of secrets in full for credential-access
+  # detection. CIS 3.2.x recommends auditing secret access.
+  # -------------------------------------------------------------------------
+  - level: RequestResponse
+    resources:
+      - group: ""
+        resources: ["secrets"]
+    verbs: ["create", "update", "patch", "delete", "deletecollection"]
+
+  - level: Metadata
+    resources:
+      - group: ""
+        resources: ["secrets"]
+    verbs: ["get", "list", "watch"]
+
+  # -------------------------------------------------------------------------
+  # ConfigMaps — RequestResponse for mutations (config drift detection,
+  # CM-3/CM-6). Gets/lists at Metadata (high-volume; namespace controllers
+  # watch configmaps continuously).
+  # -------------------------------------------------------------------------
+  - level: RequestResponse
+    resources:
+      - group: ""
+        resources: ["configmaps"]
+    verbs: ["create", "update", "patch", "delete", "deletecollection"]
+
+  - level: Metadata
+    resources:
+      - group: ""
+        resources: ["configmaps"]
+    verbs: ["get", "list", "watch"]
+
+  # -------------------------------------------------------------------------
+  # kube-policies CRDs (policies.kube-policies.io, policyexceptions) —
+  # RequestResponse: policy changes are high-value audit events (AC-3/AC-6).
+  # -------------------------------------------------------------------------
+  - level: RequestResponse
+    resources:
+      - group: "policies.kube-policies.io"
+        resources: ["*"]
+
+  # -------------------------------------------------------------------------
+  # RBAC — RequestResponse for all mutations (privilege escalation detection,
+  # AC-2/AC-6, CIS 3.2.x).
+  # -------------------------------------------------------------------------
+  - level: RequestResponse
+    resources:
+      - group: "rbac.authorization.k8s.io"
+        resources:
+          - "roles"
+          - "rolebindings"
+          - "clusterroles"
+          - "clusterrolebindings"
+    verbs: ["create", "update", "patch", "delete", "deletecollection", "bind", "escalate"]
+
+  - level: Metadata
+    resources:
+      - group: "rbac.authorization.k8s.io"
+        resources:
+          - "roles"
+          - "rolebindings"
+          - "clusterroles"
+          - "clusterrolebindings"
+    verbs: ["get", "list", "watch"]
+
+  # -------------------------------------------------------------------------
+  # Admission webhook configurations (ValidatingWebhookConfiguration,
+  # MutatingWebhookConfiguration) — RequestResponse: tampering with webhook
+  # configs can silently disable admission controls (SC-7/SI-7).
+  # -------------------------------------------------------------------------
+  - level: RequestResponse
+    resources:
+      - group: "admissionregistration.k8s.io"
+        resources:
+          - "validatingwebhookconfigurations"
+          - "mutatingwebhookconfigurations"
+          - "validatingadmissionpolicies"
+          - "validatingadmissionpolicybindings"
+
+  # -------------------------------------------------------------------------
+  # PodSecurityPolicies / pod security admission (if applicable) —
+  # RequestResponse (CIS 3.2.x).
+  # -------------------------------------------------------------------------
+  - level: RequestResponse
+    resources:
+      - group: "policy"
+        resources: ["podsecuritypolicies"]
+
+  # -------------------------------------------------------------------------
+  # NetworkPolicies — RequestResponse: network segmentation changes are
+  # security-relevant (SC-7, CIS 5.3.x).
+  # -------------------------------------------------------------------------
+  - level: RequestResponse
+    resources:
+      - group: "networking.k8s.io"
+        resources: ["networkpolicies"]
+
+  # -------------------------------------------------------------------------
+  # TokenReview / SubjectAccessReview / LocalSubjectAccessReview —
+  # RequestResponse: auth decisions are high-value (AC-2/IA-5).
+  # -------------------------------------------------------------------------
+  - level: RequestResponse
+    resources:
+      - group: "authentication.k8s.io"
+        resources: ["tokenreviews"]
+      - group: "authorization.k8s.io"
+        resources:
+          - "subjectaccessreviews"
+          - "localsubjectaccessreviews"
+          - "selfsubjectaccessreviews"
+          - "selfsubjectrulesreviews"
+
+  # -------------------------------------------------------------------------
+  # CertificateSigningRequests — RequestResponse (IA-5 credential management).
+  # -------------------------------------------------------------------------
+  - level: RequestResponse
+    resources:
+      - group: "certificates.k8s.io"
+        resources: ["certificatesigningrequests"]
+
+  # -------------------------------------------------------------------------
+  # Namespaces — Metadata for mutations (important for PSA label changes,
+  # CIS 5.3.2) and None for reads (high-volume).
+  # -------------------------------------------------------------------------
+  - level: RequestResponse
+    resources:
+      - group: ""
+        resources: ["namespaces"]
+    verbs: ["create", "update", "patch", "delete"]
+
+  - level: None
+    resources:
+      - group: ""
+        resources: ["namespaces"]
+    verbs: ["get", "list", "watch"]
+
+  # -------------------------------------------------------------------------
+  # Nodes — Metadata for mutations (SI-3/SI-7 host integrity).
+  # -------------------------------------------------------------------------
+  - level: Metadata
+    resources:
+      - group: ""
+        resources: ["nodes", "nodes/status"]
+    verbs: ["create", "update", "patch", "delete"]
+
+  - level: None
+    resources:
+      - group: ""
+        resources: ["nodes", "nodes/status"]
+    verbs: ["get", "list", "watch"]
+
+  # -------------------------------------------------------------------------
+  # Workloads (pods, deployments, daemonsets, statefulsets, replicasets,
+  # jobs, cronjobs) — Metadata for mutations (change detection, CM-3);
+  # None for reads/exec/attach (high-volume; exec/attach logged at Metadata).
+  # -------------------------------------------------------------------------
+  - level: Metadata
+    resources:
+      - group: ""
+        resources: ["pods", "pods/status", "pods/exec", "pods/attach", "pods/portforward"]
+      - group: "apps"
+        resources:
+          - "deployments"
+          - "daemonsets"
+          - "statefulsets"
+          - "replicasets"
+      - group: "batch"
+        resources: ["jobs", "cronjobs"]
+    verbs: ["create", "update", "patch", "delete", "deletecollection"]
+
+  - level: Metadata
+    resources:
+      - group: ""
+        resources: ["pods/exec", "pods/attach", "pods/portforward"]
+    verbs: ["create"]
+
+  - level: None
+    resources:
+      - group: ""
+        resources: ["pods", "pods/status", "pods/log"]
+      - group: "apps"
+        resources:
+          - "deployments"
+          - "daemonsets"
+          - "statefulsets"
+          - "replicasets"
+    verbs: ["get", "list", "watch"]
+
+  # -------------------------------------------------------------------------
+  # Services, Endpoints, PersistentVolumes, PersistentVolumeClaims —
+  # Metadata for mutations (network exposure / data integrity tracking).
+  # -------------------------------------------------------------------------
+  - level: Metadata
+    resources:
+      - group: ""
+        resources:
+          - "services"
+          - "endpoints"
+          - "persistentvolumes"
+          - "persistentvolumeclaims"
+    verbs: ["create", "update", "patch", "delete"]
+
+  - level: None
+    resources:
+      - group: ""
+        resources:
+          - "services"
+          - "endpoints"
+          - "persistentvolumes"
+          - "persistentvolumeclaims"
+    verbs: ["get", "list", "watch"]
+
+  # -------------------------------------------------------------------------
+  # kube-system component health endpoints and leader-election configmaps/
+  # endpoints — suppress: extremely high-volume, no security value.
+  # -------------------------------------------------------------------------
+  - level: None
+    userGroups: ["system:nodes"]
+    verbs: ["get", "list", "watch"]
+
+  - level: None
+    users:
+      - "system:kube-proxy"
+      - "system:kube-controller-manager"
+      - "system:kube-scheduler"
+      - "system:serviceaccount:kube-system:endpoint-controller"
+      - "system:serviceaccount:kube-system:generic-garbage-collector"
+      - "system:serviceaccount:kube-system:namespace-controller"
+      - "system:serviceaccount:kube-system:node-controller"
+      - "system:serviceaccount:kube-system:persistent-volume-binder"
+      - "system:serviceaccount:kube-system:pod-garbage-collector"
+    verbs: ["get", "list", "watch"]
+
+  - level: None
+    resources:
+      - group: ""
+        resources: ["events"]
+
+  # -------------------------------------------------------------------------
+  # Catch-all: log everything else at Metadata level (AU-2: sufficient detail
+  # for reconstructing events, without logging all request/response bodies).
+  # -------------------------------------------------------------------------
+  - level: Metadata

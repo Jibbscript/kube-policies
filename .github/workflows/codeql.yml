@@ -1,0 +1,78 @@
+# SDL-WU-05 / VUL-WU-04 — CodeQL Static Application Security Testing
+# Controls: NIST SA-11(1) Developer Security Testing (code analysis),
+#           NIST SI-10 Information Input Validation,
+#           SSDF PW.8 (Test Executable Code to Identify Vulnerabilities)
+#
+# Runs CodeQL security-extended analysis for Go services and the web/ Svelte SPA.
+# Results are uploaded to GitHub Security (SARIF) for triage and tracking.
+
+name: CodeQL SAST
+
+on:
+  pull_request:
+    branches:
+      - main
+      - develop
+  push:
+    branches:
+      - main
+      - develop
+  schedule:
+    # Weekly Monday 03:30 UTC — distinct from existing nightly (02:xx) runs
+    - cron: '30 3 * * 1'
+
+concurrency:
+  group: codeql-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  security-events: write
+  actions: read
+  contents: read
+
+env:
+  GO_VERSION: '1.25'
+
+jobs:
+  analyze:
+    name: Analyze (${{ matrix.language }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        language:
+          - go
+          - javascript-typescript
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+
+      # Go toolchain — only needed for the Go language matrix entry
+      - name: Set up Go
+        if: matrix.language == 'go'
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff  # v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@03e4368ac7daa2bd82b3e85262f3bf87ee112f57  # v3
+        with:
+          languages: ${{ matrix.language }}
+          queries: security-extended
+
+      # Manual build for Go so CodeQL captures the full dependency graph;
+      # javascript-typescript falls through to autobuild (no compilation needed).
+      - name: Build Go sources
+        if: matrix.language == 'go'
+        run: go build ./...
+
+      - name: Autobuild (javascript-typescript)
+        if: matrix.language == 'javascript-typescript'
+        uses: github/codeql-action/autobuild@03e4368ac7daa2bd82b3e85262f3bf87ee112f57  # v3
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@03e4368ac7daa2bd82b3e85262f3bf87ee112f57  # v3
+        with:
+          category: /language:${{ matrix.language }}

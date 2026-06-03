@@ -4,22 +4,71 @@ metadata:
   name: alertmanager-config
   namespace: kube-policies-monitoring
 data:
+  # IRM-WU-16: severity-based routing with inhibition + a dead-man's-switch
+  # heartbeat split-off. The dummy http://127.0.0.1:5001/ receiver is gone.
+  # Receivers are name-only; wire real paging/chat creds from a Secret (use the
+  # Helm chart's monitoring.alertmanager.config.* which references them via
+  # *_file). Keep in sync with monitoring/alertmanager/alertmanager.yaml.
   alertmanager.yml: |
     global:
       resolve_timeout: 5m
-      
+
     route:
-      group_by: ['alertname', 'cluster', 'service']
-      group_wait: 10s
-      group_interval: 10s
-      repeat_interval: 1h
-      receiver: default-webhook
+      group_by: ['alertname', 'component']
+      group_wait: 30s
+      group_interval: 5m
+      repeat_interval: 4h
+      receiver: kube-policies-default
+      routes:
+        - matchers:
+            - alertname="KubePoliciesWatchdog"
+          receiver: kube-policies-heartbeat
+          group_wait: 0s
+          group_interval: 1m
+          repeat_interval: 1m
+          continue: false
+        - matchers:
+            - severity="critical"
+          receiver: kube-policies-critical
+          continue: true
+        - matchers:
+            - severity="warning"
+          receiver: kube-policies-warning
+
+    inhibit_rules:
+      - source_matchers:
+          - alertname="KubePoliciesDown"
+        target_matchers:
+          - severity="warning"
+        equal: ['component']
+      - source_matchers:
+          - severity="critical"
+        target_matchers:
+          - severity="warning"
+        equal: ['component']
 
     receivers:
-    - name: default-webhook
-      webhook_configs:
-      - url: "http://127.0.0.1:5001/"
-        send_resolved: true
+      - name: kube-policies-default
+      - name: kube-policies-critical
+      - name: kube-policies-warning
+      - name: kube-policies-heartbeat
+---
+# IRM-WU-22: durable Alertmanager storage. Silences + notification log persist
+# across pod restarts (was emptyDir). ReadWriteOnce is safe for this
+# single-replica Deployment.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: alertmanager-storage
+  namespace: kube-policies-monitoring
+  labels:
+    app: alertmanager
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -38,9 +87,35 @@ spec:
       labels:
         app: alertmanager
     spec:
+      # restricted-PSS pod securityContext. prom/alertmanager runs as the
+      # "nobody" user (UID/GID 65534) in its upstream image, so we pin to that
+      # non-zero identity and let fsGroup own the writable emptyDir.
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        runAsGroup: 65534
+        fsGroup: 65534
+        seccompProfile:
+          type: RuntimeDefault
       containers:
       - name: alertmanager
-        image: prom/alertmanager:v0.25.0
+        # SUP-WU-09 (CM-2/SI-7): pinned by immutable digest (tag kept for
+        # readability). Demo-grade manifest; currency reviewed manually.
+        image: prom/alertmanager:v0.25.0@sha256:fd4d9a3dd1fd0125108417be21be917f19cc76262347086509a0d43f29b80e98
+        # restricted-PSS container securityContext. readOnlyRootFilesystem is
+        # safe because every path Alertmanager writes (storage + /tmp) is
+        # backed by an emptyDir mount below.
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          runAsNonRoot: true
+          runAsUser: 65534
+          runAsGroup: 65534
+          capabilities:
+            drop:
+              - ALL
+          seccompProfile:
+            type: RuntimeDefault
         args:
           - '--config.file=/etc/alertmanager/alertmanager.yml'
           - '--storage.path=/alertmanager'
@@ -58,6 +133,8 @@ spec:
           mountPath: /etc/alertmanager
         - name: storage-volume
           mountPath: /alertmanager
+        - name: tmp-volume
+          mountPath: /tmp
         resources:
           requests:
             cpu: 100m
@@ -81,7 +158,16 @@ spec:
       - name: config-volume
         configMap:
           name: alertmanager-config
+      # IRM-WU-22: durable storage so silences + the notification log survive a
+      # pod restart (replaces the former emptyDir). /tmp stays ephemeral scratch.
+      # NOTE: this standalone Deployment is single-replica; for true HA gossip
+      # delivery use the chart's Alertmanager StatefulSet
+      # (monitoring.alertmanager.ha.enabled) which runs >=2 replicas each with
+      # its own PVC.
       - name: storage-volume
+        persistentVolumeClaim:
+          claimName: alertmanager-storage
+      - name: tmp-volume
         emptyDir: {}
 ---
 apiVersion: v1

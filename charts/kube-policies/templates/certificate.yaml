@@ -1,0 +1,46 @@
+{{- if and .Values.admissionWebhook.enabled .Values.certManager.enabled }}
+{{- /*
+  cert-manager Certificate provisioning the webhook serving Secret (CRY-WU-09).
+  secretName matches what the deployment mounts (kube-policies.certSecretName);
+  dnsNames reproduce the 5 SANs from the autoGenerate path with 127.0.0.1 under
+  ipAddresses. privateKey pins an approved algorithm/size (CRY-WU-11) — without
+  it cert-manager would default to RSA-2048.
+*/ -}}
+{{- $svc := include "kube-policies.webhookServiceName" . -}}
+{{- $ns := .Release.Namespace -}}
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ include "kube-policies.fullname" . }}-admission-webhook
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kube-policies.labels" . | nindent 4 }}
+spec:
+  secretName: {{ include "kube-policies.certSecretName" . }}
+  duration: {{ .Values.certManager.duration | quote }}
+  renewBefore: {{ .Values.certManager.renewBefore | quote }}
+  privateKey:
+    algorithm: {{ .Values.certManager.privateKey.algorithm }}
+    size: {{ .Values.certManager.privateKey.size }}
+    rotationPolicy: {{ .Values.certManager.privateKey.rotationPolicy | default "Always" }}
+  usages:
+    - server auth
+  dnsNames:
+    - {{ $svc }}
+    - {{ printf "%s.%s" $svc $ns }}
+    - {{ printf "%s.%s.svc" $svc $ns }}
+    - {{ printf "%s.%s.svc.cluster.local" $svc $ns }}
+    - localhost
+  ipAddresses:
+    - 127.0.0.1
+  issuerRef:
+{{- if eq .Values.certManager.issuerType "existing" }}
+    name: {{ required "certManager.issuerRef.name is required when certManager.issuerType=existing" .Values.certManager.issuerRef.name }}
+    kind: {{ .Values.certManager.issuerRef.kind | default "Issuer" }}
+    group: {{ .Values.certManager.issuerRef.group | default "cert-manager.io" }}
+{{- else }}
+    name: {{ include "kube-policies.fullname" . }}-webhook-issuer
+    kind: Issuer
+    group: cert-manager.io
+{{- end }}
+{{- end }}

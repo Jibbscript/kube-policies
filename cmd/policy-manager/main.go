@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"flag"
 	"fmt"
@@ -12,11 +13,16 @@ import (
 	"time"
 
 	"go.uber.org/zap"
+	"k8s.io/client-go/kubernetes"
 	ctrl "sigs.k8s.io/controller-runtime"
 
+	"github.com/Jibbscript/kube-policies/internal/audit"
+	"github.com/Jibbscript/kube-policies/internal/auth"
 	"github.com/Jibbscript/kube-policies/internal/config"
+	"github.com/Jibbscript/kube-policies/internal/cryptofips"
 	"github.com/Jibbscript/kube-policies/internal/metrics"
 	"github.com/Jibbscript/kube-policies/internal/policymanager"
+	"github.com/Jibbscript/kube-policies/internal/tlsreload"
 	"github.com/Jibbscript/kube-policies/pkg/logger"
 )
 
@@ -29,6 +35,28 @@ var (
 	port        = flag.Int("port", 8080, "Policy manager server port")
 	metricsPort = flag.Int("metrics-port", 9091, "Metrics server port")
 	configPath  = flag.String("config", "/etc/config/config.yaml", "Path to configuration file")
+	certPath    = flag.String("cert-path", "/etc/certs/tls.crt", "Path to TLS certificate for the API server")
+	keyPath     = flag.String("key-path", "/etc/certs/tls.key", "Path to TLS private key for the API server")
+	// metricsTLS serves the :9091 metrics endpoint over TLS 1.3 with bearer-token
+	// auth on /metrics (CRY-WU-08); /healthz + /readyz stay open. Default off.
+	metricsTLS = flag.Bool("metrics-tls", false, "Serve /metrics over TLS 1.3 with bearer-token auth (CRY-WU-08)")
+
+	// clientCAPath enables OPTIONAL mutual TLS on the :8080 API (IAM-WU-03): when
+	// set, the policy-manager verifies a client certificate presented by the
+	// service callers (admission-webhook decision publisher, dashboard proxy/SSE)
+	// against this PEM client-CA bundle. The flag overrides the config-file
+	// security.tls.client_ca_path. Empty disables client-cert verification.
+	clientCAPath = flag.String("client-ca-path", "", "Path to PEM client-CA bundle for policy-manager API mTLS (IAM-WU-03); empty disables client-cert verification")
+
+	// requireClientCert makes API mTLS ENFORCING: the listener requires + verifies
+	// the client certificate (RequireAndVerifyClientCert) regardless of the
+	// config's client_auth string. Default FALSE (optional mTLS) — unlike the
+	// admission webhook (enforce-by-default, IAM-WU-06), the management API is also
+	// reachable by human operators and the OIDC/bearer layers already authenticate
+	// it, so mTLS is defense-in-depth that operators opt into. When true, a
+	// client-CA bundle MUST be supplied via --client-ca-path /
+	// security.tls.client_ca_path or startup fails closed.
+	requireClientCert = flag.Bool("require-client-cert", false, "Require + verify a client certificate (mTLS) on the API listener (IAM-WU-03). Default false (optional). When true a client-CA bundle must be supplied or startup fails closed.")
 
 	// disableControllers disables the CRD reconcilers. Off by default — the
 	// whole point of the policy-manager is to reconcile Policy and
@@ -36,6 +64,29 @@ var (
 	// without RBAC access to the policies.kube-policies.io group can flip
 	// this to keep the HTTP API functional with bundled defaults only.
 	disableControllers = flag.Bool("disable-controllers", false, "Disable CRD reconcilers; serve only bundled defaults via the HTTP API.")
+
+	// Rate-limiting / DoS-protection flag overrides (NET-WU-15, RES-WU-17).
+	// Sentinel "use config" defaults: -1 for numeric limits, false for the
+	// disable switch. A non-negative override wins over security.ratelimit.*.
+	rateLimitDisabled       = flag.Bool("ratelimit-disabled", false, "Disable the HTTP rate-limit / DoS-protection middleware (overrides security.ratelimit.enabled)")
+	rateLimitRPS            = flag.Float64("ratelimit-requests-per-second", -1, "Sustained request rate (req/s); -1 uses security.ratelimit.requests_per_second")
+	rateLimitBurst          = flag.Int("ratelimit-burst", -1, "Token-bucket burst depth; -1 uses security.ratelimit.burst")
+	rateLimitMaxConcurrent  = flag.Int("ratelimit-max-concurrent", -1, "Max in-flight requests; -1 uses security.ratelimit.max_concurrent")
+	rateLimitMaxBodyBytes   = flag.Int64("ratelimit-max-body-bytes", -1, "Max request body size in bytes (413 when exceeded); -1 uses security.ratelimit.max_body_bytes")
+	rateLimitMaxStreamConns = flag.Int("ratelimit-max-stream-connections", -1, "Max concurrent SSE stream connections; -1 uses security.ratelimit.max_stream_connections")
+
+	// maxConcurrentReconciles bounds the per-reconciler worker pool (RES-WU-17).
+	// <= 0 defers to the policymanager package default (2).
+	maxConcurrentReconciles = flag.Int("max-concurrent-reconciles", 2, "Max concurrent reconciles per CRD reconciler (RES-WU-17 DoS protection)")
+
+	// shutdownDrainDelay is the graceful-drain window (RES-WU-07, CP-10). On
+	// SIGTERM the policy-manager keeps serving for this delay before closing its
+	// listeners so the Service endpoints removal propagates and webhook decision
+	// publishes / dashboard reads are retargeted to surviving replicas instead of
+	// being dropped. Image- and version-independent (distroless images have no
+	// shell for an exec preStop sleep; the native lifecycle sleep is k8s >= 1.29).
+	// 0 disables the drain.
+	shutdownDrainDelay = flag.Duration("shutdown-drain-delay", 5*time.Second, "Graceful-drain delay after SIGTERM before the API/metrics servers stop, to let Service endpoints propagate (RES-WU-07). 0 disables.")
 
 	version = "dev"
 	commit  = "unknown"
@@ -59,6 +110,10 @@ func main() {
 		zap.String("date", date),
 	)
 
+	// FIPS 140-3 startup self-test (CRY-WU-02): abort before opening any
+	// listener when REQUIRE_FIPS=true but the validated module is not active.
+	cryptofips.MustEnforce(log)
+
 	// Load configuration
 	cfg, err := config.LoadConfig(*configPath)
 	if err != nil {
@@ -66,51 +121,287 @@ func main() {
 	}
 
 	// Initialize metrics (registers collectors against the global Prometheus registry).
-	_ = metrics.NewCollector()
+	metricsCollector := metrics.NewCollector()
 
 	// Initialize policy manager
 	policyManager, err := policymanager.NewManager(cfg, log)
 	if err != nil {
 		log.Fatal("Failed to initialize policy manager", zap.Error(err))
 	}
-	policyManager.SetInternalToken(os.Getenv("POLICY_MANAGER_INTERNAL_TOKEN"))
+
+	// Audit logger for management-plane configuration changes (IAM-WU-14,
+	// AU-2/AU-3). Constructed AFTER NewManager and attached via SetAuditLogger so
+	// every persisting policy/bundle/exception mutation records a
+	// ConfigurationChange event attributed to the authenticated OIDC principal.
+	// Mirrors cmd/admission-webhook/main.go's construction (same WithLogger /
+	// WithMetrics options against the same audit config). Closed on shutdown
+	// below so buffered events are flushed.
+	auditLogger, err := audit.NewLogger(&cfg.Audit,
+		audit.WithLogger(log),
+		audit.WithMetrics(metricsCollector),
+	)
+	if err != nil {
+		log.Fatal("Failed to initialize audit logger", zap.Error(err))
+	}
+	policyManager.SetAuditLogger(auditLogger)
+	// Accept both the current and (during a rotation window) the previous
+	// internal token so secret rotation causes no downtime (CRY-WU-14). This is
+	// kept unconditionally so the static fallback is always available; in
+	// tokenreview mode it is only consulted on a clean negative TokenReview
+	// verdict (see Manager.IngestInternal).
+	policyManager.SetInternalTokens(
+		os.Getenv("POLICY_MANAGER_INTERNAL_TOKEN"),
+		os.Getenv("POLICY_MANAGER_INTERNAL_TOKEN_PREVIOUS"),
+	)
+
+	// Inter-service auth mode for the webhook -> policy-manager decisions channel
+	// (IAM-WU-11). Default (unset env): tokenreview — BUT the default is
+	// context-aware (see below). "static" is the documented escape hatch for
+	// non-cluster/demo deployments. Any other value is an operator typo and fails
+	// closed so misconfigured deployments are caught immediately (mirrors the Helm
+	// enum guard in _helpers.tpl).
+	internalAuthModeRaw := os.Getenv("POLICY_MANAGER_INTERNAL_AUTH_MODE")
+	internalAuthModeExplicit := internalAuthModeRaw != "" // operator set it explicitly
+	internalAudience := os.Getenv("POLICY_MANAGER_INTERNAL_AUDIENCE")
+	if internalAudience == "" {
+		internalAudience = "policy-manager"
+	}
+	internalSubject := os.Getenv("POLICY_MANAGER_INTERNAL_SUBJECT")
+	// Reader subject for the READ side of the decisions plane — GET
+	// /api/v1/decisions/stream + /recent (IAM-WU-11, Inc7 Stream A). The dashboard
+	// SA username (system:serviceaccount:<ns>:<release>-dashboard). Empty disables
+	// the read subject pin (audience-only, with a one-time warn) — same semantics
+	// as an empty POLICY_MANAGER_INTERNAL_SUBJECT for /internal.
+	decisionsReaderSubject := os.Getenv("POLICY_MANAGER_DECISIONS_READER_SUBJECT")
+
+	switch classifyInternalAuthMode(internalAuthModeRaw) {
+	case authModeStatic:
+		// Static-only: shared bearer token, no TokenReview client needed.
+		log.Warn("internal decisions channel auth: STATIC bearer token (IAM-WU-11 escape hatch). TokenReview validation is OFF; intended only for non-cluster/demo deployments. Set POLICY_MANAGER_INTERNAL_AUTH_MODE=tokenreview on a real cluster.")
+
+	case authModeTokenReview:
+		// Attempt to wire the TokenReview authenticator. Resolution order:
+		//   1. ctrl.GetConfig() (--kubeconfig flag > KUBECONFIG env > in-cluster)
+		//   2. kubernetes.NewForConfig()
+		// On failure:
+		//   - EXPLICIT tokenreview (env set) → log.Fatal (operator demanded secure
+		//     mode; fail closed, never silent-downgrade).
+		//   - DEFAULT (env unset) → log.Warn and fall back to static-only so a
+		//     previously-working API-only run (--disable-controllers + static token,
+		//     no kubeconfig) is not broken by the Inc5 default change.
+		restCfg, cfgErr := ctrl.GetConfig()
+		if cfgErr != nil {
+			if internalAuthModeExplicit {
+				log.Fatal("could not resolve a Kubernetes config for TokenReview validation (POLICY_MANAGER_INTERNAL_AUTH_MODE=tokenreview was set explicitly — fail closed, IAM-WU-11)",
+					zap.Error(cfgErr),
+					zap.String("hint", "run inside a Pod with a service-account token, set --kubeconfig=PATH, or set POLICY_MANAGER_INTERNAL_AUTH_MODE=static for non-cluster/demo deployments"),
+				)
+			}
+			log.Warn("internal decisions channel auth: TokenReview unavailable (no kube client); defaulting to static bearer token. Set POLICY_MANAGER_INTERNAL_AUTH_MODE=tokenreview explicitly once a kubeconfig is available, or POLICY_MANAGER_INTERNAL_AUTH_MODE=static to silence this warning.",
+				zap.Error(cfgErr),
+			)
+			break
+		}
+		cs, csErr := kubernetes.NewForConfig(restCfg)
+		if csErr != nil {
+			if internalAuthModeExplicit {
+				log.Fatal("could not build a Kubernetes clientset for TokenReview validation (POLICY_MANAGER_INTERNAL_AUTH_MODE=tokenreview was set explicitly — fail closed, IAM-WU-11)",
+					zap.Error(csErr),
+				)
+			}
+			log.Warn("internal decisions channel auth: TokenReview unavailable (clientset build failed); defaulting to static bearer token.",
+				zap.Error(csErr),
+			)
+			break
+		}
+		policyManager.SetInternalTokenReviewer(
+			policymanager.NewInternalTokenAuthenticator(
+				cs.AuthenticationV1().TokenReviews(),
+				internalAudience,
+				internalSubject,
+				log.Named("internal-tokenreview"),
+			),
+		)
+		log.Info("internal decisions channel auth: TokenReview (audience+subject-bound) ENABLED",
+			zap.String("expected_audience", internalAudience),
+			zap.String("expected_subject", internalSubject),
+		)
+
+		// Read side of the decisions plane (GET /stream + /recent): a SECOND
+		// authenticator over the SAME clientset and audience, pinned to the
+		// DASHBOARD SA so the dashboard's upstream subscriber authenticates to the
+		// read feeds without weakening the webhook-SA pin on /internal (IAM-WU-11,
+		// Inc7 Stream A). An empty reader subject disables the subject pin
+		// (audience-only) and NewInternalTokenAuthenticator logs a one-time warn.
+		policyManager.SetDecisionsReadAuthenticator(
+			policymanager.NewInternalTokenAuthenticator(
+				cs.AuthenticationV1().TokenReviews(),
+				internalAudience,
+				decisionsReaderSubject,
+				log.Named("decisions-read-tokenreview"),
+			),
+		)
+		log.Info("decisions read channel auth: TokenReview (audience+subject-bound) ENABLED",
+			zap.String("expected_audience", internalAudience),
+			zap.String("expected_subject", decisionsReaderSubject),
+		)
+
+	case authModeInvalid:
+		// Unknown value → operator typo → fail closed. This mirrors the Helm
+		// chart's enum guard (mode must be tokenreview or static).
+		log.Fatal("invalid POLICY_MANAGER_INTERNAL_AUTH_MODE; must be one of: tokenreview, static",
+			zap.String("value", internalAuthModeRaw),
+		)
+	}
+
+	// Background-process context. Canceled on SIGINT/SIGTERM below; the CRD
+	// controllers, the policy manager, and the TLS cert reloader stop when this
+	// is canceled. Created BEFORE the servers start so the reloader shares it.
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
 	// Setup API server and metrics server. Router definitions live in
 	// internal/policymanager so integration tests can mount the same routes
 	// against an in-process Manager without duplicating the route table.
-	apiServer := &http.Server{
-		Addr:         fmt.Sprintf(":%d", *port),
-		Handler:      policymanager.NewAPIRouter(policyManager),
-		ReadTimeout:  30 * time.Second,
-		WriteTimeout: 30 * time.Second,
-		IdleTimeout:  60 * time.Second,
+	//
+	// The API server (:8080) serves TLS 1.3 (CRY-WU-05): the internal bearer
+	// token previously crossed this listener in plaintext. TLS parameters are
+	// config-driven (CRY-WU-03) and the certificate is served via a hot-reload
+	// callback (CRY-WU-10). The metrics server (:9091) stays plain HTTP — it
+	// carries no secret and is the target of the liveness/readiness probes and
+	// the Prometheus scrape.
+	// Optional mutual TLS on the API listener (IAM-WU-03). An explicit
+	// --client-ca-path overrides the config-file value; --require-client-cert is
+	// the authoritative enforcement switch (mirrors the webhook, IAM-WU-06). The
+	// branch logic lives in buildAPITLSConfig so it is unit-tested directly.
+	if *clientCAPath != "" {
+		cfg.Security.TLS.ClientCAPath = *clientCAPath
 	}
-	metricsServer := &http.Server{
-		Addr:         fmt.Sprintf(":%d", *metricsPort),
-		Handler:      policymanager.NewMetricsRouter(),
-		ReadTimeout:  10 * time.Second,
-		WriteTimeout: 10 * time.Second,
-		IdleTimeout:  30 * time.Second,
+	tlsConf, err := buildAPITLSConfig(cfg.Security.TLS, *requireClientCert)
+	if err != nil {
+		log.Fatal("Failed to build API TLS config", zap.Error(err))
 	}
+	switch tlsConf.ClientAuth {
+	case tls.RequireAndVerifyClientCert:
+		log.Info("policy-manager API mTLS ENFORCED (RequireAndVerifyClientCert)",
+			zap.String("client_ca_path", cfg.Security.TLS.ClientCAPath),
+			zap.Bool("mtls_enforced", true),
+		)
+	case tls.VerifyClientCertIfGiven:
+		log.Info("policy-manager API optional mTLS (client-CA loaded; a presented client cert is verified, an absent cert is admitted)",
+			zap.String("client_ca_path", cfg.Security.TLS.ClientCAPath),
+		)
+	}
+
+	// OIDC bearer authN + RBAC for the management plane (IAM-WU-01/02). When
+	// security.authentication.enabled is false the management API is served
+	// unauthenticated — a tracked dev-only gap. NewOIDCVerifier only sets up a
+	// lazy RemoteKeySet (no blocking network call); if it errors we fail closed.
+	var apiVerifier policymanager.OIDCVerifier
+	if cfg.Security.Authentication.Enabled {
+		apiVerifier, err = policymanager.NewOIDCVerifier(ctx, cfg.Security.Authentication)
+		if err != nil {
+			log.Fatal("Failed to build OIDC verifier", zap.Error(err))
+		}
+	}
+	log.Info("policy-manager API authentication configured",
+		zap.Bool("oidc_enforced", cfg.Security.Authentication.Enabled),
+		zap.String("issuer", cfg.Security.Authentication.Issuer),
+		zap.Int("rbac_role_bindings", len(cfg.Security.RBAC.RoleBindings)),
+	)
+	if !cfg.Security.Authentication.Enabled {
+		log.Warn("SECURITY: OIDC authentication is DISABLED — the policy-manager management API (/api/v1 policies/bundles/exceptions/compliance) is served UNAUTHENTICATED. This is a dev-only posture and a tracked gap; production deployments MUST set security.authentication.enabled=true with issuer/jwks_url/audience.")
+	}
+	certReloader, err := tlsreload.New(*certPath, *keyPath, log.Named("tls-reload"),
+		tlsreload.WithOnReload(func(cert *tls.Certificate) {
+			if cert != nil && cert.Leaf != nil {
+				metricsCollector.SetCertExpiry("policy-manager", cert.Leaf.NotAfter)
+			}
+		}))
+	if err != nil {
+		log.Fatal("Failed to load API TLS certificate", zap.Error(err))
+	}
+	tlsConf.GetCertificate = certReloader.GetCertificate
+	go func() {
+		if startErr := certReloader.Start(ctx); startErr != nil {
+			log.Error("TLS certificate reloader stopped with error", zap.Error(startErr))
+		}
+	}()
+
+	// Rate-limiting / DoS-protection config (NET-WU-15, RES-WU-17). Flags
+	// override the config-file values (security.ratelimit.*). The SSE stream cap
+	// (max_stream_connections) bounds the long-lived /decisions/stream
+	// connections separately from the general concurrency cap.
+	rlCfg := resolveRateLimit(cfg.Security.RateLimit, rateLimitOverrides{
+		disabled:          *rateLimitDisabled,
+		requestsPerSecond: *rateLimitRPS,
+		burst:             *rateLimitBurst,
+		maxConcurrent:     *rateLimitMaxConcurrent,
+		maxBodyBytes:      *rateLimitMaxBodyBytes,
+		maxStreamConns:    *rateLimitMaxStreamConns,
+	})
+	log.Info("policy-manager rate-limiting configured",
+		zap.Bool("enabled", rlCfg.Enabled),
+		zap.Float64("requests_per_second", rlCfg.RequestsPerSecond),
+		zap.Int("burst", rlCfg.Burst),
+		zap.Int("max_concurrent", rlCfg.MaxConcurrent),
+		zap.Int64("max_body_bytes", rlCfg.MaxBodyBytes),
+		zap.Int("max_stream_connections", rlCfg.MaxStreamConnections),
+	)
+
+	apiServer := newHTTPServer(
+		*port,
+		policymanager.NewAPIRouter(policyManager, cfg.Security.Authentication, cfg.Security.RBAC, apiVerifier, rlCfg, metricsCollector),
+		tlsConf,
+		serverTimeouts{read: 30 * time.Second, write: 30 * time.Second, idle: 60 * time.Second},
+	)
+	// When --metrics-tls is set (CRY-WU-08), the :9091 metrics endpoint serves
+	// TLS 1.3 (reusing the same hot-reload serving cert) and requires a bearer
+	// token on /metrics; /healthz + /readyz stay open for probes.
+	var (
+		metricsTLSConf  *tls.Config
+		metricsVerifier *auth.TokenVerifier
+	)
+	if *metricsTLS {
+		metricsTLSConf, err = config.BuildServerTLSConfig(cfg.Security.TLS, nil)
+		if err != nil {
+			log.Fatal("Failed to build metrics TLS config", zap.Error(err))
+		}
+		metricsTLSConf.GetCertificate = certReloader.GetCertificate
+		metricsVerifier = auth.NewTokenVerifier(
+			os.Getenv("POLICY_MANAGER_INTERNAL_TOKEN"),
+			os.Getenv("POLICY_MANAGER_INTERNAL_TOKEN_PREVIOUS"),
+		)
+	}
+	metricsServer := newHTTPServer(
+		*metricsPort,
+		policymanager.NewMetricsRouter(metricsVerifier),
+		metricsTLSConf,
+		serverTimeouts{read: 10 * time.Second, write: 10 * time.Second, idle: 30 * time.Second},
+	)
 
 	// Start servers
 	go func() {
-		log.Info("Starting metrics server", zap.Int("port", *metricsPort))
-		if err := metricsServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Fatal("Failed to start metrics server", zap.Error(err))
+		log.Info("Starting metrics server", zap.Int("port", *metricsPort), zap.Bool("tls", *metricsTLS))
+		var serr error
+		if *metricsTLS {
+			serr = metricsServer.ListenAndServeTLS("", "")
+		} else {
+			serr = metricsServer.ListenAndServe()
+		}
+		if serr != nil && serr != http.ErrServerClosed {
+			log.Fatal("Failed to start metrics server", zap.Error(serr))
 		}
 	}()
 
 	go func() {
-		log.Info("Starting policy manager API server", zap.Int("port", *port))
-		if err := apiServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		log.Info("Starting policy manager API server (TLS)", zap.Int("port", *port))
+		// Empty cert/key paths: the certificate is served via
+		// TLSConfig.GetCertificate (the reloader), not a one-shot file read.
+		if err := apiServer.ListenAndServeTLS("", ""); err != nil && err != http.ErrServerClosed {
 			log.Fatal("Failed to start API server", zap.Error(err))
 		}
 	}()
-
-	// Start policy manager background processes
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
 
 	go policyManager.Start(ctx)
 
@@ -151,7 +442,29 @@ func main() {
 				LeaderElectionNamespace: ns,
 				PolicySink:              policyManager,
 				ExceptionSink:           policyManager,
-				// DisableLeaderElection: zero value (false) → election ENABLED.
+				// DisableLeaderElection: zero value (false) → election ENABLED at
+				// the manager level (the Lease stays observable for HA tooling).
+				//
+				// LeaderlessReconcilers=true (RES-WU-03, CP-2/CP-10): the
+				// policy-manager serves /api/v1/policies and /api/v1/exceptions
+				// from a PER-POD in-memory registry, so every replica must
+				// reconcile to answer reads with fresh state — and killing the
+				// lease-holder must not stall reconciliation on the survivors.
+				// This mirrors the admission-webhook's leaderless engine. The
+				// reconcile-audit emission is leader-gated inside StartControllers
+				// (auditWhenLeader) so the duplicate-free AU-2/AU-12 contract from
+				// P7 is preserved while every replica's registry stays current.
+				LeaderlessReconcilers: true,
+				// Bound the reconciler worker pool (RES-WU-17). <= 0 defers to
+				// the package default (2).
+				MaxConcurrentReconciles: *maxConcurrentReconciles,
+				// Audit reconcile-driven CRD create/update/delete and exception
+				// expiry, attributed to the controller service account
+				// (AUD-WU-12, AU-2/AU-12). Shares the same audit logger as the
+				// management-plane mutations so all configuration changes land in
+				// one stream. ControllerNamespace is the resolved pod namespace.
+				AuditLogger:         auditLogger,
+				ControllerNamespace: ns,
 			}
 			if err := policymanager.StartControllers(ctx, restCfg, log, opts); err != nil && !errors.Is(err, context.Canceled) {
 				log.Error("CRD controller manager exited with error", zap.Error(err))
@@ -168,6 +481,16 @@ func main() {
 
 	log.Info("Shutting down servers...")
 
+	// RES-WU-07 (CP-10): keep serving for the drain delay so the Service
+	// endpoints removal for this Terminating pod propagates before the listeners
+	// close — webhook decision publishes and dashboard reads retarget to
+	// surviving replicas instead of failing. Distroless/k8s<1.29-safe (no preStop
+	// sleep). The servers are still up during this sleep (Shutdown is below).
+	if *shutdownDrainDelay > 0 {
+		log.Info("draining before shutdown (RES-WU-07)", zap.Duration("delay", *shutdownDrainDelay))
+		time.Sleep(*shutdownDrainDelay)
+	}
+
 	// Graceful shutdown
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer shutdownCancel()
@@ -182,5 +505,148 @@ func main() {
 		log.Error("Failed to shutdown metrics server", zap.Error(err))
 	}
 
+	// Flush and close the audit logger last so any ConfigurationChange events
+	// buffered by in-flight mutations are persisted before exit (IAM-WU-14).
+	if err := auditLogger.Close(); err != nil {
+		log.Error("Failed to close audit logger", zap.Error(err))
+	}
+
 	log.Info("Servers stopped")
+}
+
+// buildAPITLSConfig builds the policy-manager API (:8080) listener TLS config
+// with OPTIONAL mutual TLS (IAM-WU-03). requireClientCert is authoritative over
+// the config's client_auth string, mirroring the admission webhook (IAM-WU-06):
+//
+//   - requireClientCert=true → RequireAndVerifyClientCert; fails CLOSED with an
+//     error when no client-CA bundle is configured (serving an enforce-intent
+//     listener that cannot verify is worse than refusing to start).
+//   - requireClientCert=false + a client-CA bundle present → VerifyClientCertIfGiven:
+//     a presented client cert is verified against the CA, an absent one is
+//     admitted. The shipped config default client_auth="require" must NOT be
+//     allowed to silently lock out the OIDC/bearer-authenticated operators that
+//     optional mode keeps serving, so an enforcing mode is downgraded here.
+//   - requireClientCert=false + no bundle → server-auth only (BuildServerTLSConfig
+//     downgrades a "require" config to NoClientCert when no pool is supplied).
+func buildAPITLSConfig(tlsCfg config.TLSConfig, requireClientCert bool) (*tls.Config, error) {
+	clientCAs, err := config.LoadClientCAPool(tlsCfg.ClientCAPath)
+	if err != nil {
+		return nil, fmt.Errorf("load client-CA bundle: %w", err)
+	}
+	if requireClientCert && clientCAs == nil {
+		return nil, fmt.Errorf("client certificate verification is required (--require-client-cert=true) but no client-CA bundle was provided via --client-ca-path / security.tls.client_ca_path; supply the CA that signs the webhook/dashboard client certificates, or leave --require-client-cert=false (optional mTLS)")
+	}
+	tlsConf, err := config.BuildServerTLSConfig(tlsCfg, clientCAs)
+	if err != nil {
+		return nil, err
+	}
+	switch {
+	case requireClientCert:
+		// Authoritative enforce: force RequireAndVerifyClientCert regardless of the
+		// config's client_auth. clientCAs is guaranteed non-nil (checked above).
+		tlsConf.ClientCAs = clientCAs
+		tlsConf.ClientAuth = tls.RequireAndVerifyClientCert
+	case clientCAs != nil:
+		// Optional mTLS: verify a presented cert, admit an absent one. The config
+		// default client_auth="require" would otherwise enforce and lock out the
+		// cert-less callers (human operators) that optional mode must keep serving.
+		tlsConf.ClientAuth = tls.VerifyClientCertIfGiven
+	}
+	return tlsConf, nil
+}
+
+// rateLimitOverrides carries the CLI flag overrides for the rate-limit /
+// DoS-protection config (NET-WU-15, RES-WU-17). The sentinel-"use config"
+// convention matches the flag defaults: disabled=false leaves the config's
+// Enabled untouched, and every numeric override is applied only when >= 0
+// (a negative value, e.g. the flag default -1, defers to the config file).
+type rateLimitOverrides struct {
+	disabled          bool
+	requestsPerSecond float64
+	burst             int
+	maxConcurrent     int
+	maxBodyBytes      int64
+	maxStreamConns    int
+}
+
+// resolveRateLimit merges the CLI flag overrides over the config-file
+// security.ratelimit.* values. Flags win when set; an unset numeric flag
+// (negative sentinel) keeps the config value. This is the exact precedence the
+// inline main() block applied, lifted out verbatim so it can be unit-tested
+// independently of the global flag state.
+func resolveRateLimit(cfg config.RateLimitConfig, o rateLimitOverrides) config.RateLimitConfig {
+	if o.disabled {
+		cfg.Enabled = false
+	}
+	if o.requestsPerSecond >= 0 {
+		cfg.RequestsPerSecond = o.requestsPerSecond
+	}
+	if o.burst >= 0 {
+		cfg.Burst = o.burst
+	}
+	if o.maxConcurrent >= 0 {
+		cfg.MaxConcurrent = o.maxConcurrent
+	}
+	if o.maxBodyBytes >= 0 {
+		cfg.MaxBodyBytes = o.maxBodyBytes
+	}
+	if o.maxStreamConns >= 0 {
+		cfg.MaxStreamConnections = o.maxStreamConns
+	}
+	return cfg
+}
+
+// serverTimeouts groups the three http.Server timeout knobs so newHTTPServer
+// keeps a small, named signature instead of three bare time.Duration args.
+type serverTimeouts struct {
+	read  time.Duration
+	write time.Duration
+	idle  time.Duration
+}
+
+// newHTTPServer constructs an *http.Server listening on :port with the given
+// handler, optional TLS config, and timeouts. It is the verbatim struct literal
+// the inline main() blocks used for the API (:8080) and metrics (:9091)
+// servers, lifted out so the address formatting and field wiring are
+// unit-tested. A nil tlsConf yields a plain-HTTP server (the metrics default).
+func newHTTPServer(port int, handler http.Handler, tlsConf *tls.Config, t serverTimeouts) *http.Server {
+	return &http.Server{
+		Addr:         fmt.Sprintf(":%d", port),
+		Handler:      handler,
+		TLSConfig:    tlsConf,
+		ReadTimeout:  t.read,
+		WriteTimeout: t.write,
+		IdleTimeout:  t.idle,
+	}
+}
+
+// internalAuthMode classifies the POLICY_MANAGER_INTERNAL_AUTH_MODE selection
+// (IAM-WU-11) for the webhook -> policy-manager decisions channel.
+type internalAuthMode int
+
+const (
+	// authModeStatic: shared bearer token, no TokenReview (the demo/non-cluster
+	// escape hatch). Selected by the literal value "static".
+	authModeStatic internalAuthMode = iota
+	// authModeTokenReview: audience+subject-bound TokenReview (the default).
+	// Selected by "tokenreview" or an unset/empty value.
+	authModeTokenReview
+	// authModeInvalid: an operator typo. Any other value fails closed, mirroring
+	// the Helm chart's enum guard.
+	authModeInvalid
+)
+
+// classifyInternalAuthMode maps the raw POLICY_MANAGER_INTERNAL_AUTH_MODE env
+// value to its mode. The empty string defaults to TokenReview (the Inc5
+// default); the static escape hatch and the typo→fail-closed branch are
+// preserved exactly as the inline switch handled them.
+func classifyInternalAuthMode(raw string) internalAuthMode {
+	switch raw {
+	case "static":
+		return authModeStatic
+	case "tokenreview", "":
+		return authModeTokenReview
+	default:
+		return authModeInvalid
+	}
 }

@@ -77,7 +77,7 @@ linters:
       # warning visible at the call sites but don't fail CI on it.
       - linters:
           - staticcheck
-        text: 'SA1019: "github\.com/open-policy-agent/opa/(rego|storage)'
+        text: 'SA1019: "github\.com/open-policy-agent/opa/(rego|storage|ast)'
       # k8s wait.PollImmediate is deprecated in favour of PollUntilContextTimeout;
       # the e2e framework migration is tracked separately.
       - linters:

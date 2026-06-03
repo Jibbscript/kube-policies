@@ -1,0 +1,44 @@
+{{- if and .Values.admissionWebhook.enabled .Values.admissionWebhook.hpa.enabled }}
+# RES-WU-18 (CP-10/SC-5/CP-2): HorizontalPodAutoscaler for the admission webhook
+# so it scales out under admission load spikes instead of throttling / failing
+# closed. minReplicas is floored at 2 to preserve availability, and the PDB
+# (RES-WU-01) keeps voluntary disruptions within budget as the HPA scales.
+# NOTE: when enabled, the Deployment omits a static replicas field (see
+# admission-webhook-deployment.yaml) so helm upgrades do not fight the HPA.
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ include "kube-policies.fullname" . }}-admission-webhook
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kube-policies.labels" . | nindent 4 }}
+    app.kubernetes.io/component: admission-webhook
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ include "kube-policies.fullname" . }}-admission-webhook
+  minReplicas: {{ max (.Values.admissionWebhook.hpa.minReplicas | default 2 | int) 2 }}
+  maxReplicas: {{ .Values.admissionWebhook.hpa.maxReplicas | default 6 | int }}
+  metrics:
+    {{- if .Values.admissionWebhook.hpa.targetCPUUtilizationPercentage }}
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: {{ .Values.admissionWebhook.hpa.targetCPUUtilizationPercentage | int }}
+    {{- end }}
+    {{- if .Values.admissionWebhook.hpa.targetMemoryUtilizationPercentage }}
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: {{ .Values.admissionWebhook.hpa.targetMemoryUtilizationPercentage | int }}
+    {{- end }}
+  {{- with .Values.admissionWebhook.hpa.behavior }}
+  behavior:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+{{- end }}

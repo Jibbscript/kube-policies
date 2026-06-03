@@ -13,6 +13,10 @@ GO_VERSION := 1.25
 GOOS ?= $(shell go env GOOS)
 GOARCH ?= $(shell go env GOARCH)
 CGO_ENABLED ?= 0
+# GOFIPS140 selects the Go native FIPS 140-3 cryptographic module (CRY-WU-01).
+# Default to the validated version; override with `make build GOFIPS140=off`
+# on toolchains without the module.
+GOFIPS140 ?= v1.0.0
 
 # Build configuration
 LDFLAGS := -s -w -X main.version=$(VERSION) -X main.commit=$(COMMIT) -X main.date=$(DATE)
@@ -84,7 +88,7 @@ build: build-admission-webhook build-policy-manager $(if $(WITH_UI),build-dashbo
 build-admission-webhook: ## Build admission webhook binary
 	@echo "$(BLUE)Building admission webhook...$(NC)"
 	mkdir -p $(DIST_DIR)
-	CGO_ENABLED=$(CGO_ENABLED) GOOS=$(GOOS) GOARCH=$(GOARCH) go build \
+	CGO_ENABLED=$(CGO_ENABLED) GOOS=$(GOOS) GOARCH=$(GOARCH) GOFIPS140=$(GOFIPS140) go build \
 		$(BUILD_FLAGS) \
 		-o $(DIST_DIR)/admission-webhook-$(GOOS)-$(GOARCH) \
 		./cmd/admission-webhook
@@ -94,7 +98,7 @@ build-admission-webhook: ## Build admission webhook binary
 build-policy-manager: ## Build policy manager binary
 	@echo "$(BLUE)Building policy manager...$(NC)"
 	mkdir -p $(DIST_DIR)
-	CGO_ENABLED=$(CGO_ENABLED) GOOS=$(GOOS) GOARCH=$(GOARCH) go build \
+	CGO_ENABLED=$(CGO_ENABLED) GOOS=$(GOOS) GOARCH=$(GOARCH) GOFIPS140=$(GOFIPS140) go build \
 		$(BUILD_FLAGS) \
 		-o $(DIST_DIR)/policy-manager-$(GOOS)-$(GOARCH) \
 		./cmd/policy-manager
@@ -158,6 +162,23 @@ test-unit: ## Run unit tests
 		echo "$(GREEN)Unit test coverage report: coverage-unit.html$(NC)"; \
 	fi
 
+.PHONY: test-policy
+test-policy: ## Run the policy library suite (per-rule coverage, control matrix, profiles, compile gate, bundle digest) — POL-WU-25
+	@echo "$(BLUE)Running policy library tests...$(NC)"
+	go test -race -count=1 ./internal/policy/...
+	@echo "$(BLUE)Verifying policy bundle digest is reproducible...$(NC)"
+	@d1="$$(go run ./cmd/policybundle digest)"; d2="$$(go run ./cmd/policybundle digest)"; \
+		if [ "$$d1" != "$$d2" ]; then echo "$(RED)policy bundle digest not reproducible: $$d1 != $$d2$(NC)"; exit 1; fi; \
+		echo "$(GREEN)Policy bundle digest: $$d1$(NC)"
+
+.PHONY: policy-bundle-manifest
+policy-bundle-manifest: ## Emit the canonical policy-bundle manifest JSON (POL-WU-27)
+	@go run ./cmd/policybundle manifest
+
+.PHONY: policy-bundle-digest
+policy-bundle-digest: ## Emit the SHA-256 digest of the policy bundle (POL-WU-27)
+	@go run ./cmd/policybundle digest
+
 .PHONY: test-integration
 test-integration: ## Run integration tests
 	@echo "$(BLUE)Running integration tests...$(NC)"
@@ -174,6 +195,14 @@ test-integration: ## Run integration tests
 		echo "$(GREEN)Integration test coverage report: coverage-integration.html$(NC)"; \
 	fi
 
+.PHONY: cover-gate
+cover-gate: ## Enforce the unit-coverage floor (SDL-WU-03) — fails below MIN_COVERAGE (default 60, ratchets to 80)
+	@MIN_COVERAGE=$${MIN_COVERAGE:-60} bash scripts/test/cover-gate.sh coverage-unit.out
+
+.PHONY: cover-merge
+cover-merge: ## Merge unit + integration coverage profiles into coverage-merged.out (SDL-WU-04)
+	@bash scripts/test/merge-coverage.sh coverage-unit.out coverage-integration.out
+
 .PHONY: test-e2e
 test-e2e: ## Run end-to-end tests
 	@echo "$(BLUE)Running E2E tests...$(NC)"
@@ -183,6 +212,16 @@ test-e2e: ## Run end-to-end tests
 test-kind: ## Run tests on Kind cluster
 	@echo "$(BLUE)Running Kind cluster tests...$(NC)"
 	$(SCRIPTS_DIR)/test/test-kind.sh
+
+.PHONY: test-netpol-e2e
+test-netpol-e2e: ## Prove NetworkPolicy segmentation on a Calico (enforcing CNI) Kind cluster (P4 exit gate)
+	@echo "$(BLUE)Running NetworkPolicy segmentation E2E (Calico-enforced Kind)...$(NC)"
+	$(SCRIPTS_DIR)/test/test-netpol-e2e.sh
+
+.PHONY: test-pss-admission-e2e
+test-pss-admission-e2e: ## Prove restricted PSA admits hardened chart pods + drift-detect exits non-zero (P5 exit gate; vanilla Kind, no CNI)
+	@echo "$(BLUE)Running PSA restricted admission + drift E2E (vanilla Kind)...$(NC)"
+	$(SCRIPTS_DIR)/test/test-pss-admission-e2e.sh
 
 .PHONY: test-k3s
 test-k3s: ## Run tests on k3s cluster (requires sudo)
@@ -235,18 +274,29 @@ vet: ## Run go vet
 	go vet ./...
 	@echo "$(GREEN)Vet completed$(NC)"
 
+# Pinned security-tool versions (VUL-WU-20) — mirror the CI gate versions so
+# `make security` / `make check` reproduce the CI security gates locally instead
+# of silently skipping when a tool is absent.
+GOSEC_VERSION ?= v2.26.1
+GOVULNCHECK_VERSION ?= v1.3.0
+
 .PHONY: security
-security: ## Run security scans
+security: ## Run security scans (installs pinned gosec+govulncheck; fails on findings; Trivy if present — VUL-WU-20)
 	@echo "$(BLUE)Running security scans...$(NC)"
-	@if command -v gosec >/dev/null 2>&1; then \
-		gosec ./...; \
+	@command -v gosec >/dev/null 2>&1 || { echo "$(YELLOW)installing gosec $(GOSEC_VERSION)...$(NC)"; go install github.com/securego/gosec/v2/cmd/gosec@$(GOSEC_VERSION); }
+	@command -v govulncheck >/dev/null 2>&1 || { echo "$(YELLOW)installing govulncheck $(GOVULNCHECK_VERSION)...$(NC)"; go install golang.org/x/vuln/cmd/govulncheck@$(GOVULNCHECK_VERSION); }
+	PATH="$$(go env GOPATH)/bin:$$PATH" gosec -severity medium -confidence medium ./...
+	PATH="$$(go env GOPATH)/bin:$$PATH" govulncheck ./...
+	@# Trivy mirrors the CI fs/image/config gates. It is not go-installable, so it
+	@# is run only when present locally (CI always runs the gated Trivy scans).
+	@if command -v trivy >/dev/null 2>&1; then \
+		echo "$(BLUE)Trivy fs scan (CRITICAL,HIGH)...$(NC)"; \
+		trivy fs --severity CRITICAL,HIGH --ignore-unfixed --exit-code 1 .; \
+		echo "$(BLUE)Trivy config/misconfig scan (CRITICAL,HIGH)...$(NC)"; \
+		trivy config --severity CRITICAL,HIGH --exit-code 1 \
+			--skip-dirs 'demo,test,web,examples' --ignorefile .trivyignore.yaml .; \
 	else \
-		echo "$(YELLOW)gosec not installed, skipping security scan$(NC)"; \
-	fi
-	@if command -v govulncheck >/dev/null 2>&1; then \
-		govulncheck ./...; \
-	else \
-		echo "$(YELLOW)govulncheck not installed, skipping vulnerability check$(NC)"; \
+		echo "$(YELLOW)trivy not installed locally; CI runs the gated Trivy fs/image/config scans$(NC)"; \
 	fi
 
 .PHONY: check-logger-wiring
@@ -258,6 +308,124 @@ validate-manifests: ## Validate Helm, Kubernetes, Prometheus, Alertmanager, and 
 	@echo "$(BLUE)Validating deployment artifacts offline...$(NC)"
 	bash scripts/validate/manifests.sh
 	@echo "$(GREEN)Deployment artifact validation completed$(NC)"
+
+.PHONY: validate-rbac
+validate-rbac: ## Gate RBAC + ServiceAccount-token least-privilege (IAM-WU-17) via conftest on the rendered chart
+	@echo "$(BLUE)Gating RBAC/SA-token least-privilege (IAM-WU-17)...$(NC)"
+	@command -v conftest >/dev/null 2>&1 || { echo "$(RED)conftest not found — install conftest (https://www.conftest.dev) and rerun$(NC)"; exit 127; }
+	@tmp="$$(mktemp -d)"; trap 'rm -rf "$$tmp"' EXIT; \
+	helm template kube-policies $(CHARTS_DIR)/kube-policies \
+		--set policyManager.internalAuth.mode=tokenreview --set dashboard.enabled=true >"$$tmp/rendered-tokenreview.yaml"; \
+	helm template kube-policies $(CHARTS_DIR)/kube-policies \
+		--set policyManager.internalAuth.mode=static --set dashboard.enabled=true >"$$tmp/rendered-static.yaml"; \
+	for f in "$$tmp/rendered-tokenreview.yaml" "$$tmp/rendered-static.yaml"; do \
+		echo "==> conftest (per-document) $$f"; \
+		conftest test --policy test/policy --namespace rbac.leastprivilege --namespace sa.token "$$f"; \
+		echo "==> conftest (--combine) $$f"; \
+		conftest test --combine --policy test/policy --namespace sa.shared "$$f"; \
+	done; \
+	echo "$(BLUE)==> Policy self-test: each fail fixture must be denied$(NC)"; \
+	broken=0; \
+	for fx in \
+		test/policy/fixtures/fail/secrets-clusterrole.yaml \
+		test/policy/fixtures/fail/secrets-subresource.yaml \
+		test/policy/fixtures/fail/missing-automount.yaml; do \
+		echo "  self-test (per-doc): $$fx"; \
+		if conftest test --policy test/policy \
+			--namespace rbac.leastprivilege --namespace sa.token "$$fx" 2>&1; then \
+			echo "$(RED)  POLICY SELF-TEST FAILED: $$fx produced 0 denies — deny rule is broken$(NC)" >&2; \
+			broken=1; \
+		else \
+			echo "  OK — $$fx correctly denied"; \
+		fi; \
+	done; \
+	for fx in \
+		test/policy/fixtures/fail/shared-sa.yaml \
+		test/policy/fixtures/fail/label-drift.yaml; do \
+		echo "  self-test (--combine): $$fx"; \
+		if conftest test --combine --policy test/policy \
+			--namespace sa.shared "$$fx" 2>&1; then \
+			echo "$(RED)  POLICY SELF-TEST FAILED: $$fx produced 0 denies — deny rule is broken$(NC)" >&2; \
+			broken=1; \
+		else \
+			echo "  OK — $$fx correctly denied"; \
+		fi; \
+	done; \
+	if [ "$$broken" -ne 0 ]; then \
+		echo "$(RED)Policy self-test failed — a deny rule is not firing. Fix the Rego.$(NC)" >&2; \
+		exit 1; \
+	fi
+	@echo "$(GREEN)RBAC/SA-token least-privilege gate passed (policy self-test green)$(NC)"
+
+CHART_ALERT_RULES := charts/kube-policies/files/alerts charts/kube-policies/files/slo
+STANDALONE_RULES := monitoring/prometheus/rules/kube-policies.rules.yml
+
+.PHONY: gen-monitoring-rules
+gen-monitoring-rules: ## Regenerate the standalone Prometheus rules file from the chart single source (IRM-WU-14)
+	@command -v yq >/dev/null 2>&1 || { echo "$(RED)yq not found — install yq (https://github.com/mikefarah/yq) and rerun$(NC)"; exit 127; }
+	@mkdir -p $(dir $(STANDALONE_RULES))
+	@{ \
+	  printf '%s\n' \
+	    '# GENERATED — DO NOT EDIT. Single source: charts/kube-policies/files/alerts/*.yaml' \
+	    '# + charts/kube-policies/files/slo/*.yaml. Regenerate with: make gen-monitoring-rules' \
+	    '# Standalone (bring-your-own Prometheus) mount of the same rules the chart ships' \
+	    '# as a PrometheusRule (IRM-WU-14 / RES-WU-10).'; \
+	  yq eval-all '[.] | {"groups": [.[].groups[]]}' \
+	    charts/kube-policies/files/alerts/*.yaml charts/kube-policies/files/slo/*.yaml; \
+	} > $(STANDALONE_RULES)
+	@echo "$(GREEN)Regenerated $(STANDALONE_RULES) from the chart single source$(NC)"
+
+.PHONY: validate-monitoring-rules
+validate-monitoring-rules: ## Validate alert rules (promtool check+test), metric-name drift, and standalone-rules freshness (NET-WU-23, IRM-WU-15)
+	@echo "$(BLUE)Validating Prometheus alert rules (IRM-WU-15)...$(NC)"
+	@command -v promtool >/dev/null 2>&1 || { echo "$(RED)promtool not found — install Prometheus (https://prometheus.io/download/) and rerun$(NC)"; exit 127; }
+	@rule_files="$$(find $(CHART_ALERT_RULES) -name '*.yaml' | sort)"; \
+	test -n "$$rule_files" || { echo "$(RED)no chart rule files found under $(CHART_ALERT_RULES)$(NC)" >&2; exit 1; }; \
+	echo "==> promtool check rules (chart single source)"; \
+	promtool check rules $$rule_files
+	@test_files="$$(find tests/monitoring -name '*_test.yaml' | sort)"; \
+	test -n "$$test_files" || { echo "$(RED)no promtool unit-test files (*_test.yaml) found under tests/monitoring$(NC)" >&2; exit 1; }; \
+	echo "==> promtool test rules (tests/monitoring)"; \
+	promtool test rules $$test_files
+	@echo "==> metric-name drift check (rules must reference only metrics collector.go emits)"; \
+	find $(CHART_ALERT_RULES) -name '*.yaml' -print0 | sort -z | xargs -0 ./scripts/validate/metric-name-drift.sh
+	@echo "==> Falco ruleset copies are in sync (chart vs canonical)"; \
+	diff -q monitoring/falco/kube-policies-rules.yaml charts/kube-policies/files/falco/kube-policies-rules.yaml \
+		|| { echo "$(RED)Falco rule copies diverged — sync monitoring/falco/ and charts/kube-policies/files/falco/$(NC)" >&2; exit 1; }
+	@echo "==> standalone rules freshness ($(STANDALONE_RULES) must match the chart source)"; \
+	git ls-files --error-unmatch $(STANDALONE_RULES) >/dev/null 2>&1 || { echo "$(RED)$(STANDALONE_RULES) is untracked — 'git add' it so the freshness gate is meaningful$(NC)" >&2; exit 1; }; \
+	$(MAKE) -s gen-monitoring-rules; \
+	git diff --exit-code -- $(STANDALONE_RULES) || { echo "$(RED)$(STANDALONE_RULES) is stale — run 'make gen-monitoring-rules' and commit$(NC)" >&2; exit 1; }
+	@echo "$(GREEN)Alert rule validation + unit tests + drift + Falco-sync + freshness passed$(NC)"
+
+.PHONY: validate-alertmanager-config
+validate-alertmanager-config: ## Validate rendered + standalone Alertmanager configs with amtool (IRM-WU-15/16)
+	@echo "$(BLUE)Validating Alertmanager configs (IRM-WU-15)...$(NC)"
+	@command -v amtool >/dev/null 2>&1 || { echo "$(RED)amtool not found — install Alertmanager (https://prometheus.io/download/) and rerun$(NC)"; exit 127; }
+	@command -v helm >/dev/null 2>&1 || { echo "$(RED)helm not found$(NC)"; exit 127; }
+	@echo "==> amtool check-config (standalone)"; \
+	amtool check-config monitoring/alertmanager/alertmanager.yaml
+	@echo "==> amtool check-config (chart-rendered, all receivers)"; \
+	tmp="$$(mktemp)"; \
+	helm template kp $(CHARTS_DIR)/kube-policies \
+	  --set monitoring.alertmanager.config.enabled=true \
+	  --set monitoring.alertmanager.config.existingSecret=am-secrets \
+	  --set monitoring.alertmanager.config.receivers.pagerduty.enabled=true \
+	  --set monitoring.alertmanager.config.receivers.slack.enabled=true \
+	  --set monitoring.alertmanager.config.receivers.email.enabled=true \
+	  --set monitoring.alertmanager.config.receivers.email.to=secops@example.com \
+	  --set monitoring.alertmanager.config.receivers.email.smarthost=smtp.example.com:587 \
+	  --set monitoring.alertmanager.config.heartbeat.enabled=true \
+	  --show-only templates/alertmanager-config.yaml \
+	  | yq ea 'select(.kind=="Secret") | .stringData."alertmanager.yml"' > "$$tmp"; \
+	amtool check-config "$$tmp"; rm -f "$$tmp"
+	@echo "$(GREEN)Alertmanager config validation passed$(NC)"
+
+.PHONY: validate-compliance
+validate-compliance: ## Validate compliance artifacts (control matrix, POA&M, inventory, doc links) offline
+	@echo "$(BLUE)Validating compliance artifacts offline...$(NC)"
+	bash scripts/validate/compliance.sh
+	@echo "$(GREEN)Compliance artifact validation completed$(NC)"
 
 .PHONY: check
 check: lint vet security check-logger-wiring ## Run all quality checks
@@ -436,12 +604,30 @@ build-dashboard: ## Build cmd/dashboard binary (requires ui-build first unless N
 	fi
 	@echo "$(BLUE)Building dashboard binary...$(NC)"
 	mkdir -p $(DIST_DIR)
-	CGO_ENABLED=$(CGO_ENABLED) GOOS=$(GOOS) GOARCH=$(GOARCH) go build \
+	CGO_ENABLED=$(CGO_ENABLED) GOOS=$(GOOS) GOARCH=$(GOARCH) GOFIPS140=$(GOFIPS140) go build \
 		$(BUILD_FLAGS) \
 		$(if $(NO_UI),-tags=no_ui,) \
 		-o $(DIST_DIR)/dashboard-$(GOOS)-$(GOARCH) \
 		./cmd/dashboard
 	@echo "$(GREEN)Dashboard built: $(DIST_DIR)/dashboard-$(GOOS)-$(GOARCH)$(NC)"
+
+.PHONY: verify-fips
+verify-fips: ## Build all binaries with the FIPS 140-3 module and assert the GOFIPS140 marker (CRY-WU-01)
+	@echo "$(BLUE)Verifying FIPS 140-3 build markers (GOFIPS140=$(GOFIPS140))...$(NC)"
+	@if [ "$(GOFIPS140)" = "off" ] || [ -z "$(GOFIPS140)" ]; then \
+		echo "$(RED)verify-fips requires GOFIPS140 to be set to a validated version (got '$(GOFIPS140)')$(NC)"; exit 1; \
+	fi
+	$(MAKE) build-admission-webhook build-policy-manager GOFIPS140=$(GOFIPS140)
+	$(MAKE) build-dashboard GOFIPS140=$(GOFIPS140) NO_UI=1
+	@for bin in admission-webhook policy-manager dashboard; do \
+		f="$(DIST_DIR)/$$bin-$(GOOS)-$(GOARCH)"; \
+		if go version -m "$$f" | grep -q "GOFIPS140=$(GOFIPS140)"; then \
+			echo "$(GREEN)OK: $$bin records GOFIPS140=$(GOFIPS140)$(NC)"; \
+		else \
+			echo "$(RED)FATAL: $$bin is missing the GOFIPS140 marker$(NC)"; exit 1; \
+		fi; \
+	done
+	@echo "$(GREEN)All shipped binaries record the FIPS 140-3 marker$(NC)"
 
 .PHONY: docker-dashboard
 docker-dashboard: build-dashboard ## Build dashboard Docker image
