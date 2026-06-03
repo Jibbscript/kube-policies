@@ -61,8 +61,7 @@ them. The authorization boundary, components, and data flows are as defined in t
   (gitleaks), build-images, docs, the Trivy fs/image/config security scan, **and the
   chart-deploy suite** — E2E (Kind), E2E (k3s), and Helm Chart Tests (`ct install`),
   which each install the chart to a fresh ephemeral Kind/k3s cluster and exercise
-  admission/policy enforcement end-to-end, plus the CIS-benchmark job gated behind them
-  (the deploy-gated Performance Tests job is the conditionally-skipped one noted above).
+  admission/policy enforcement end-to-end, plus the CIS-benchmark job gated behind them.
   The separate **DAST** workflow (OWASP ZAP baseline against the
   policy-manager API + dashboard BFF, plus TLS/cipher checks) and the **UI** pipeline
   are also green, with **no unremediated High/Critical DAST findings**. The former P12
@@ -118,8 +117,7 @@ These are explicitly **out of scope for repository work** and block an ATO:
 The repository-implementable scope of the FedRAMP-Moderate baseline is **built,
 documented, internally assessed, and CI-verified** across the unit, integration,
 render, SAST, supply-chain, conformance-render, and ephemeral-cluster chart-deploy
-gates (**the CI Pipeline passes end-to-end — CI Gate green — plus the DAST and UI
-pipelines**; see §2), with
+gates (**CI Pipeline, DAST, and UI all green**; see §2), with
 residual gaps tracked and scheduled in the POA&M. On that
 basis this report recommends that Kube-Policies is **ready to engage an independent
 3PAO assessment** — and is **not, and is not represented as, authorized to operate.**
