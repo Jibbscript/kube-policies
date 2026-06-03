@@ -34,6 +34,11 @@ env:
 permissions:
   contents: read
 
+# Cancel superseded runs so rapid pushes don't stack up long-running UI jobs.
+concurrency:
+  group: ui-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   ui:
     name: Lint, Test, and Build UI

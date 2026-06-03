@@ -8,6 +8,8 @@
 
 import { spawn } from 'node:child_process';
 import { request } from 'node:http';
+import { createRequire } from 'node:module';
+import { dirname, resolve } from 'node:path';
 
 const PORT = 4173;
 const HOST = '127.0.0.1';
@@ -16,10 +18,17 @@ const BASE_URL = `http://${HOST}:${PORT}/`;
 let previewProc = null;
 
 function cleanup() {
-  if (previewProc) {
-    try { previewProc.kill('SIGTERM'); } catch { /* process already exited */ }
-    previewProc = null;
+  if (previewProc && previewProc.pid) {
+    try {
+      // Negative pid → signal the whole process group. The preview server is
+      // spawned detached (its own group leader), so this reliably terminates it
+      // even on Linux, where signalling the immediate child alone left orphans.
+      process.kill(-previewProc.pid, 'SIGTERM');
+    } catch {
+      try { previewProc.kill('SIGTERM'); } catch { /* process already exited */ }
+    }
   }
+  previewProc = null;
 }
 
 process.on('SIGTERM', cleanup);
@@ -40,11 +49,20 @@ function httpGet(url, timeoutMs) {
 
 function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
 
-// Spawn vite preview after vite build completes.
-previewProc = spawn('npx', ['vite', 'preview', '--port', String(PORT), '--host', HOST], {
-  stdio: ['ignore', 'pipe', 'pipe'],
-  detached: false,
+// Spawn vite preview after vite build completes. Resolve the local vite binary
+// and run it via the current Node executable (not `npx`): `npx` adds a wrapper
+// process that does not forward SIGTERM to its grandchild on Linux, which
+// previously orphaned the preview server and hung the build forever (CI step
+// "UI build" never returned). `detached: true` puts the server in its own
+// process group so cleanup() can kill the whole tree; `stdio: 'ignore'` means no
+// open pipe keeps this process's event loop alive either.
+const require = createRequire(import.meta.url);
+const viteBin = resolve(dirname(require.resolve('vite/package.json')), 'bin', 'vite.js');
+previewProc = spawn(process.execPath, [viteBin, 'preview', '--port', String(PORT), '--host', HOST], {
+  stdio: 'ignore',
+  detached: true,
 });
+previewProc.unref();
 previewProc.on('error', (err) => {
   process.stderr.write(`check-build: failed to start vite preview: ${err.message}\n`);
   process.exit(1);
@@ -89,3 +107,5 @@ if (body.includes('lifecycle_function_unavailable')) {
 }
 
 console.log('OK: SPA renders without server lifecycle error');
+// Exit explicitly so a slow-to-die child can never keep the process alive.
+process.exit(0);
