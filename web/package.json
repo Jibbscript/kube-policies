@@ -17,7 +17,7 @@
   "dependencies": {
     "svelte": "^5.16.0",
     "svelte-spa-router": "^4.0.1",
-    "bits-ui": "^1.0.0-next.78"
+    "bits-ui": "^2.18.1"
   },
   "devDependencies": {
     "@playwright/test": "^1.49.1",
