@@ -7,7 +7,7 @@
 | **Report type** | **Self-attested readiness review (internal, PRE-3PAO)** |
 | **Status** | Draft |
 | **Owner / Approver** | System Owner / Authorizing Official (TBD — assign) |
-| **Date** | 2026-06-02 · **Next review:** 2027-06-02 |
+| **Date** | 2026-06-03 · **Next review:** 2027-06-03 |
 
 > **Honesty statement.** This RAR is an **internal self-attestation** that the
 > repository-implementable scope of a FedRAMP-Moderate baseline has been built,
@@ -51,22 +51,33 @@ them. The authorization boundary, components, and data flows are as defined in t
   alerting/SIEM pipeline **configuration** (Prometheus rules, Alertmanager routing,
   SIEM forwarding) is authored and renders; it is **not yet deployed** (no live
   cluster). Monthly authenticated-scan and POA&M cadence are documented.
-- **CI status (honest):** 18 of 24 CI-pipeline jobs are green — lint/SAST
+- **CI status:** **The CI Pipeline passes end-to-end** — the aggregate **CI Gate**
+  job is green, with every job green except two intentionally conditional ones
+  (Performance Tests and the release-only Prepare Release, skipped on branch builds).
+  Green jobs span lint/SAST
   (golangci-lint v2, gosec, CodeQL), unit + integration tests, fuzz-smoke,
   govulncheck, the manifest-hardening / RBAC / network-posture conftest gates,
   helm-unittest, monitoring-rules (promtool/amtool), reproducible build, secret scan
-  (gitleaks), build-images, docs, and the Trivy fs/image/config security scan all
-  pass. **NOT yet green:** the live-cluster chart-**deploy** jobs — E2E (Kind), E2E
-  (k3s), Helm Chart Tests (`ct install`), and the separate DAST workflow — which each
-  install the chart to a fresh Kind/k3s cluster and time out on `helm --wait` because
-  the workloads do not reach Ready (the CIS-benchmark and performance jobs are gated
-  behind them and skip). This is a **test-harness / chart-deploy stabilization** item
-  under active investigation (on-failure diagnostics were added to capture the root
-  cause; a webhook self-bootstrap interaction is one hypothesis). It does **not**
-  indicate a product control-logic gap — admission/policy enforcement is validated by
-  the unit, integration, render, SAST, supply-chain, and conformance-render gates
-  above. Tracked as a P12 review blocker (see [POA&M](../POAM.md) and the package
-  [README](README.md)).
+  (gitleaks), build-images, docs, the Trivy fs/image/config security scan, **and the
+  chart-deploy suite** — E2E (Kind), E2E (k3s), and Helm Chart Tests (`ct install`),
+  which each install the chart to a fresh ephemeral Kind/k3s cluster and exercise
+  admission/policy enforcement end-to-end, plus the CIS-benchmark job gated behind them
+  (the deploy-gated Performance Tests job is the conditionally-skipped one noted above).
+  The separate **DAST** workflow (OWASP ZAP baseline against the
+  policy-manager API + dashboard BFF, plus TLS/cipher checks) and the **UI** pipeline
+  are also green, with **no unremediated High/Critical DAST findings**. The former P12
+  chart-deploy review blocker — workloads not reaching Ready under `helm --wait` — is
+  **resolved**; the root causes were a policy-manager crash-loop (read-only rootfs with
+  no writable audit-log volume) and fail-closed egress/ingress NetworkPolicies enforced
+  by kindnet/k3s in the functional harness, not a product control-logic gap.
+  **Scope caveat (honest):** these deploy jobs validate the chart on *ephemeral CI*
+  clusters that are torn down at the end of each run — there is still **no
+  persistent/production cluster, no published signed release, and no ATO**, and the
+  continuous-monitoring stack (bullet above) is configured and render-tested but not
+  deployed to a live cluster. The functional deploy jobs also install with
+  `networkPolicy.enabled=false`, so NetworkPolicy **enforcement** is exercised only by
+  the render/conftest Network-Posture gate and a manual e2e script — **not** by any
+  gated CI job (tracked Open as POAM-007 / SC-7).
 
 ## 3. Residual risk summary (from the POA&M)
 
@@ -106,9 +117,10 @@ These are explicitly **out of scope for repository work** and block an ATO:
 
 The repository-implementable scope of the FedRAMP-Moderate baseline is **built,
 documented, internally assessed, and CI-verified** across the unit, integration,
-render, SAST, supply-chain, and conformance-render gates (18 of 24 CI jobs green;
-see §2 — the live-cluster chart-deploy suite is still being stabilized and is the
-one open CI item), with residual gaps tracked and scheduled in the POA&M. On that
+render, SAST, supply-chain, conformance-render, and ephemeral-cluster chart-deploy
+gates (**the CI Pipeline passes end-to-end — CI Gate green — plus the DAST and UI
+pipelines**; see §2), with
+residual gaps tracked and scheduled in the POA&M. On that
 basis this report recommends that Kube-Policies is **ready to engage an independent
 3PAO assessment** — and is **not, and is not represented as, authorized to operate.**
 The authorization decision rests with the Authorizing Official following the
