@@ -55,7 +55,7 @@ RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} GOFIPS140=${GOFIPS140} g
       || (echo "FATAL: admission-webhook binary is missing the GOFIPS140 marker" >&2 && exit 1)
 
 # Final stage
-FROM gcr.io/distroless/static:nonroot@sha256:963fa6c544fe5ce420f1f54fb88b6fb01479f054c8056d0f74cc2c6000df5240
+FROM gcr.io/distroless/static:nonroot@sha256:d29e660cc75a5b6b1334e03c5c81ccf9bc0884a002c6000dbf0fb96034814478
 
 # Re-declare ARGs for final stage
 ARG VERSION=dev
