@@ -1,6 +1,6 @@
 # Build stage — uses TARGETARCH so the image is native to the kind cluster
 # arch by default (arm64 on Apple Silicon, amd64 on x86_64 CI).
-FROM --platform=${BUILDPLATFORM:-linux/amd64} golang:1.25.11-alpine@sha256:cd2fb3559df6e13bc93b7f0734a4eabe1d21e7b64eec211ed90784f00a17a56a AS builder
+FROM --platform=${BUILDPLATFORM:-linux/amd64} golang:1.26.5-alpine@sha256:0178a641fbb4858c5f1b48e34bdaabe0350a330a1b1149aabd498d0699ff5fb2 AS builder
 
 # Install build dependencies
 RUN apk add --no-cache git ca-certificates tzdata curl
