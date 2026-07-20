@@ -69,10 +69,10 @@ jobs:
 
     steps:
     - name: Checkout code
-      uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+      uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
 
     - name: Set up Go
-      uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff  # v5
+      uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
       with:
         go-version: ${{ env.GO_VERSION }}
 
@@ -181,7 +181,7 @@ jobs:
     # ── Upload SARIF to GitHub Security tab ───────────────────────────────────
     - name: Upload API SARIF to Security tab
       if: always()
-      uses: github/codeql-action/upload-sarif@03e4368ac7daa2bd82b3e85262f3bf87ee112f57  # v3
+      uses: github/codeql-action/upload-sarif@7188fc363630916deb702c7fdcf4e481b751f97a  # v3
       with:
         sarif_file: test-results/dast/api-report.sarif
         category: dast-api
@@ -189,7 +189,7 @@ jobs:
 
     - name: Upload BFF SARIF to Security tab
       if: always()
-      uses: github/codeql-action/upload-sarif@03e4368ac7daa2bd82b3e85262f3bf87ee112f57  # v3
+      uses: github/codeql-action/upload-sarif@7188fc363630916deb702c7fdcf4e481b751f97a  # v3
       with:
         sarif_file: test-results/dast/bff-report.sarif
         category: dast-bff
@@ -198,7 +198,7 @@ jobs:
     # ── Upload all DAST artifacts ─────────────────────────────────────────────
     - name: Upload DAST report artifacts
       if: always()
-      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
       with:
         name: dast-results
         path: test-results/dast/
@@ -221,7 +221,7 @@ jobs:
 
     - name: Upload diagnostics on failure
       if: failure()
-      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
       with:
         name: dast-diagnostics
         path: test-results/dast/diagnostics/
