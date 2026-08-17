@@ -2,7 +2,7 @@
 # then cross-compile to TARGETARCH if invoked via `docker buildx --platform=...`.
 # When the host == target (the common `make demo-up` path on arm64 Macs and
 # amd64 CI), no emulation runs.
-FROM --platform=${BUILDPLATFORM:-linux/amd64} golang:1.25.11-alpine@sha256:cd2fb3559df6e13bc93b7f0734a4eabe1d21e7b64eec211ed90784f00a17a56a AS builder
+FROM --platform=${BUILDPLATFORM:-linux/amd64} golang:1.26.6-alpine@sha256:3889b425f035be855a72fb4755265311293b6d414521f0a519d819df32222d83 AS builder
 
 # Install build dependencies
 RUN apk add --no-cache git ca-certificates tzdata curl
