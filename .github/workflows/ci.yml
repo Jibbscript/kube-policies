@@ -33,15 +33,15 @@ jobs:
       security-events: write
     steps:
     - name: Checkout code
-      uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v4
 
     - name: Set up Go
-      uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff  # v5
+      uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
       with:
         go-version: ${{ env.GO_VERSION }}
 
     - name: Cache Go modules
-      uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830  # v4
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
       with:
         path: |
           ~/.cache/go-build
@@ -60,7 +60,7 @@ jobs:
         git diff --exit-code -- go.mod go.sum
 
     - name: Run golangci-lint
-      uses: golangci/golangci-lint-action@4afd733a84b1f43292c63897423277bb7f4313a9  # v8.0.0
+      uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a  # v9.3.0
       with:
         # golangci-lint v2 is required: v1.x is built with go1.24 and refuses to
         # run against the go1.25 toolchain (SI-2 pin). The repo's .golangci.yml is
@@ -84,7 +84,7 @@ jobs:
     # gosec writes the SARIF report and then exits non-zero on a qualifying
     # finding, so the upload step still runs under `if: always()`.
     - name: Check for security issues (gosec — fail on MEDIUM+)
-      uses: securego/gosec@9e6a9843d7a4a6e3e9a8539b02612c8a4aa3f889  # v2.27.1
+      uses: securego/gosec@deb54465fea23d19a77f037e11e6589021f8501d  # v2.29.0
       # v2.25.0 (the old pin's image) G402-false-positives on TLS MinVersion set
       # via a variable (our mandated TLS 1.3 floor in internal/config/tls.go);
       # gosec 2.27.1 resolves it. Verified clean locally with the exact args.
@@ -101,7 +101,7 @@ jobs:
 
     - name: Upload gosec SARIF file
       if: always()
-      uses: github/codeql-action/upload-sarif@03e4368ac7daa2bd82b3e85262f3bf87ee112f57  # v3
+      uses: github/codeql-action/upload-sarif@cdf488f595d80d6e07e03d4674febd5ab45fa938  # v3
       with:
         sarif_file: gosec.sarif
 
@@ -114,15 +114,15 @@ jobs:
         go-version: ['1.25']
     steps:
     - name: Checkout code
-      uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v4
 
     - name: Set up Go
-      uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff  # v5
+      uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
       with:
         go-version: ${{ matrix.go-version }}
 
     - name: Cache Go modules
-      uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830  # v4
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
       with:
         path: |
           ~/.cache/go-build
@@ -150,14 +150,14 @@ jobs:
       run: go tool cover -html=coverage.out -o coverage.html
 
     - name: Upload coverage to Codecov
-      uses: codecov/codecov-action@b9fd7d16f6d7d1b5d2bec1a2887e65ceed900238  # v4
+      uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f  # v7.0.0
       with:
         file: ./coverage.out
         flags: unittests
         name: codecov-umbrella
 
     - name: Upload coverage artifacts
-      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
       with:
         name: coverage-report-${{ matrix.go-version }}
         path: |
@@ -171,10 +171,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - name: Checkout code
-      uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v4
 
     - name: Set up Go
-      uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff  # v5
+      uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
       with:
         go-version: ${{ env.GO_VERSION }}
 
@@ -191,10 +191,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - name: Checkout code
-      uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v4
 
     - name: Set up Go
-      uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff  # v5
+      uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
       with:
         go-version: ${{ env.GO_VERSION }}
 
@@ -241,13 +241,13 @@ jobs:
       policy-manager-image: ${{ fromJSON(steps.meta-manager.outputs.json).tags[0] }}
     steps:
     - name: Checkout code
-      uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v4
 
     - name: Set up Docker Buildx
-      uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f  # v3
+      uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e  # v4.3.0
 
     - name: Log in to Container Registry
-      uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9  # v3
+      uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f  # v4.6.0
       with:
         registry: ${{ env.REGISTRY }}
         username: ${{ github.actor }}
@@ -255,7 +255,7 @@ jobs:
 
     - name: Extract metadata for admission webhook
       id: meta-webhook
-      uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051  # v5
+      uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302  # v6.2.0
       with:
         images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/admission-webhook
         tags: |
@@ -265,7 +265,7 @@ jobs:
           type=raw,value=latest,enable={{is_default_branch}}
 
     - name: Build and push admission webhook image
-      uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8  # v6
+      uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a  # v7.3.0
       with:
         context: .
         file: ./build/docker/admission-webhook.Dockerfile
@@ -277,7 +277,7 @@ jobs:
 
     - name: Extract metadata for policy manager
       id: meta-manager
-      uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051  # v5
+      uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302  # v6.2.0
       with:
         images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/policy-manager
         tags: |
@@ -287,7 +287,7 @@ jobs:
           type=raw,value=latest,enable={{is_default_branch}}
 
     - name: Build and push policy manager image
-      uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8  # v6
+      uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a  # v7.3.0
       with:
         context: .
         file: ./build/docker/policy-manager.Dockerfile
@@ -304,15 +304,15 @@ jobs:
     needs: [build-images]
     steps:
     - name: Checkout code
-      uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v4
 
     - name: Set up Go
-      uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff  # v5
+      uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
       with:
         go-version: ${{ env.GO_VERSION }}
 
     - name: Cache Go modules
-      uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830  # v4
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6.1.0
       with:
         path: |
           ~/.cache/go-build
@@ -350,14 +350,14 @@ jobs:
     # the `unittests` flag). The hard cover-gate floor is enforced on the unit
     # profile in the unit-tests job.
     - name: Upload integration coverage to Codecov
-      uses: codecov/codecov-action@b9fd7d16f6d7d1b5d2bec1a2887e65ceed900238  # v4
+      uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f  # v7.0.0
       with:
         file: ./coverage-integration.out
         flags: integration
         name: codecov-integration
 
     - name: Upload integration test results
-      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
       with:
         name: integration-test-results
         path: |
@@ -371,10 +371,10 @@ jobs:
     needs: [build-images]
     steps:
     - name: Checkout code
-      uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v4
 
     - name: Set up Go
-      uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff  # v5
+      uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
       with:
         go-version: ${{ env.GO_VERSION }}
 
@@ -409,7 +409,7 @@ jobs:
 
     - name: Upload Kind test artifacts
       if: always()
-      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
       with:
         name: kind-test-artifacts
         path: artifacts/kind/
@@ -421,10 +421,10 @@ jobs:
     needs: [build-images]
     steps:
     - name: Checkout code
-      uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v4
 
     - name: Set up Go
-      uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff  # v5
+      uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
       with:
         go-version: ${{ env.GO_VERSION }}
 
@@ -453,7 +453,7 @@ jobs:
 
     - name: Upload k3s test artifacts
       if: always()
-      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
       with:
         name: k3s-test-artifacts
         path: artifacts/k3s/
@@ -468,7 +468,7 @@ jobs:
       security-events: write
     steps:
     - name: Checkout code
-      uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v4
 
     # --- SARIF-upload pass (CFG-WU-11): non-gating (exit-code 0) so the GitHub
     # Security tab always populates with the full finding set, independent of
@@ -483,7 +483,7 @@ jobs:
         exit-code: '0'
 
     - name: Upload Trivy scan results to GitHub Security tab
-      uses: github/codeql-action/upload-sarif@03e4368ac7daa2bd82b3e85262f3bf87ee112f57  # v3
+      uses: github/codeql-action/upload-sarif@cdf488f595d80d6e07e03d4674febd5ab45fa938  # v3
       with:
         sarif_file: 'trivy-results.sarif'
         # Unique category: codeql/upload-sarif allows only one upload per
@@ -571,7 +571,7 @@ jobs:
 
     - name: Upload Trivy config scan results to GitHub Security tab
       if: always()
-      uses: github/codeql-action/upload-sarif@03e4368ac7daa2bd82b3e85262f3bf87ee112f57  # v3
+      uses: github/codeql-action/upload-sarif@cdf488f595d80d6e07e03d4674febd5ab45fa938  # v3
       with:
         sarif_file: 'trivy-config.sarif'
         # Distinct category from the fs SARIF upload (same job, same Trivy tool).
@@ -596,10 +596,10 @@ jobs:
     if: github.event_name == 'schedule' || contains(github.event.pull_request.labels.*.name, 'performance')
     steps:
     - name: Checkout code
-      uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v4
 
     - name: Set up Go
-      uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff  # v5
+      uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
       with:
         go-version: ${{ env.GO_VERSION }}
 
@@ -627,7 +627,7 @@ jobs:
         go test -bench=. -benchmem ./cmd/... ./internal/... ./pkg/... > performance-results.txt
 
     - name: Upload performance results
-      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
       with:
         name: performance-results
         path: performance-results.txt
@@ -642,7 +642,7 @@ jobs:
     # no `needs: [build-images]` — letting it start in parallel.
     steps:
     - name: Checkout code
-      uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v4
 
     - name: Install Helm
       run: |
@@ -709,7 +709,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - name: Checkout code
-      uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v4
 
     - name: Check for broken links
       uses: gaurav-nelson/github-action-markdown-link-check@3c3b66f1f7d0900e37b71eca45b63ea9eedfce31  # 1.0.17
@@ -758,7 +758,7 @@ jobs:
       pull-requests: write
     steps:
     - name: Checkout code
-      uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v4
       with:
         fetch-depth: 0
 
@@ -769,7 +769,7 @@ jobs:
 
     - name: Create release PR
       if: contains(github.event.head_commit.message, 'feat:') || contains(github.event.head_commit.message, 'fix:')
-      uses: peter-evans/create-pull-request@22a9089034f40e5a961c8808d113e2c98fb63676  # v7
+      uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1  # v8.1.1
       with:
         token: ${{ secrets.GITHUB_TOKEN }}
         commit-message: 'chore: update changelog for release'
@@ -802,10 +802,10 @@ jobs:
       CONFTEST_SHA256: 'e8144c6d6d2ae0260b869caa60c7c262a1f95ac63ec1e5d2fb19be452d606347'
     steps:
     - name: Checkout code
-      uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v4
 
     - name: Install Helm
-      uses: azure/setup-helm@dda3372f752e03dde6b3237bc9431cdc2f7a02a2  # v5.0.0
+      uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310  # v5.0.1
       with:
         # Pin Helm v3: the chart, its helm-unittest v0.3.3 suite, and the e2e
         # get-helm-3 installs all target v3. setup-helm@v5 defaults to Helm v4,
@@ -914,7 +914,7 @@ jobs:
 
     - name: Upload conftest report
       if: always()
-      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
       with:
         name: rbac-sa-gate-report
         path: report-*.json
@@ -939,10 +939,10 @@ jobs:
       CONFTEST_SHA256: 'e8144c6d6d2ae0260b869caa60c7c262a1f95ac63ec1e5d2fb19be452d606347'
     steps:
     - name: Checkout code
-      uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v4
 
     - name: Install Helm
-      uses: azure/setup-helm@dda3372f752e03dde6b3237bc9431cdc2f7a02a2  # v5.0.0
+      uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310  # v5.0.1
       with:
         # Pin Helm v3: the chart, its helm-unittest v0.3.3 suite, and the e2e
         # get-helm-3 installs all target v3. setup-helm@v5 defaults to Helm v4,
@@ -1070,7 +1070,7 @@ jobs:
 
     - name: Upload conftest report
       if: always()
-      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
       with:
         name: network-posture-gate-report
         path: report-network-*.json
@@ -1103,10 +1103,10 @@ jobs:
       KUBECONFORM_SHA256: '95f14e87aa28c09d5941f11bd024c1d02fdc0303ccaa23f61cef67bc92619d73'
     steps:
     - name: Checkout code
-      uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v4
 
     - name: Install Helm
-      uses: azure/setup-helm@dda3372f752e03dde6b3237bc9431cdc2f7a02a2  # v5.0.0
+      uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310  # v5.0.1
       with:
         # Pin Helm v3: the chart, its helm-unittest v0.3.3 suite, and the e2e
         # get-helm-3 installs all target v3. setup-helm@v5 defaults to Helm v4,
@@ -1220,7 +1220,7 @@ jobs:
 
     - name: Upload conftest report
       if: always()
-      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
       with:
         name: manifest-hardening-gate-report
         path: report-restricted-pss.json
@@ -1239,10 +1239,10 @@ jobs:
       HELM_UNITTEST_VERSION: 'v0.3.3'
     steps:
     - name: Checkout code
-      uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v4
 
     - name: Install Helm
-      uses: azure/setup-helm@dda3372f752e03dde6b3237bc9431cdc2f7a02a2  # v5.0.0
+      uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310  # v5.0.1
       with:
         # Pin Helm v3: the chart, its helm-unittest v0.3.3 suite, and the e2e
         # get-helm-3 installs all target v3. setup-helm@v5 defaults to Helm v4,
@@ -1276,7 +1276,7 @@ jobs:
       contents: read
     steps:
     - name: Checkout code
-      uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v4
 
     - name: Install Kind
       run: |
@@ -1306,7 +1306,7 @@ jobs:
 
     - name: Upload CIS benchmark report
       if: always()
-      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
       with:
         name: cis-benchmark-report
         path: test-results/cis-benchmark/
@@ -1333,10 +1333,10 @@ jobs:
       ALERTMANAGER_VERSION: '0.27.0'
     steps:
     - name: Checkout code
-      uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v4
 
     - name: Install Helm
-      uses: azure/setup-helm@dda3372f752e03dde6b3237bc9431cdc2f7a02a2  # v5.0.0
+      uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310  # v5.0.1
       with:
         # Pin Helm v3: the chart, its helm-unittest v0.3.3 suite, and the e2e
         # get-helm-3 installs all target v3. setup-helm@v5 defaults to Helm v4,
@@ -1466,7 +1466,7 @@ jobs:
       ACTIONLINT_SHA256: '8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8'
     steps:
     - name: Checkout code
-      uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v4
 
     - name: Install actionlint (pinned, checksum-verified)
       run: |
@@ -1493,10 +1493,10 @@ jobs:
       security-events: write
     steps:
     - name: Checkout code
-      uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v4
 
     - name: Set up Go
-      uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff  # v5
+      uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
       with:
         go-version: ${{ env.GO_VERSION }}
         cache-dependency-path: go.sum
@@ -1512,7 +1512,7 @@ jobs:
 
     - name: Upload govulncheck SARIF
       if: always()
-      uses: github/codeql-action/upload-sarif@03e4368ac7daa2bd82b3e85262f3bf87ee112f57  # v3
+      uses: github/codeql-action/upload-sarif@cdf488f595d80d6e07e03d4674febd5ab45fa938  # v3
       with:
         sarif_file: govulncheck.sarif
 
@@ -1530,12 +1530,12 @@ jobs:
       contents: read
     steps:
     - name: Checkout code
-      uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v4
       with:
         fetch-depth: 0
 
     - name: Set up Go
-      uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff  # v5
+      uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
       with:
         go-version: ${{ env.GO_VERSION }}
         cache-dependency-path: go.sum
@@ -1558,10 +1558,10 @@ jobs:
       contents: read
     steps:
     - name: Checkout code
-      uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v4
 
     - name: Set up Go
-      uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff  # v5
+      uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7.0.0
       with:
         go-version: ${{ env.GO_VERSION }}
         cache-dependency-path: go.sum
